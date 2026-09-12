@@ -1,0 +1,26 @@
+# HarmonyOS / DevEco Studio
+build/
+*/build/
+.hvigor/
+*/.hvigor/
+oh_modules/
+*/oh_modules/
+local.properties
+.cxx/
+*/.cxx/
+obfuscation-cache/
+
+# IDE
+.idea/
+.vscode/
+
+# 签名材料（严禁提交）
+*.p12
+*.cer
+*.p7b
+signing/*
+!signing/README.md
+
+# 系统文件
+.DS_Store
+Thumbs.db
