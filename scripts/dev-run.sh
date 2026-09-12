@@ -66,8 +66,22 @@ command -v devecocli >/dev/null 2>&1 || die "未找到 devecocli，请先配置 
 
 has_device() { ! devecocli device list 2>&1 | strip_ansi | grep -q "No active devices"; }
 
+wait_ready() {
+  local target="$1" waited=0
+  while [ "$waited" -lt 240 ]; do
+    devecocli device view -t "$target" >/dev/null 2>&1 && return 0
+    sleep 5
+    waited=$((waited + 5))
+  done
+  return 1
+}
+
+TARGET=""
+
 # 1. 设备 / 模拟器
-if ! has_device; then
+if has_device; then
+  log "检测到活动设备"
+else
   [ "$NO_EMULATOR" = "0" ] || die "当前无活动设备，且指定了 --no-emulator。请连接真机或去掉该参数"
 
   log "未检测到活动设备，准备启动模拟器"
@@ -82,20 +96,15 @@ if ! has_device; then
     OUT="$(devecocli emulator start "$EMULATOR" 2>&1 | strip_ansi)" || true
     printf '%s\n' "$OUT"
     printf '%s' "$OUT" | grep -q "license agreements are not accepted" && \
-      die "模拟器许可协议未接受。请先执行（交互式）：devecocli emulator license"
+      die "模拟器许可协议未接受。请执行：devecocli emulator license accept（或交互式 devecocli emulator license）"
     printf '%s' "$OUT" | grep -q "started successfully" || die "模拟器启动失败，请查看上方输出"
   else
     log "模拟器 $EMULATOR 已在运行"
   fi
 
-  log "等待设备就绪（最多 180 秒）"
-  WAITED=0
-  while [ "$WAITED" -lt 180 ]; do
-    has_device && break
-    sleep 5
-    WAITED=$((WAITED + 5))
-  done
-  has_device || die "等待设备就绪超时"
+  TARGET="$EMULATOR"
+  log "等待设备完成启动（最多 240 秒）"
+  wait_ready "$TARGET" || die "等待设备就绪超时"
 fi
 
 log "当前设备"
@@ -123,12 +132,22 @@ else
 fi
 
 # 4. 安装运行
-log "安装并启动"
+RUN_ARGS=(--skip-build)
 if [ -n "$DEVICE" ]; then
-  devecocli run --skip-build --device "$DEVICE"
-else
-  devecocli run --skip-build
+  RUN_ARGS+=(--device "$DEVICE")
+elif [ -n "$TARGET" ]; then
+  RUN_ARGS+=(--device "$TARGET")
 fi
+
+log "安装并启动"
+ATTEMPT=1
+while true; do
+  devecocli run "${RUN_ARGS[@]}" && break
+  [ "$ATTEMPT" -ge 3 ] && die "安装启动失败（已重试 3 次）"
+  log "安装启动失败，第 $ATTEMPT 次重试"
+  ATTEMPT=$((ATTEMPT + 1))
+  sleep 10
+done
 
 log "完成"
 printf '%s\n' "提醒：签名配置仅保存在本机，不要提交 build-profile.json5 中的 signingConfigs/signingConfig 改动。"
