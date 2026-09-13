@@ -1,6 +1,6 @@
 @echo off
 setlocal
-rem HarmonyPA 一键启动脚本（Windows 包装，转发到 dev-run.sh）
+rem Shuvi 一键启动脚本（Windows 包装，转发到 dev-run.sh）
 rem 用法：scripts\dev-run.cmd [选项]   例如 scripts\dev-run.cmd --force-sign
 
 where bash >nul 2>nul
