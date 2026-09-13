@@ -3,6 +3,7 @@ build/
 */build/
 .hvigor/
 */.hvigor/
+.cache/
 oh_modules/
 */oh_modules/
 local.properties

@@ -1,0 +1,10 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "HarmonyPA entry 模块：页面、交互与依赖装配",
+  "main": "",
+  "author": "",
+  "license": "MIT",
+  "dependencies": {}
+}
+
