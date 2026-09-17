@@ -61,6 +61,7 @@ scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
 - 签名：本机自动生成，材料保存在 `~/.ohos/config/`，不入库
 - 运行：`devecocli run`，或使用 `scripts/dev-run.sh`
 - 构建、模拟器与真机结果分别记录、不互相替代，见 [02 平台基线](docs/02-平台基线.md) 第 4 节
+- CI 门禁：`scripts/ci-windows.cmd`（依赖安装 → 代码检查 → 构建），配置见 `.github/workflows/ci.yml`
 
 ## 贡献指南
 
