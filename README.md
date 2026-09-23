@@ -1,6 +1,6 @@
 # Shuvi（休比）
 
-> 当前分支已实现前端 Mock 初稿：四个一级页面、日程确认与异常演示；真实业务能力尚未接入，页面待设备验收。
+> 当前分支已实现前端 Mock 初稿：四个一级页面、日程确认与异常演示；当前模拟器的人工检查已通过，真实业务能力、其他设备配置与真机仍待验证，详见功能 spec。
 
 ## 项目简介
 
@@ -63,6 +63,7 @@ scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
 - 签名：本机自动生成，材料保存在 `~/.ohos/config/`，不入库
 - 运行：`devecocli run`，或使用 `scripts/dev-run.sh`
 - 构建、模拟器与真机结果分别记录、不互相替代，见 [02 平台基线](docs/02-平台基线.md) 第 4 节
+- CI 门禁：`scripts/ci-windows.cmd`（依赖安装 → 代码检查 → 构建），配置见 `.github/workflows/ci.yml`
 
 ## 贡献指南
 

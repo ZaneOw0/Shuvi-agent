@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 自托管 runner 上的工具链位置，须与本机安装一致
+  CLT_HOME: 'D:\command-line-tools'
+  JAVA_HOME: 'C:\Univ\jdk21'
+
+jobs:
+  gate:
+    name: 检查与构建
+    # 仅同仓库分支触发；fork PR 不在自托管 runner 上执行外部代码
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, harmonyos]
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 门禁（代码检查 + 构建）
+        shell: cmd
+        run: scripts\ci-windows.cmd
