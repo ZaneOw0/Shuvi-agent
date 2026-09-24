@@ -22,7 +22,9 @@
 #
 # 说明:
 #   签名材料生成在本机 ~/.ohos/config/，不会写入仓库。
-#   请勿提交 build-profile.json5 中的 signingConfigs/signingConfig 改动。
+#   build-profile.json5 以仓库中的模板为准（不含签名）；本机签名缓存在 .local/（不入库）。
+#   脚本运行前由模板合成带签名版本，结束后自动还原为模板；模板变化时自动重新生成签名。
+#   请勿把 signingConfigs / signingConfig 提交进仓库，pre-push 钩子会拦截。
 
 set -euo pipefail
 
@@ -71,6 +73,13 @@ if [ -z "$DEVECOCLI_BIN" ]; then
   done
 fi
 [ -n "$DEVECOCLI_BIN" ] || die "未找到 devecocli，请先安装 DevEco Code 命令行环境并加入 PATH，或设置 DEVECOCLI_BIN 指定命令"
+
+# 启用仓库内钩子（仅仓库级配置，不影响全局）
+if [ "$(git -C "$ROOT_DIR" config --local --get core.hooksPath 2>/dev/null || true)" != "scripts/hooks" ]; then
+  if git -C "$ROOT_DIR" config --local core.hooksPath scripts/hooks 2>/dev/null; then
+    log "已启用仓库钩子 core.hooksPath=scripts/hooks"
+  fi
+fi
 
 has_device() { ! "$DEVECOCLI_BIN" device list 2>&1 | strip_ansi | grep -q "No active devices"; }
 
@@ -129,19 +138,61 @@ fi
 log "当前设备"
 "$DEVECOCLI_BIN" device list 2>&1 | strip_ansi
 
-# 2. 签名
-if [ "$FORCE_SIGN" = "1" ] || ! grep -q "storeFile" build-profile.json5; then
-  require_login
-  log "生成本机签名材料（product=$PRODUCT）"
-  OUT="$("$DEVECOCLI_BIN" signature generate --product "$PRODUCT" 2>&1)" || {
+# 2. 签名：由仓库模板合成带签名版本，脚本结束时还原模板
+LOCAL_DIR="$ROOT_DIR/.local"
+BP_FILE="$ROOT_DIR/build-profile.json5"
+SIGNED_FILE="$LOCAL_DIR/build-profile.signed.json5"
+SIGNED_SHA_FILE="$LOCAL_DIR/build-profile.template.sha"
+BP_TEMPLATE_BAK="$LOCAL_DIR/build-profile.template.bak"
+
+restore_build_profile() {
+  if [ -n "${BP_TEMPLATE_BAK:-}" ] && [ -f "$BP_TEMPLATE_BAK" ]; then
+    cp "$BP_TEMPLATE_BAK" "$BP_FILE" 2>/dev/null || true
+    rm -f "$BP_TEMPLATE_BAK" 2>/dev/null || true
+  fi
+}
+trap restore_build_profile EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+prepare_build_profile() {
+  mkdir -p "$LOCAL_DIR"
+
+  if grep -q "storeFile" "$BP_FILE" 2>/dev/null; then
+    log "检测到 build-profile.json5 含本机签名，先还原为模板"
+    git -C "$ROOT_DIR" checkout -- build-profile.json5
+  fi
+
+  git -C "$ROOT_DIR" diff --quiet -- build-profile.json5 || \
+    die "build-profile.json5 有未提交改动。请先提交该共享配置改动，再运行本脚本"
+
+  cp "$BP_FILE" "$BP_TEMPLATE_BAK"
+
+  local tpl_sha
+  tpl_sha="$(git -C "$ROOT_DIR" rev-parse "HEAD:build-profile.json5" 2>/dev/null || echo unknown)"
+
+  if [ "$FORCE_SIGN" = "1" ] || [ ! -f "$SIGNED_FILE" ] || [ "$(cat "$SIGNED_SHA_FILE" 2>/dev/null || true)" != "$tpl_sha" ]; then
+    require_login
+    log "生成本机签名材料（product=$PRODUCT）"
+    OUT="$("$DEVECOCLI_BIN" signature generate --product "$PRODUCT" 2>&1)" || {
+      printf '%s\n' "$OUT"
+      printf '%s' "$OUT" | grep -qiE "not logged in|auth login|sign in" && die "未登录华为开发者账号，请先执行：devecocli auth login"
+      die "签名生成失败，请查看上方输出"
+    }
     printf '%s\n' "$OUT"
-    printf '%s' "$OUT" | grep -qiE "not logged in|auth login|sign in" && die "未登录华为开发者账号，请先执行：devecocli auth login"
-    die "签名生成失败，请查看上方输出"
-  }
-  printf '%s\n' "$OUT"
-else
-  log "本机已有签名配置，跳过生成（需重建时使用 --force-sign）"
-fi
+    grep -q "storeFile" "$BP_FILE" || die "签名生成后 build-profile.json5 仍无签名配置"
+    cp "$BP_FILE" "$SIGNED_FILE"
+    printf '%s' "$tpl_sha" > "$SIGNED_SHA_FILE"
+    log "本机签名已缓存到 .local/（不入库）"
+  else
+    log "复用 .local/ 中的本机签名缓存"
+  fi
+
+  cp "$SIGNED_FILE" "$BP_FILE"
+  log "已由模板合成 build-profile.json5（含本机签名，脚本结束自动还原）"
+}
+
+prepare_build_profile
 
 # 3. 构建
 if [ "$NO_BUILD" = "1" ]; then
@@ -170,4 +221,4 @@ while true; do
 done
 
 log "完成"
-printf '%s\n' "提醒：签名配置仅保存在本机，不要提交 build-profile.json5 中的 signingConfigs/signingConfig 改动。"
+printf '%s\n' "build-profile.json5 已还原为仓库模板；本机签名缓存在 .local/（不入库）。"
