@@ -18,6 +18,7 @@
 # 环境变量:
 #   EMULATOR_NAME       等价于 --emulator
 #   PRODUCT             等价于 --product
+#   DEVECOCLI_BIN       指定 devecocli 命令（默认自动探测 devecocli / devecocli.cmd / devecocli.exe）
 #
 # 说明:
 #   签名材料生成在本机 ~/.ohos/config/，不会写入仓库。
@@ -33,7 +34,7 @@ NO_BUILD=0
 NO_EMULATOR=0
 
 usage() {
-  sed -n '2,24p' "$0" | sed 's/^#\{1\} \{0,1\}//'
+  sed -n '2,/^$/p' "$0" | sed 's/^#\{1\} \{0,1\}//'
 }
 
 strip_ansi() {
@@ -62,14 +63,29 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 [ -f build-profile.json5 ] || die "未找到 build-profile.json5，请确认脚本位于仓库 scripts/ 目录下"
 
-command -v devecocli >/dev/null 2>&1 || die "未找到 devecocli，请先配置 DevEco Studio 命令行环境"
+# 解析 devecocli 命令名：Git Bash 不按 PATHEXT 补后缀，Windows 上稳定形式常为 devecocli.cmd
+DEVECOCLI_BIN="${DEVECOCLI_BIN:-}"
+if [ -z "$DEVECOCLI_BIN" ]; then
+  for _c in devecocli devecocli.cmd devecocli.exe; do
+    if command -v "$_c" >/dev/null 2>&1; then DEVECOCLI_BIN="$_c"; break; fi
+  done
+fi
+[ -n "$DEVECOCLI_BIN" ] || die "未找到 devecocli，请先安装 DevEco Code 命令行环境并加入 PATH，或设置 DEVECOCLI_BIN 指定命令"
 
-has_device() { ! devecocli device list 2>&1 | strip_ansi | grep -q "No active devices"; }
+has_device() { ! "$DEVECOCLI_BIN" device list 2>&1 | strip_ansi | grep -q "No active devices"; }
+
+# 登录态预检：不代替用户登录，只在需要签名前给出明确提示
+require_login() {
+  local out
+  out="$("$DEVECOCLI_BIN" auth status 2>&1)" || true
+  printf '%s' "$out" | grep -q "Current user" && return 0
+  die "未登录华为开发者账号。请先执行：devecocli auth login"
+}
 
 wait_ready() {
   local target="$1" waited=0
   while [ "$waited" -lt 240 ]; do
-    devecocli device view -t "$target" >/dev/null 2>&1 && return 0
+    "$DEVECOCLI_BIN" device view -t "$target" >/dev/null 2>&1 && return 0
     sleep 5
     waited=$((waited + 5))
   done
@@ -86,17 +102,20 @@ else
 
   log "未检测到活动设备，准备启动模拟器"
   if [ -z "$EMULATOR" ]; then
-    EMULATOR="$(devecocli emulator list 2>/dev/null | strip_ansi | awk '$2=="running" || $2=="stopped" { print $1 }' | head -1)"
+    EMULATOR="$("$DEVECOCLI_BIN" emulator list 2>/dev/null | strip_ansi | awk '$2=="running" || $2=="stopped" { print $1 }' | head -1)"
   fi
   [ -n "$EMULATOR" ] || die "未找到可用模拟器，请在 DevEco Studio > Device Manager 中创建"
 
-  STATUS="$(devecocli emulator list 2>/dev/null | strip_ansi | awk -v n="$EMULATOR" '$1==n { print $2 }' | head -1)"
+  STATUS="$("$DEVECOCLI_BIN" emulator list 2>/dev/null | strip_ansi | awk -v n="$EMULATOR" '$1==n { print $2 }' | head -1)"
   if [ "$STATUS" != "running" ]; then
     log "启动模拟器 $EMULATOR"
-    OUT="$(devecocli emulator start "$EMULATOR" 2>&1 | strip_ansi)" || true
+    OUT="$("$DEVECOCLI_BIN" emulator start "$EMULATOR" 2>&1 | strip_ansi)" || true
     printf '%s\n' "$OUT"
-    printf '%s' "$OUT" | grep -q "license agreements are not accepted" && \
-      die "模拟器许可协议未接受。请执行：devecocli emulator license accept（或交互式 devecocli emulator license）"
+    if printf '%s' "$OUT" | grep -q "license agreements are not accepted"; then
+      die "模拟器许可协议未接受（通常只需手动接受一次，本脚本不代为同意）：
+  交互式阅读全文后接受：devecocli emulator license
+  直接接受：            devecocli emulator license accept"
+    fi
     printf '%s' "$OUT" | grep -q "started successfully" || die "模拟器启动失败，请查看上方输出"
   else
     log "模拟器 $EMULATOR 已在运行"
@@ -108,14 +127,15 @@ else
 fi
 
 log "当前设备"
-devecocli device list 2>&1 | strip_ansi
+"$DEVECOCLI_BIN" device list 2>&1 | strip_ansi
 
 # 2. 签名
 if [ "$FORCE_SIGN" = "1" ] || ! grep -q "storeFile" build-profile.json5; then
+  require_login
   log "生成本机签名材料（product=$PRODUCT）"
-  OUT="$(devecocli signature generate --product "$PRODUCT" 2>&1)" || {
+  OUT="$("$DEVECOCLI_BIN" signature generate --product "$PRODUCT" 2>&1)" || {
     printf '%s\n' "$OUT"
-    printf '%s' "$OUT" | grep -qi "not logged in" && die "未登录华为开发者账号，请先执行：devecocli auth login"
+    printf '%s' "$OUT" | grep -qiE "not logged in|auth login|sign in" && die "未登录华为开发者账号，请先执行：devecocli auth login"
     die "签名生成失败，请查看上方输出"
   }
   printf '%s\n' "$OUT"
@@ -128,7 +148,7 @@ if [ "$NO_BUILD" = "1" ]; then
   log "跳过构建"
 else
   log "构建"
-  devecocli build
+  "$DEVECOCLI_BIN" build
 fi
 
 # 4. 安装运行
@@ -142,7 +162,7 @@ fi
 log "安装并启动"
 ATTEMPT=1
 while true; do
-  devecocli run "${RUN_ARGS[@]}" && break
+  "$DEVECOCLI_BIN" run "${RUN_ARGS[@]}" && break
   [ "$ATTEMPT" -ge 3 ] && die "安装启动失败（已重试 3 次）"
   log "安装启动失败，第 $ATTEMPT 次重试"
   ATTEMPT=$((ATTEMPT + 1))
