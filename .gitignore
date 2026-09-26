@@ -22,7 +22,7 @@ obfuscation-cache/
 signing/*
 !signing/README.md
 
-# 本地资料（调研原文、子代理产出、临时素材）——不入库
+# 本机签名缓存与本地草稿
 .local/
 
 # 系统文件

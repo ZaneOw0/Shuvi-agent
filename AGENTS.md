@@ -1,7 +1,7 @@
 # AGENTS.md — Shuvi（休比）鸿蒙工程
 
 > 面向在本仓库工作的 AI Agent。人类协作规则以 [docs/01-协作与工程约定](docs/01-协作与工程约定.md) 为唯一权威，本文件是它的可执行摘要。
-> 状态：基线准备阶段。仓库只有可构建、可安装的最小 `entry` 骨架。
+> 状态：已有可构建、可安装的 `entry`；前端为四页导航与日程 Mock 初稿，未接真实能力（见 [specs/01-创建日程并提醒](specs/01-创建日程并提醒.md)）。
 
 ## 1. 项目定位
 
@@ -31,21 +31,26 @@ HarmonyPA/
 │   ├── src/main/ets/
 │   │   ├── entryability/EntryAbility.ets        # UIAbility 入口，onWindowStageCreate 加载 pages/Index
 │   │   ├── entrybackupability/EntryBackupAbility.ets
-│   │   └── pages/Index.ets                      # 当前唯一页面（Hello World 骨架）
+│   │   ├── pages/Index.ets                      # 入口页面：四页导航 + 日程 Mock 交互
+│   │   ├── components/                          # FeaturePages.ets、Theme.ets
+│   │   ├── mock/MockAssistantService.ets        # 前端 Mock 数据，未接真实能力
+│   │   └── model/AssistantModels.ets            # 前端领域模型
+│   ├── src/test/                                # 本机 host 测试（run-host-tests.cjs）
 │   ├── src/main/module.json5                    # mainElement、pages 清单、abilities、requestPermissions
 │   ├── src/main/resources/                      # base / dark 资源（element、media、profile）
 │   ├── build-profile.json5                      # apiType: stageMode，targets: default / ohosTest
 │   └── hvigorfile.ts                            # hapTasks
-├── scripts/           # 本地一键脚本，见第 5 节
+├── scripts/           # 一键脚本与 Git 钩子，见第 6 节
 ├── specs/             # 按「用户闭环」划分的功能契约，三条开发线的唯一对齐点
 ├── docs/              # 00 总览 / 01 协作约定 / 02 平台基线 / 03 鸿蒙概念速览
 ├── signing/           # 签名占位，仅 README.md 入库，证书材料全部 gitignore
+├── .local/            # 本机签名缓存与本地草稿（gitignore，不入库）
 ├── .github/workflows/ci.yml
 ├── hvigor/hvigor-config.json5
-├── build-profile.json5        # 工程级：products(default)、signingConfigs(空)、modules 注册
+├── build-profile.json5        # 工程级模板：products(default)、signingConfigs(空)、modules 注册
 ├── oh-package.json5           # devDeps: @ohos/hypium, @ohos/hamock
 ├── code-linter.json5          # codelinter 规则，含 @security/no-unsafe-* 系列
-└── .gitattributes             # *.sh=LF，*.cmd/*.bat=CRLF
+└── .gitattributes             # *.sh=LF，*.cmd/*.bat=CRLF，scripts/hooks/*=LF
 ```
 
 依赖方向铁律：`entry` 组装核心与平台实现；适配器实现核心声明的接口；**核心不引用页面与具体适配器**；禁止循环依赖与跨模块访问内部实现；页面不直接调用模型、不直接写系统日历。
@@ -77,7 +82,7 @@ HarmonyPA/
 | 构建 / 打包 | `build_project` | `devecocli build` |
 | 启动应用到设备 | `start_app` | `devecocli run` |
 | 设备与模拟器管理 | — | `devecocli device list` / `devecocli emulator list|start|stop` |
-| 生成签名材料 | — | `devecocli signature generate --product default`（需先 `devecocli auth login`） |
+| 生成签名材料 | — | `dev-run` 已封装（模板合成 + `.local/` 缓存，见 6.1）；底层为 `devecocli signature generate --product default`，需先 `devecocli auth login` |
 | 查 HarmonyOS 文档 | — | `devecocli docs search / read / catalog` |
 
 工作流约束：
@@ -91,15 +96,29 @@ HarmonyPA/
 一键脚本把「设备/模拟器 → 签名 → 构建 → 安装运行」串起来：
 
 ```bash
-scripts/dev-run.sh                  # 自动选活动设备，否则启动模拟器；缺签名则生成；构建并安装运行
-scripts/dev-run.sh --force-sign     # 强制重新生成本机签名材料
+scripts/dev-run.sh                  # 自动选活动设备，否则启动模拟器；构建并安装运行
+scripts/dev-run.sh --force-sign     # 强制重新生成签名材料
 scripts/dev-run.sh --no-build       # 跳过构建，仅安装运行
 scripts/dev-run.sh --no-emulator    # 不自动启动模拟器（无设备直接报错）
 scripts/dev-run.sh --device <serial> --emulator <name> --product default
-scripts\dev-run.cmd                 # Windows 入口，转发到 dev-run.sh（需 bash，即 Git for Windows）
+scripts\dev-run.cmd                 # Windows 入口，转发到 dev-run.sh
 ```
 
-环境变量：`EMULATOR_NAME`、`PRODUCT`。脚本会把签名材料生成到本机 `~/.ohos/config/`，**不写入仓库**。
+环境变量：`EMULATOR_NAME`、`PRODUCT`、`DEVECOCLI_BIN`。
+
+**两处平台适配，勿改回依赖 PATH**：`dev-run.cmd` 显式定位 Git Bash（由 `where git` 推导并校验）——部分机器上 PATH 里的 `bash` 会命中 WSL 启动器而失败；`dev-run.sh` 依次探测 `devecocli` / `devecocli.cmd` / `devecocli.exe`——Git Bash 不按 PATHEXT 补后缀。
+
+### 6.1 签名：模板合成 + 本机缓存
+
+仓库中的 `build-profile.json5` 是**模板**（`signingConfigs: []`）。脚本运行时由模板合成带签名版本，结束（含异常退出，靠 `trap`）**自动还原为模板**；本机签名缓存在 `.local/`（gitignore，不入库），按模板哈希判断是否需要重新生成，模板变化时自动重签。
+
+因此 `build-profile.json5` 不应出现本地改动——`git status` 里看到它被改动即为异常。签名材料本身仍由 `devecocli signature generate` 生成到本机 `~/.ohos/config/`，不入库。
+
+**一次性手动步骤（脚本只提示、不代为执行）**：`devecocli auth login`（脚本仅做登录态预检）、`devecocli emulator license accept`（脚本不代为同意协议）。
+
+### 6.2 pre-push 钩子
+
+`scripts/hooks/pre-push` 逐个提交检查，拒绝推送含签名配置的 `build-profile.json5`。`dev-run.sh` 会自动执行 `git config core.hooksPath scripts/hooks`。
 
 CI 门禁（顺序：依赖安装 → 代码检查 → 构建）：
 
@@ -109,8 +128,6 @@ scripts\ci-windows.cmd --no-install # 跳过依赖安装
 ```
 
 CI 已知限制：`codelinter.bat` 退出码恒为 1，脚本改读其 JSON 报告判定；CI 不签名、不安装、不做设备测试；真机验收为人工门禁。触发条件仅为 `pull_request → main` 与 `push → main`。
-
-签名注意：**不要提交 `build-profile.json5` 中 `signingConfigs` / `signingConfig` 的任何改动**。
 
 ## 7. ArkTS 编码约束
 
@@ -146,6 +163,6 @@ ArkTS 不是任意 TypeScript，写 `.ets` 前加载 `arkts-grammar-standards` s
 - 页面白屏：`EntryAbility.onWindowStageCreate` 必须 `loadContent`，且与 `resources/base/profile/main_pages.json` 清单一致。
 - `HAR` 不能声明 UIAbility / AbilityStage，也不宜依赖 `AppScope` 资源；HSP 不能独立上架。
 - 同一设备类型只允许一个 `entry` 类型 HAP。
-- `.sh` 必须 LF、`.cmd/.bat` 必须 CRLF（由 `.gitattributes` 固定），改动脚本注意行尾。
-- 签名相关改动、`build/`、`.hvigor/`、`oh_modules/`、`.idea/` 均被 gitignore，不要试图提交。
+- `.sh` 必须 LF、`.cmd/.bat` 必须 CRLF、`scripts/hooks/*` 必须 LF（无扩展名，已在 `.gitattributes` 单独约定），改动脚本注意行尾。
+- 签名相关改动、`.local/`、`build/`、`.hvigor/`、`oh_modules/`、`.idea/` 均被 gitignore，不要试图提交。
 - 进程被回收后不假设 Agent 自动续跑；「草稿生成 / 日程创建 / 提醒注册 / 提醒送达」不可混为成功。

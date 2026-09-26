@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# pre-push 钩子：拒绝推送含本机签名配置的 build-profile.json5
+#
+# 启用方式（仓库级，不影响全局）：
+#   git config core.hooksPath scripts/hooks
+# dev-run 脚本会自动完成这一步。
+#
+# build-profile.json5 是共享配置，签名只属于本机、缓存在 .local/（不入库）。
+# 详见 docs/01-协作与工程约定.md 第 5 节。
+
+fail=0
+offenders=""
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_sha" in
+    0000000000000000000000000000000000000000) continue ;;
+  esac
+
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    range="$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  for sha in $(git rev-list "$range" 2>/dev/null); do
+    if git cat-file -p "$sha:build-profile.json5" 2>/dev/null | grep -q "storeFile"; then
+      subject="$(git log -1 --format=%s "$sha" 2>/dev/null)"
+      offenders="$offenders
+  $sha $subject"
+      fail=1
+    fi
+  done
+done
+
+if [ "$fail" = "1" ]; then
+  cat >&2 <<EOF
+
+[pre-push] 拒绝推送：以下提交的 build-profile.json5 含本机签名配置（storeFile）：
+$offenders
+
+签名配置只应存在于本机 .local/ 缓存，不得进入仓库（见 docs/01-协作与工程约定.md 第 5 节）。
+这些提交尚未推送，本地修复即可：
+
+  1) 用仓库模板版本覆盖该文件后再提交：
+       git checkout origin/main -- build-profile.json5
+     （若污染就在最新一次提交，也可直接 git commit --amend）
+  2) 用 git log --oneline -- build-profile.json5 确认引入位置
+  3) 重新提交后再推送
+
+确认无需拦截时可绕过：git push --no-verify
+EOF
+  exit 1
+fi
+
+exit 0

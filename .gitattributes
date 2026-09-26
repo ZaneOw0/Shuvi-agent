@@ -4,3 +4,6 @@
 *.cmd text eol=crlf
 *.bat text eol=crlf
 *.md  text eol=lf
+
+# Git 钩子无扩展名，必须保持 LF，否则在类 Unix 环境下无法执行
+scripts/hooks/* text eol=lf
