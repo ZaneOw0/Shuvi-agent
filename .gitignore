@@ -22,6 +22,9 @@ obfuscation-cache/
 signing/*
 !signing/README.md
 
+# 本机签名缓存与本地草稿
+.local/
+
 # 系统文件
 .DS_Store
 Thumbs.db
