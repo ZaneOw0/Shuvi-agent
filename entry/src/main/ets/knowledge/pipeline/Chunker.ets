@@ -1,7 +1,7 @@
 import { ChunkSlice } from '../domain/KnowledgeTypes';
 
 const PARAGRAPH_BREAK: string = '\n\n';
-const SENTENCE_BREAKS: string[] = ['。', '！', '？', '；', '!', '?', ';', '\n'];
+const SENTENCE_BREAKS: string[] = ['。', '！', '？', '；', '.', '!', '?', ';', '\n'];
 const MIN_BOUNDARY_RATIO: number = 0.5;
 
 export function chunkText(text: string, size: number, overlapRatio: number): ChunkSlice[] {
