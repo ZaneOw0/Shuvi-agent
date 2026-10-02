@@ -89,6 +89,7 @@ HarmonyPA/
 
 - `.ets` 文件改完先 `arkts_check`，再 `build_project`；构建失败出现 `ERROR` 时加载 `arkts-error-fixes` skill 修复后重跑。
 - **必须先 `build_project` 成功，才能 `start_app`**；任务结束前也必须保证 `build_project` 通过。
+- **每次测试必须落盘日志**（构建 / 模拟器 / 真机一律如此）：用 `scripts/capture-test-log.sh <scope> [窗口] [设备]`，结果写入 `.cache/test-logs/`，含设备原始日志、`meta.txt`（提交、未提交改动数、工作区指纹、设备）与 `index.tsv` 索引；并把日志路径与复现命令写进对应 spec。未落盘的测试不作为证据（见 [docs/01](docs/01-协作与工程约定.md) 第 7.0 节）。
 - ArkTS 严格规则由构建阶段（`CompileArkTS`）强制拦截，本地报错以构建输出为准。
 
 ## 6. 脚本与 Demo 启动方法
