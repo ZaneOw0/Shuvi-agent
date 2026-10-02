@@ -1,0 +1,41 @@
+# Unicode 边界样本（自撰，用于验证不丢字符与不拆分字符）
+
+## 1 零宽与不可见字符
+零宽空格[​]之后应有内容；零宽非连接符[‌]；零宽连接符[‍]；字节顺序标记[﻿]；词连接符[⁠]；软连字符[­]。
+双向控制符：左到右标记[‎]、右到左标记[‏]、嵌入开始[‪]、嵌入结束[‬]、段落方向[‮]。
+不换行空格[ ]、全角空格[　]与窄不换行空格[ ]。
+
+## 2 组合字符与重音
+组合字符序列：e 加组合尖音符 = é；a 加组合分音符加组合长音符 = ǟ；o 加组合下加点 = ọ。
+天城文：क्षत्रिय；कर्म。韩文组合字母：한。泰文无空格段落：สวัสดีครับผมชื่อสมชายยินดีที่ได้รู้จักคุณ
+
+## 3 代理对与表情序列
+辅助平面字符：𝄞（U+1D11E）、𠀀（U+20000）、😀（U+1F600）、🧑‍💻、👨‍👩‍👧‍👦、🏳️‍🌈、🇨🇳。
+变体选择符：❤️（U+2764+FE0F）、✔︎（U+2714+FE0E）。
+肤色修饰符：👍🏽、🙋🏿。
+
+## 4 标点与数字日期
+全角标点：，。！？；：“”‘’《》——…（）。半角标点：, . ! ? ; : " ' ( ) [ ] { } < > / | ~ ^ `。
+数字与单位：140/90 mmHg、33%、6.3 亿、384K（393216）、1 到 384K、2 MB、512 字符、1000 字节、64 维、0.95-1.0。
+日期与时间：2026-10-02T18:47:45+08:00、2026年10月2日 18:47、Jun 1, 2020、2010 年至 2025 年、1705651092。
+版本号：26.0.0.105、6.26.4、24.14.1、v1.3.2、API 18+、API version 23。
+
+## 5 长链接与长令牌
+超长 URL：https://example.com/api/v2/retrieval?channelConfigs=%5B%7B%22channelType%22%3A1%2C%22fromClause%22%3A%22kb_chunk_fts%22%2C%22primaryKey%22%3A%5B%22chunk_id%22%5D%2C%22responseColumns%22%3A%5B%22chunk_id%22%2C%22document_id%22%2C%22text%22%5D%7D%5D&rerankType=RRF&resultCount=500&similarityThreshold=0.4
+无分隔长串：A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6
+Base64 片段：eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
+
+## 6 换行与分隔符
+普通换行如下
+第二行内容。回车换行如下
+第三行内容。
+Unicode 行分隔符 之后的行内内容。段落分隔符 之后的段落内容。
+制表符	与竖线	分隔的值。
+
+## 7 中英混排与代码
+调用 `getRetriever(config)` 之后使用 `retrieveRdb(query, condition)` 获取结果，字段 `ItemInfo.similarityLevel` 用于展示相关度档位。
+SQL 片段：SELECT chunk_id, document_id, text FROM kb_chunk_fts WHERE kb_chunk_fts MATCH ? LIMIT ?;
+路径片段：/data/storage/el2/base/haps/entry/files/kb/doc-4-1790938065706.md 与 C:\Users\Example\.ohos\config\default_HarmonyPA.cer
+
+## 8 语言混合
+阿拉伯语（右到左）：مرحبا بالعالم، هذا نص تجريبي لاختبار الاتجاه。希伯来语：שלום עולם。希腊语：Καλημέρα κόσμε。俄语：Здравствуй, мир。日语：こんにちは世界、これはテストです。韩语：안녕하세요 세계。
