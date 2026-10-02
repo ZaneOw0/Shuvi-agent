@@ -14,7 +14,8 @@
  */
 import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { Theme } from '../components/Theme';
-import { WorkbenchPage, KnowledgePage, ProfilePage } from '../components/FeaturePages';
+import { WorkbenchPage, ProfilePage } from '../components/FeaturePages';
+import { KnowledgeLab } from '../knowledge/ui/KnowledgeLab';
 import {
   AssistantService, CalendarDraft, ChatMessage, DEMO_SCENARIOS, DemoScenario,
   OperationResult, OperationState, RequestState
@@ -476,7 +477,7 @@ struct Index {
                 onNotice: (title: string, message: string) => this.notice(title, message) })
             }
           } else if (this.tab === 2) {
-            KnowledgePage({ onNotice: (title: string, message: string) => this.notice(title, message) })
+            KnowledgeLab()
           } else {
             ProfilePage({ onNotice: (title: string, message: string) => this.notice(title, message) })
           }
