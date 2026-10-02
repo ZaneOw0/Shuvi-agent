@@ -57,6 +57,15 @@ if ! "$DEVECOCLI_BIN" log --bundle-name "$BUNDLE" --from "$WINDOW" --tail 20000 
   STATUS="log-failed"
 fi
 
+CMD_STATUS="not-run"
+if [ -n "${RUN_CMD:-}" ]; then
+  if bash -c "$RUN_CMD" > "$OUT/host.log" 2>&1; then
+    CMD_STATUS="ok"
+  else
+    CMD_STATUS="failed"
+  fi
+fi
+
 if [ -n "$KEYWORD" ]; then
   grep -F "$KEYWORD" "$OUT/device.log" > "$OUT/filtered.log" || true
 fi
@@ -80,6 +89,8 @@ fi
   printf 'keyword\t%s\n' "${KEYWORD:--}"
   printf 'status\t%s\n' "$STATUS"
   printf 'build_profile\t%s\n' "$TEMPLATE_STATE"
+  printf 'run_cmd\t%s\n' "${RUN_CMD:--}"
+  printf 'run_cmd_status\t%s\n' "$CMD_STATUS"
 } > "$OUT/meta.txt"
 
 mkdir -p .cache/test-logs
