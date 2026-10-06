@@ -14,6 +14,7 @@
  */
 import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { Theme } from '../components/Theme';
+import { AssistantWelcome, CalendarDraftCard, ChatIcon } from '../components/ChatVisuals';
 import { WorkbenchPage, KnowledgePage, ProfilePage } from '../components/FeaturePages';
 import {
   AssistantService, CalendarDraft, ChatMessage, DEMO_SCENARIOS, DemoScenario,
@@ -36,8 +37,8 @@ struct Index {
   @State requestState: RequestState = RequestState.Unsupported;
   @State scenario: DemoScenario = DemoScenario.Normal;
   @State showScenarios: boolean = false;
-  @State noticeTitle: string = '';
-  @State noticeText: string = '';
+  @State drawerOpen: boolean = false;
+  @State contentHeight: number = 0;
   private service: AssistantService = new MockAssistantService();
   private requestId: string = '';
   private operationId: string = '';
@@ -45,7 +46,9 @@ struct Index {
   private scroller: Scroller = new Scroller();
   private inputController: TextAreaController = new TextAreaController();
   private tabNames: string[] = ['助手', '工作台', '知识库', '我的'];
-  private tabMarks: string[] = ['休', '办', '知', '我'];
+  private tabIcons: Resource[] = [
+    $r('app.media.chat_chat'), $r('app.media.chat_grid'), $r('app.media.chat_book'), $r('app.media.chat_user')
+  ];
 
   aboutToAppear(): void {
     this.alive = true;
@@ -58,8 +61,8 @@ struct Index {
   }
 
   onBackPress(): boolean {
-    if (this.noticeTitle.length > 0) {
-      this.noticeTitle = '';
+    if (this.drawerOpen) {
+      this.drawerOpen = false;
       return true;
     }
     if (this.showScenarios) {
@@ -79,9 +82,10 @@ struct Index {
 
   private notice(title: string, message: string): void {
     this.inputController.stopEditing();
-    this.noticeTitle = title;
-    this.noticeText = message;
-    this.scroller.scrollEdge(Edge.Top);
+    this.getUIContext().showAlertDialog({
+      title: title, message: message,
+      primaryButton: { value: '知道了', action: () => {} }
+    });
   }
 
   private changeTab(index: number): void {
@@ -92,7 +96,7 @@ struct Index {
     this.tab = index;
     this.calendarOpen = false;
     this.showScenarios = false;
-    this.noticeTitle = '';
+    this.drawerOpen = false;
     this.scroller.scrollEdge(Edge.Top);
   }
 
@@ -106,6 +110,9 @@ struct Index {
   }
 
   private useSample(): void {
+    if (this.blocked()) {
+      return;
+    }
     this.input = this.service.sampleText;
     this.scroller.scrollEdge(Edge.Bottom);
   }
@@ -155,14 +162,68 @@ struct Index {
     this.addMessage('已取消生成，没有创建日程。');
   }
 
-  private cancelDraft(): void {
+  private cancelDraft(rephrase: boolean = false): void {
     if (this.draft && !this.executing) {
       this.service.discard(this.draft.draftId);
       this.draft = undefined;
       this.result = undefined;
       this.operationId = '';
+      if (!rephrase) {
+        this.input = '';
+      }
       this.addMessage('已取消草稿，没有新增演示日程。你可以修改输入后重新发送。');
     }
+  }
+
+  private openScenarios(): void {
+    if (this.generating || this.executing) {
+      return;
+    }
+    this.drawerOpen = false;
+    this.inputController.stopEditing();
+    this.showScenarios = !this.showScenarios;
+    this.scroller.scrollEdge(Edge.Top);
+  }
+
+  private newConversation(): void {
+    if (this.blocked()) {
+      return;
+    }
+    this.inputController.stopEditing();
+    if (this.messages.length === 0 && this.input.length === 0) {
+      this.resetConversation();
+      return;
+    }
+    this.getUIContext().showAlertDialog({
+      title: '开始新对话？',
+      message: '将清空当前对话和未发送文字，已确认的演示日程会保留。',
+      primaryButton: { value: '继续当前对话', action: () => {} },
+      secondaryButton: { value: '开始新对话', action: () => this.resetConversation() }
+    });
+  }
+
+  private resetConversation(): void {
+    if (this.blocked()) {
+      return;
+    }
+    this.service.cancel(this.requestId);
+    this.requestId = '';
+    this.operationId = '';
+    this.messages = [];
+    this.input = '';
+    this.result = undefined;
+    this.requestState = RequestState.Unsupported;
+    this.scenario = DemoScenario.Normal;
+    this.changeTab(0);
+  }
+
+  private attachments(): void {
+    this.inputController.stopEditing();
+    this.getUIContext().showAlertDialog({
+      title: '添加内容', message: '图片与文件输入待接入，本次不会读取设备内容。',
+      primaryButton: { value: '图片 · 待接入', action: () => this.notice('图片输入待接入', '本次不会打开相册或读取图片。') },
+      secondaryButton: { value: '文件 · 待接入', action: () => this.notice('文件输入待接入', '本次不会打开文件选择器或读取文件。') }
+    });
   }
 
   private async confirm(): Promise<void> {
@@ -216,60 +277,81 @@ struct Index {
     }
   }
 
+
   @Builder
   header() {
-    Row({ space: 12 }) {
-      Text('休').fontSize(22).fontWeight(FontWeight.Bold).fontColor(Theme.accent)
-        .width(44).height(44).textAlign(TextAlign.Center).borderRadius(14).backgroundColor(Theme.soft)
-      Column({ space: 3 }) {
-        Text(this.tab === 0 ? 'Shuvi 休比' : this.tabNames[this.tab])
-          .fontSize(20).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
-        Text('让想法，成为行动').fontSize(11).fontColor(Theme.muted)
-      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Text('演示模式').fontSize(11).fontColor(Theme.amber).padding({ left: 10, right: 10, top: 6, bottom: 6 })
-        .backgroundColor(Theme.warning).borderRadius(8)
-    }.width('100%').padding({ left: 20, right: 20, top: 12, bottom: 16 })
+    Stack() {
+      Column({ space: 2 }) {
+        if (this.tab !== 0) {
+          Text(this.tabNames[this.tab]).fontSize(14).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
+        }
+        Text('演示模式').fontSize(11).fontColor(Theme.muted)
+          .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor('#F5F7F4').borderRadius(20)
+      }.width('34%')
+      Row() {
+        Button({ type: ButtonType.Circle }) {
+          ChatIcon({ source: $r('app.media.chat_menu'), size: 24 })
+        }.width(44).height(44).backgroundColor(Theme.surface)
+          .shadow({ radius: 16, color: '#0A26392C', offsetY: 3 })
+          .accessibilityText('打开导航菜单').id('chat-menu')
+          .onClick(() => {
+            this.inputController.stopEditing();
+            this.drawerOpen = true;
+          })
+        Blank()
+        Row() {
+          Button({ type: ButtonType.Circle }) {
+            ChatIcon({ source: $r('app.media.chat_sliders') })
+          }.width(44).height(44).backgroundColor(Color.Transparent)
+            .accessibilityText(`演示场景设置，当前${this.scenario}`).id('chat-scenarios')
+            .enabled(!this.generating && !this.executing).onClick(() => this.openScenarios())
+          Button({ type: ButtonType.Circle }) {
+            ChatIcon({ source: $r('app.media.chat_newchat') })
+          }.width(44).height(44).backgroundColor(Color.Transparent)
+            .accessibilityText(this.blocked() ? '开始新对话，请先处理当前任务' : '开始新对话')
+            .id('chat-new').enabled(!this.blocked()).opacity(this.blocked() ? 0.4 : 1)
+            .onClick(() => this.newConversation())
+        }.padding({ left: 3, right: 3 }).borderRadius(28).backgroundColor(Theme.surface)
+          .shadow({ radius: 16, color: '#0A26392C', offsetY: 3 })
+      }.width('100%')
+    }.width('100%').constraintSize({ minHeight: 68 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
   }
 
   @Builder
   assistant() {
     Column({ space: 16 }) {
-      if (this.messages.length === 0) {
-        Column({ space: 14 }) {
-          Text('今天，有什么\n想一起完成？').fontSize(30).fontWeight(FontWeight.Bold)
-            .fontColor(Theme.ink).lineHeight(42).width('100%')
-          Text('安排日程、整理资料，或记下一闪而过的想法。')
-            .fontSize(14).fontColor(Theme.muted).lineHeight(23)
-          Button({ type: ButtonType.Normal }) {
-            Column({ space: 8 }) {
-              Text('从一场会议开始  ↗').fontSize(16).fontWeight(FontWeight.Medium).fontColor(Theme.accent)
-              Text('试试创建日程 · 固定样例').fontSize(12).fontColor(Theme.muted)
-              Text('10 月 20 日  15:00—16:00').fontSize(14).fontColor(Theme.ink)
-            }.alignItems(HorizontalAlign.Start).padding(20).width('100%')
-          }.backgroundColor(Theme.soft).borderRadius(18).width('100%').onClick(() => this.useSample())
-          Text('可以从工作台了解各项功能。当前不连接真实模型，请使用样例体验。')
-            .fontSize(12).fontColor(Theme.muted).lineHeight(20)
-        }.alignItems(HorizontalAlign.Start).padding({ top: 28, bottom: 8 }).width('100%')
-      }
       ForEach(this.messages, (message: ChatMessage) => {
-        Column({ space: 6 }) {
-          Text(message.isUser ? '你' : '休比 · 演示').fontSize(11).fontColor(Theme.muted)
-          Text(message.text).fontSize(15).fontColor(Theme.ink).lineHeight(24)
-            .padding(16).backgroundColor(message.isUser ? Theme.soft : Theme.surface).borderRadius(16)
-        }.width('100%').alignItems(message.isUser ? HorizontalAlign.End : HorizontalAlign.Start)
+        if (message.isUser) {
+          Row() {
+            Blank().width('8%')
+            Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
+              .backgroundColor(Theme.bubble).borderRadius({ topLeft: 20, topRight: 20, bottomLeft: 20, bottomRight: 6 })
+              .constraintSize({ maxWidth: '92%' }).accessibilityText(`你：${message.text}`)
+          }.width('100%').justifyContent(FlexAlign.End)
+        } else {
+          Row({ space: 8 }) {
+            Text('休').fontSize(22).fontColor(Theme.accent).accessibilityLevel('no')
+            Text(message.text).fontSize(14).fontColor(Theme.ink).layoutWeight(1)
+              .accessibilityText(`休比：${message.text}`)
+          }.width('100%').alignItems(VerticalAlign.Top)
+        }
       }, (message: ChatMessage) => message.id)
       if (this.generating) {
-        Row({ space: 12 }) {
-          LoadingProgress().width(24).height(24).color(Theme.accent)
+        Row({ space: 10 }) {
+          LoadingProgress().width(22).height(22).color(Theme.accent)
           Text('正在生成演示草稿…').fontSize(14).fontColor(Theme.muted).layoutWeight(1)
-          Button('取消').fontSize(13).backgroundColor(Theme.soft).fontColor(Theme.accent)
-            .onClick(() => this.cancelGeneration())
+          Button('取消').fontSize(13).constraintSize({ minHeight: 44 })
+            .backgroundColor(Theme.soft).fontColor(Theme.accent).onClick(() => this.cancelGeneration())
         }.width('100%')
       }
-      if (this.draft) {
-        this.draftCard(this.draft)
+      if (this.result && !this.result.calendarCreated) {
+        this.resultCard(this.result)
       }
-      if (this.result) {
+      if (this.draft) {
+        CalendarDraftCard({ draft: this.draft, executing: this.executing,
+          failed: this.result !== undefined && !this.result.calendarCreated })
+      }
+      if (this.result && this.result.calendarCreated) {
         this.resultCard(this.result)
       }
       if (!this.blocked() && this.requestState === RequestState.Failed) {
@@ -283,12 +365,12 @@ struct Index {
             this.useSample();
           })
       }
-    }.width('100%').alignItems(HorizontalAlign.Start).padding({ bottom: 20 })
+    }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 14, bottom: 20 })
   }
 
   @Builder
   draftDetails(draft: CalendarDraft) {
-    Text(draft.title).fontSize(22).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
+    Text(draft.title).fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
     Text(`${draft.startAt.substring(0, 10)}  ${draft.startAt.substring(11, 16)}—${draft.endAt.substring(11, 16)}`)
       .fontSize(15).fontColor(Theme.ink)
     Text(`${draft.timeZone} · 提前 ${draft.reminderMinutesBefore} 分钟提醒`)
@@ -296,25 +378,25 @@ struct Index {
   }
 
   @Builder
-  draftCard(draft: CalendarDraft) {
-    Column({ space: 12 }) {
-      Text(this.executing ? '正在模拟执行' : '日程草稿 · 尚未创建')
-        .fontSize(12).fontColor(Theme.accent).fontWeight(FontWeight.Medium)
-      this.draftDetails(draft)
-      Divider().color(Theme.line)
-      Text('确认后仅添加至演示列表，不会写入系统或实际提醒。').fontSize(12).fontColor(Theme.muted).lineHeight(20)
-      Button(this.executing ? '处理中…' : '确认（演示）', { type: ButtonType.Normal })
-        .width('100%').constraintSize({ minHeight: 44 }).borderRadius(12)
-        .fontColor(Color.White).backgroundColor(Theme.accent).enabled(!this.executing)
-        .onClick(() => this.confirm())
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
-        Button('取消草稿').fontSize(13).fontColor(Theme.muted).backgroundColor(Color.Transparent)
+  confirmationDock() {
+    Column({ space: 8 }) {
+      Text(this.executing ? '正在模拟执行，请稍候' : '请先确认或取消，再继续对话')
+        .fontSize(11).fontColor(Theme.muted).textAlign(TextAlign.Center).width('100%')
+      Button(this.executing ? '处理中…' : (this.result ? '重试创建（演示）' : '确认（演示）'), { type: ButtonType.Normal })
+        .width('100%').constraintSize({ minHeight: 48 }).padding(12).borderRadius(16)
+        .fontSize(15).fontColor(Color.White).backgroundColor(Theme.accent).enabled(!this.executing)
+        .id('chat-confirm').onClick(() => this.confirm())
+      Row() {
+        Button('取消草稿', { type: ButtonType.Normal }).fontSize(13).fontColor(Theme.muted)
+          .layoutWeight(1).constraintSize({ minHeight: 44 }).backgroundColor(Color.Transparent)
           .enabled(!this.executing).onClick(() => this.cancelDraft())
-        Button('重新描述').fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
-          .enabled(!this.executing).onClick(() => this.cancelDraft())
+        Divider().vertical(true).height(14).color(Theme.line)
+        Button('重新描述', { type: ButtonType.Normal }).fontSize(13).fontColor(Theme.accent)
+          .layoutWeight(1).constraintSize({ minHeight: 44 }).backgroundColor(Color.Transparent)
+          .enabled(!this.executing).onClick(() => this.cancelDraft(true))
       }.width('100%')
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(20)
-      .backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
+    }.width('100%').padding({ left: 20, right: 20, top: 12, bottom: 8 })
+      .backgroundColor(Theme.surface).border({ width: { top: 1 }, color: Theme.line })
   }
 
   @Builder
@@ -323,6 +405,9 @@ struct Index {
       Text(result.state === OperationState.Success ? '演示完成' :
         (result.state === OperationState.Partial ? '部分完成 · 提醒待重试' : '本次未完成'))
         .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
+      if (result.calendarCreated && !this.calendarOpen) {
+        this.draftDetails(result.draft)
+      }
       Text(result.message).fontSize(13).lineHeight(21).fontColor(Theme.muted)
       Text(`日程：${result.calendarCreated ? '已模拟创建' : '未创建'}\n提醒：${result.reminderRegistered ? '已模拟注册，不会送达' : '未注册'}`)
         .fontSize(12).lineHeight(21).fontColor(Theme.muted)
@@ -373,34 +458,6 @@ struct Index {
   }
 
   @Builder
-  composer() {
-    Column({ space: 8 }) {
-      Row({ space: 8 }) {
-        Button('图片').fontSize(12).fontColor(Theme.muted).backgroundColor(Theme.paper)
-          .onClick(() => this.notice('图片输入', '图片选择与理解待接入，本次不会打开相册。'))
-        Button('语音').fontSize(12).fontColor(Theme.muted).backgroundColor(Theme.paper)
-          .onClick(() => this.notice('语音输入', '语音录制与识别待接入，本次不会开启麦克风。'))
-        Blank()
-        Button('使用样例').fontSize(12).fontColor(Theme.accent).backgroundColor(Theme.soft)
-          .enabled(!this.blocked()).onClick(() => this.useSample())
-      }.width('100%')
-      Row({ space: 10 }) {
-        TextArea({ text: this.input, placeholder: '写下想做的事…', controller: this.inputController })
-          .fontSize(15).fontColor(Theme.ink).placeholderColor(Theme.muted).backgroundColor(Theme.paper)
-          .height(72).layoutWeight(1).borderRadius(12).enabled(!this.blocked())
-          .onChange((value: string) => this.input = value)
-        Button('发送', { type: ButtonType.Normal }).fontSize(14).fontColor(Color.White)
-          .backgroundColor(Theme.accent).borderRadius(12).width(62).constraintSize({ minHeight: 48 })
-          .enabled(!this.blocked() && this.input.trim().length > 0 && this.input.length <= 500)
-          .onClick(() => this.send())
-      }.width('100%')
-      if (this.input.length > 500) {
-        Text(`已输入 ${this.input.length} 字，最多 500 字，请缩短后发送。`).fontSize(12).fontColor(Theme.danger)
-      }
-    }.padding({ left: 20, right: 20, top: 12, bottom: 12 }).width('100%').backgroundColor(Theme.surface)
-  }
-
-  @Builder
   scenarioPanel() {
     Column({ space: 10 }) {
       Text('选择下一次演示场景').fontSize(17).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
@@ -422,51 +479,125 @@ struct Index {
   }
 
   @Builder
-  navigation() {
-    Row() {
-      ForEach(this.tabNames, (name: string, index: number) => {
-        Button({ type: ButtonType.Normal }) {
-          Column({ space: 4 }) {
-            Text(this.tabMarks[index]).fontSize(18).fontWeight(FontWeight.Medium)
-              .fontColor(this.tab === index ? Theme.accent : Theme.muted)
-              .width(40).height(28).textAlign(TextAlign.Center).borderRadius(8)
-              .backgroundColor(this.tab === index ? Theme.soft : Color.Transparent)
-            Text(name).fontSize(11).fontColor(this.tab === index ? Theme.accent : Theme.muted)
-          }.padding({ top: 8, bottom: 8 })
-        }.layoutWeight(1).backgroundColor(Theme.surface).onClick(() => this.changeTab(index))
-          .accessibilityText(`${name}${this.tab === index ? '，已选中' : ''}`)
-      }, (name: string) => name)
-    }.width('100%').backgroundColor(Theme.surface).border({ width: { top: 1 }, color: Theme.line })
+  composer() {
+    Column({ space: 8 }) {
+      Column({ space: 8 }) {
+        TextArea({ text: this.input, placeholder: '发消息，或说说你的想法…', controller: this.inputController })
+          .fontSize(15).fontColor(Theme.ink).placeholderColor(Theme.muted).backgroundColor(Color.Transparent)
+          .height(64).width('100%').padding({ left: 6, right: 6, top: 4, bottom: 4 })
+          .enabled(!this.blocked()).onChange((value: string) => this.input = value)
+          .accessibilityText('写下想做的事，最多 500 字').id('chat-input')
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center }) {
+          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 4 }) {
+                ChatIcon({ source: $r('app.media.chat_calendar'), size: 16})
+                Text('日程样例').fontSize(12).fontColor(Theme.accent)
+              }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
+            }.borderRadius(22).backgroundColor(Theme.soft).border({ width: 1, color: '#DCE9DF' })
+              .margin({ right: 4, bottom: 4 }).enabled(!this.blocked()).onClick(() => this.useSample())
+              .id('chat-sample').accessibilityText('日程样例，填入固定演示文字')
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 4 }) {
+                ChatIcon({ source: $r('app.media.chat_globe'), size: 16})
+                Text('搜索').fontSize(12).fontColor(Theme.muted)
+              }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
+            }.borderRadius(22).backgroundColor(Color.Transparent).border({ width: 1, color: Theme.line })
+              .margin({ bottom: 4 }).accessibilityText('联网搜索，待接入')
+              .onClick(() => this.notice('联网搜索待接入', '本次不会发起网络请求。请使用日程样例体验确认流程。'))
+          }
+          Row() {
+            Button({ type: ButtonType.Circle }) {
+              ChatIcon({ source: $r('app.media.chat_plus'), size: 26 })
+            }.width(44).height(44).backgroundColor(Color.Transparent).onClick(() => this.attachments())
+              .accessibilityText('添加图片或文件，待接入')
+            if (this.input.trim().length > 0) {
+              Button({ type: ButtonType.Circle }) {
+                ChatIcon({ source: $r('app.media.chat_up'), size: 22})
+              }.width(44).height(44).backgroundColor(Theme.accent).accessibilityText('发送消息').id('chat-send')
+                .enabled(!this.blocked() && this.input.length <= 500).onClick(() => this.send())
+            } else {
+              Button({ type: ButtonType.Circle }) {
+                ChatIcon({ source: $r('app.media.chat_wave'), size: 26 })
+              }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('语音输入，待接入')
+                .onClick(() => this.notice('语音输入待接入', '本次不会开启麦克风或录音。请使用日程样例体验确认流程。'))
+            }
+          }.margin({ bottom: 4 })
+        }.width('100%')
+        if (this.input.length >= 400) {
+          Text(`${this.input.length} / 500`).fontSize(11)
+            .fontColor(this.input.length > 500 ? Theme.danger : Theme.muted).width('100%').textAlign(TextAlign.End)
+        }
+      }.width('100%').padding({ left: 10, right: 10, top: 12, bottom: 6 })
+        .backgroundColor(Theme.inputSurface).borderRadius(26)
+        .border({ width: 1, color: this.input.length > 500 ? Theme.danger : Theme.line })
+      if (this.input.length > 500) {
+        Text('最多 500 字，请缩短后发送。').fontSize(12).fontColor(Theme.danger).width('100%')
+      }
+      Text('演示数据 · 重启后重置 · 图片与语音待接入').fontSize(10).fontColor(Theme.muted)
+        .textAlign(TextAlign.Center).width('100%')
+    }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%').backgroundColor(Theme.surface)
   }
 
-  build() {
+  @Builder
+  navigationDrawer() {
+    Column() {
+      Row({ space: 8 }) {
+        Column({ space: 6 }) {
+          Text('Shuvi 休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
+          Text('个人助理 · 演示模式').fontSize(12).fontColor(Theme.muted)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Button('×', { type: ButtonType.Circle }).width(44).height(44).fontSize(28)
+          .fontColor(Theme.muted).backgroundColor(Color.Transparent).accessibilityText('关闭导航菜单')
+          .onClick(() => this.drawerOpen = false)
+      }.width('100%').padding({ bottom: 24 })
+      Scroll() {
+        Column({ space: 8 }) {
+          ForEach(this.tabNames, (name: string, index: number) => {
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 12 }) {
+                ChatIcon({ source: this.tabIcons[index]})
+                Text(name).fontSize(16).fontColor(this.tab === index ? Theme.accent : Theme.muted).layoutWeight(1)
+                if (index === 0 && this.draft !== undefined) {
+                  Text(this.executing ? '处理中' : '待确认').fontSize(11).fontColor(Theme.amber)
+                }
+                if (index === 1 && this.records.length > 0) {
+                  Text(`${this.records.length}`).fontSize(12).fontColor(Theme.accent)
+                    .accessibilityText(`${this.records.length} 条演示日程`)
+                }
+              }.width('100%').padding(14).constraintSize({ minHeight: 52 })
+            }.width('100%').borderRadius(15).backgroundColor(this.tab === index ? Theme.soft : Color.Transparent)
+              .accessibilityText(`${name}${this.tab === index ? '，已选中' : ''}`).onClick(() => this.changeTab(index))
+          }, (name: string) => name)
+        }.width('100%')
+      }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
+      Button('演示场景设置  ›', { type: ButtonType.Normal }).width('100%').constraintSize({ minHeight: 44 })
+        .fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
+        .enabled(!this.generating && !this.executing).onClick(() => this.openScenarios())
+      Text('当前仅支持固定样例\n演示数据会在重启后重置').fontSize(11).fontColor(Theme.muted)
+        .width('100%').padding({ top: 16 })
+    }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
+      .backgroundColor(Theme.inputSurface).borderRadius({ topRight: 26, bottomRight: 26 })
+  }
+
+  @Builder
+  pageContent() {
     Column() {
       this.header()
-      Row() {
-        Text('演示数据 · 重启后重置').fontSize(11).fontColor(Theme.muted).layoutWeight(1)
-        Button(`演示场景：${this.scenario}`, { type: ButtonType.Normal }).fontSize(11)
-          .fontColor(Theme.accent).backgroundColor(Color.Transparent).constraintSize({ minHeight: 36 })
-          .enabled(!this.generating && !this.executing)
-          .onClick(() => {
-            this.inputController.stopEditing();
-            this.showScenarios = !this.showScenarios;
-            this.scroller.scrollEdge(Edge.Top);
-          })
-      }.padding({ left: 20, right: 12 }).width('100%')
+      if (this.scenario !== DemoScenario.Normal) {
+        Text(`下一次演示：${this.scenario}`).fontSize(12).fontColor(Theme.amber)
+          .width('100%').textAlign(TextAlign.Center).padding({ left: 16, right: 16, bottom: 8 })
+      }
       Scroll(this.scroller) {
         Column() {
-          if (this.noticeTitle.length > 0) {
-            Column({ space: 16 }) {
-              Text(this.noticeTitle).fontSize(24).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
-              Text(this.noticeText).fontSize(15).fontColor(Theme.muted).lineHeight(25)
-              Button('知道了，返回').fontColor(Color.White).backgroundColor(Theme.accent)
-                .onClick(() => this.noticeTitle = '')
-            }.alignItems(HorizontalAlign.Start).padding(24).width('100%')
-              .backgroundColor(Theme.surface).borderRadius(18).margin({ top: 16, bottom: 20 })
-          } else if (this.showScenarios) {
+          if (this.showScenarios) {
             this.scenarioPanel()
           } else if (this.tab === 0) {
-            this.assistant()
+            if (this.messages.length === 0) {
+              AssistantWelcome()
+            } else {
+              this.assistant()
+            }
           } else if (this.tab === 1) {
             if (this.calendarOpen) {
               this.calendar()
@@ -480,12 +611,41 @@ struct Index {
           } else {
             ProfilePage({ onNotice: (title: string, message: string) => this.notice(title, message) })
           }
-        }.width('100%').constraintSize({ maxWidth: 640 }).padding({ left: 20, right: 20 })
+        }.width('100%').constraintSize({ maxWidth: 640,
+          minHeight: this.tab === 0 && this.messages.length === 0 && !this.showScenarios ? this.contentHeight : 0 })
+          .justifyContent(FlexAlign.Center).padding({ left: 20, right: 20 })
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
-      if (this.tab === 0 && !this.showScenarios && this.noticeTitle.length === 0) {
-        this.composer()
+        .onAreaChange((_oldArea: Area, area: Area) => this.contentHeight = Number(area.height))
+      if (this.tab === 0 && !this.showScenarios) {
+        if (this.draft) {
+          this.confirmationDock()
+        } else {
+          this.composer()
+        }
       }
-      this.navigation()
     }.width('100%').height('100%').backgroundColor(Theme.paper)
+  }
+
+  build() {
+    SideBarContainer(SideBarContainerType.Overlay) {
+      Column() {
+        this.navigationDrawer()
+      }
+      Stack() {
+        Column() {
+          this.pageContent()
+        }.width('100%').height('100%').enabled(!this.drawerOpen)
+          .accessibilityLevel(this.drawerOpen ? 'no-hide-descendants' : 'auto')
+        if (this.drawerOpen) {
+          Button({ type: ButtonType.Normal }) {
+            Row().width('100%').height('100%')
+          }.width('100%').height('100%').backgroundColor('#33232E28').borderRadius(0)
+            .accessibilityText('关闭导航菜单').onClick(() => this.drawerOpen = false)
+        }
+      }
+    }.width('100%').height('100%').showSideBar(this.drawerOpen).showControlButton(false)
+      .sideBarWidth('84%').minSideBarWidth(200).maxSideBarWidth(320).minContentWidth(0)
+      .divider({ strokeWidth: 0 }).onChange((visible: boolean) => this.drawerOpen = visible)
+      .backgroundColor(Theme.paper)
   }
 }
