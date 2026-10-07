@@ -29,7 +29,7 @@ export function FeatureRow($$: FeatureRowOptions) {
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       Text('›').fontSize(24).fontColor(Theme.muted)
     }.width('100%').padding(16)
-  }.width('100%').backgroundColor(Theme.surface).borderRadius(16)
+  }.width('100%').backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
   .onClick($$.onOpen).accessibilityText(`${$$.title}，${$$.description}`)
 }
 
@@ -98,8 +98,8 @@ export function ProfilePage($$: NoticePageOptions) {
     }.width('100%').padding({ top: 20, bottom: 24 })
     FeatureRow({ title: '我的设备', description: '多设备管理 · 待接入', mark: '设',
       onOpen: () => $$.onNotice('我的设备', '设备管理待接入，没有设备已绑定或同步。') })
-    FeatureRow({ title: '主题与外观', description: '当前：纸白与松绿 · 切换待接入', mark: '色',
-      onOpen: () => $$.onNotice('主题与外观', '初稿采用纸白与松绿配色。主题切换和自定义将在后续实现。') })
+    FeatureRow({ title: '主题与外观', description: '当前：纯白与松绿 · 切换待接入', mark: '色',
+      onOpen: () => $$.onNotice('主题与外观', '界面采用纯白与松绿配色。主题切换和自定义将在后续实现。') })
     FeatureRow({ title: '关于 Shuvi', description: '让想法，成为行动', mark: '休',
       onOpen: () => $$.onNotice('关于 Shuvi', '休比是你的个人助理。这是前端演示初稿：数据仅保留在当前页面实例中，退出重启后重置，不会产生真实提醒。') })
   }.width('100%').padding({ bottom: 24 })
