@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Shuvi · 图标素材库</title><link rel="stylesheet" href="gallery.css"></head>
+<body>
+<header><a href="../../04-图标素材库.md" class="brand">Shuvi <span>/ 界面素材</span></a><span class="version">功能图标 · v0.2 · <a href="../brand/index.html">品牌配色</a></span></header>
+<main>
+<section class="intro"><p class="eyebrow">一套图标，多处复用</p><h1>让每个入口<br>都有清楚的表达。</h1><p>24 × 24 网格 · 1.7 描边 · 圆角端点<br>直接预览应用 SVG，不重复保存素材。</p></section>
+<section class="library" aria-label="图标浏览">
+<div class="toolbar">
+<label class="search">搜索名称或用途<input id="search" type="search" placeholder="例如：日历、文件、ui_folder"></label>
+<label>用途<select id="category"><option value="">全部用途</option><option>导航</option><option>功能</option><option>操作</option><option>状态</option></select></label>
+<label>预览尺寸<select id="size"><option value="16">16 px</option><option value="22">22 px</option><option value="24" selected>24 px</option><option value="32">32 px</option></select></label>
+</div>
+<div class="summary"><span id="count" role="status"></span><span>点击图标，查看引用方式</span></div>
+<div id="grid" class="grid"></div><p id="empty" hidden>没有匹配的图标，试试其他名称或用途。</p>
+</section>
+<section class="detail" aria-labelledby="detail-title">
+<div><p class="eyebrow">在 ArkUI 中复用</p><h2 id="detail-title">选择一个图标</h2><p id="usage">图片负责表达含义，外层按钮负责操作和可读名称。</p><p id="source"></p></div>
+<div><label for="snippet">引用示例（点击选中后复制）</label><textarea id="snippet" readonly spellcheck="false" rows="3"></textarea><p class="hint">先引入 AppIcon：import { AppIcon } from '../components/AppIcon';<br>示例用于 @Builder 或 build() 内；相对路径按所在目录调整。</p></div>
+</section>
+<footer>这是团队使用的素材预览页。角色 Logo 单独管理，不属于这套功能图标。<br>SVG 使用固定描边颜色；白色图标以莓紫底展示。不同尺寸不会改变实际资源文件。</footer>
+</main><script src="catalog.js"></script><script src="gallery.js"></script>
+</body></html>

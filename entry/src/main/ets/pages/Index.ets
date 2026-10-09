@@ -14,7 +14,9 @@
  */
 import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { Theme } from '../components/Theme';
-import { AssistantWelcome, CalendarDraftCard, ChatIcon } from '../components/ChatVisuals';
+import { AssistantWelcome, CalendarDraftCard } from '../components/ChatVisuals';
+import { AppIcon } from '../components/AppIcon';
+import { BrandAvatar } from '../components/BrandAvatar';
 import { WorkbenchPage, KnowledgePage, ProfilePage } from '../components/FeaturePages';
 import {
   AssistantService, CalendarDraft, ChatMessage, DEMO_SCENARIOS, DemoScenario,
@@ -286,13 +288,13 @@ struct Index {
           Text(this.tabNames[this.tab]).fontSize(14).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
         }
         Text('演示模式').fontSize(11).fontColor(Theme.muted)
-          .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor('#F5F7F4').borderRadius(20)
+          .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
       }.width('34%')
       Row() {
         Button({ type: ButtonType.Circle }) {
-          ChatIcon({ source: $r('app.media.chat_menu'), size: 24 })
+          AppIcon({ source: $r('app.media.chat_menu'), size: 24 })
         }.width(44).height(44).backgroundColor(Theme.surface)
-          .shadow({ radius: 16, color: '#0A26392C', offsetY: 3 })
+          .shadow({ radius: 16, color: Theme.shadow, offsetY: 3 })
           .accessibilityText('打开导航菜单').id('chat-menu')
           .onClick(() => {
             this.inputController.stopEditing();
@@ -301,18 +303,18 @@ struct Index {
         Blank()
         Row() {
           Button({ type: ButtonType.Circle }) {
-            ChatIcon({ source: $r('app.media.chat_sliders') })
+            AppIcon({ source: $r('app.media.chat_sliders') })
           }.width(44).height(44).backgroundColor(Color.Transparent)
             .accessibilityText(`演示场景设置，当前${this.scenario}`).id('chat-scenarios')
             .enabled(!this.generating && !this.executing).onClick(() => this.openScenarios())
           Button({ type: ButtonType.Circle }) {
-            ChatIcon({ source: $r('app.media.chat_newchat') })
+            AppIcon({ source: $r('app.media.chat_newchat') })
           }.width(44).height(44).backgroundColor(Color.Transparent)
             .accessibilityText(this.blocked() ? '开始新对话，请先处理当前任务' : '开始新对话')
             .id('chat-new').enabled(!this.blocked()).opacity(this.blocked() ? 0.4 : 1)
             .onClick(() => this.newConversation())
         }.padding({ left: 3, right: 3 }).borderRadius(28).backgroundColor(Theme.surface)
-          .shadow({ radius: 16, color: '#0A26392C', offsetY: 3 })
+          .shadow({ radius: 16, color: Theme.shadow, offsetY: 3 })
       }.width('100%')
     }.width('100%').constraintSize({ minHeight: 68 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
   }
@@ -330,7 +332,7 @@ struct Index {
           }.width('100%').justifyContent(FlexAlign.End)
         } else {
           Row({ space: 8 }) {
-            Text('休').fontSize(22).fontColor(Theme.accent).accessibilityLevel('no')
+            BrandAvatar({ size: 28 })
             Text(message.text).fontSize(14).fontColor(Theme.ink).layoutWeight(1)
               .accessibilityText(`休比：${message.text}`)
           }.width('100%').alignItems(VerticalAlign.Top)
@@ -491,15 +493,15 @@ struct Index {
           Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
             Button({ type: ButtonType.Normal }) {
               Row({ space: 4 }) {
-                ChatIcon({ source: $r('app.media.chat_calendar'), size: 16})
+                AppIcon({ source: $r('app.media.chat_calendar'), size: 16})
                 Text('日程样例').fontSize(12).fontColor(Theme.accent)
               }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
-            }.borderRadius(22).backgroundColor(Theme.soft).border({ width: 1, color: '#DCE9DF' })
+            }.borderRadius(22).backgroundColor(Theme.soft).border({ width: 1, color: Theme.line })
               .margin({ right: 4, bottom: 4 }).enabled(!this.blocked()).onClick(() => this.useSample())
               .id('chat-sample').accessibilityText('日程样例，填入固定演示文字')
             Button({ type: ButtonType.Normal }) {
               Row({ space: 4 }) {
-                ChatIcon({ source: $r('app.media.chat_globe'), size: 16})
+                AppIcon({ source: $r('app.media.chat_globe'), size: 16})
                 Text('搜索').fontSize(12).fontColor(Theme.muted)
               }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
             }.borderRadius(22).backgroundColor(Color.Transparent).border({ width: 1, color: Theme.line })
@@ -508,17 +510,17 @@ struct Index {
           }
           Row() {
             Button({ type: ButtonType.Circle }) {
-              ChatIcon({ source: $r('app.media.chat_plus'), size: 26 })
+              AppIcon({ source: $r('app.media.chat_plus'), size: 26 })
             }.width(44).height(44).backgroundColor(Color.Transparent).onClick(() => this.attachments())
               .accessibilityText('添加图片或文件，待接入')
             if (this.input.trim().length > 0) {
               Button({ type: ButtonType.Circle }) {
-                ChatIcon({ source: $r('app.media.chat_up'), size: 22})
+                AppIcon({ source: $r('app.media.chat_up'), size: 22})
               }.width(44).height(44).backgroundColor(Theme.accent).accessibilityText('发送消息').id('chat-send')
                 .enabled(!this.blocked() && this.input.length <= 500).onClick(() => this.send())
             } else {
               Button({ type: ButtonType.Circle }) {
-                ChatIcon({ source: $r('app.media.chat_wave'), size: 26 })
+                AppIcon({ source: $r('app.media.chat_wave'), size: 26 })
               }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('语音输入，待接入')
                 .onClick(() => this.notice('语音输入待接入', '本次不会开启麦克风或录音。请使用日程样例体验确认流程。'))
             }
@@ -547,8 +549,10 @@ struct Index {
           Text('Shuvi 休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
           Text('个人助理 · 演示模式').fontSize(12).fontColor(Theme.muted)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        Button('×', { type: ButtonType.Circle }).width(44).height(44).fontSize(28)
-          .fontColor(Theme.muted).backgroundColor(Color.Transparent).accessibilityText('关闭导航菜单')
+        Button({ type: ButtonType.Circle }) {
+          AppIcon({ source: $r('app.media.ui_close'), size: 22 })
+        }.width(44).height(44)
+          .backgroundColor(Color.Transparent).accessibilityText('关闭导航菜单')
           .onClick(() => this.drawerOpen = false)
       }.width('100%').padding({ bottom: 24 })
       Scroll() {
@@ -556,7 +560,7 @@ struct Index {
           ForEach(this.tabNames, (name: string, index: number) => {
             Button({ type: ButtonType.Normal }) {
               Row({ space: 12 }) {
-                ChatIcon({ source: this.tabIcons[index]})
+                AppIcon({ source: this.tabIcons[index]})
                 Text(name).fontSize(16).fontColor(this.tab === index ? Theme.accent : Theme.muted).layoutWeight(1)
                 if (index === 0 && this.draft !== undefined) {
                   Text(this.executing ? '处理中' : '待确认').fontSize(11).fontColor(Theme.amber)
@@ -639,7 +643,7 @@ struct Index {
         if (this.drawerOpen) {
           Button({ type: ButtonType.Normal }) {
             Row().width('100%').height('100%')
-          }.width('100%').height('100%').backgroundColor('#33232E28').borderRadius(0)
+          }.width('100%').height('100%').backgroundColor(Theme.overlay).borderRadius(0)
             .accessibilityText('关闭导航菜单').onClick(() => this.drawerOpen = false)
         }
       }
