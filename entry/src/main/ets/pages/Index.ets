@@ -23,6 +23,7 @@ import {
   OperationResult, OperationState, RequestState
 } from '../model/AssistantModels';
 import { MockAssistantService } from '../mock/MockAssistantService';
+import { FloatingAssistantPlacement } from '../model/FloatingAssistantPlacement';
 
 @Entry
 @Component
@@ -40,7 +41,12 @@ struct Index {
   @State scenario: DemoScenario = DemoScenario.Normal;
   @State showScenarios: boolean = false;
   @State drawerOpen: boolean = false;
+  @State floatingAssistantEnabled: boolean = true;
+  @State floatingPlacement: FloatingAssistantPlacement = new FloatingAssistantPlacement();
   @State contentHeight: number = 0;
+  private floatingHostWidth: number = 0;
+  private floatingHostHeight: number = 0;
+  private floatingHeaderHeight: number = 68;
   private service: AssistantService = new MockAssistantService();
   private requestId: string = '';
   private operationId: string = '';
@@ -91,6 +97,7 @@ struct Index {
   }
 
   private changeTab(index: number): void {
+    this.floatingPlacement.cancelDrag();
     if (index !== this.tab && this.generating) {
       this.cancelGeneration();
     }
@@ -100,6 +107,12 @@ struct Index {
     this.showScenarios = false;
     this.drawerOpen = false;
     this.scroller.scrollEdge(Edge.Top);
+  }
+
+  private resizeFloatingHost(width: number, height: number): void {
+    this.floatingHostWidth = width;
+    this.floatingHostHeight = height;
+    this.floatingPlacement.resize(width, height, this.floatingHeaderHeight);
   }
 
   private addMessage(text: string, isUser: boolean = false): void {
@@ -317,6 +330,10 @@ struct Index {
           .shadow({ radius: 16, color: Theme.shadow, offsetY: 3 })
       }.width('100%')
     }.width('100%').constraintSize({ minHeight: 68 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
+      .onAreaChange((_oldArea: Area, area: Area) => {
+        this.floatingHeaderHeight = Number(area.height);
+        this.floatingPlacement.resize(this.floatingHostWidth, this.floatingHostHeight, this.floatingHeaderHeight);
+      })
   }
 
   @Builder
@@ -585,6 +602,38 @@ struct Index {
   }
 
   @Builder
+  floatingAssistant() {
+    Button({ type: ButtonType.Circle }) {
+      BrandAvatar({ size: 48 })
+    }.width(FloatingAssistantPlacement.size).height(FloatingAssistantPlacement.size).backgroundColor(Theme.surface)
+      .border({ width: 1, color: Theme.line })
+      .shadow({ radius: 12, color: Theme.shadow, offsetY: 3 })
+      .position({ x: this.floatingPlacement.x, y: this.floatingPlacement.y })
+      .accessibilityText('回到助手')
+      .accessibilityDescription('返回当前对话，保留已输入内容、消息和待确认草稿。可拖动调整位置。')
+      .id('floating-assistant')
+      .onClick(() => this.changeTab(0))
+      .priorityGesture(
+        PanGesture({ fingers: 1, direction: PanDirection.All, distance: 8 })
+          .onActionStart((event: GestureEvent) => {
+            this.floatingPlacement.beginDrag();
+            this.floatingPlacement.moveDrag(event.offsetX, event.offsetY);
+          })
+          .onActionUpdate((event: GestureEvent) => {
+            this.floatingPlacement.moveDrag(event.offsetX, event.offsetY);
+          })
+          .onActionEnd((event: GestureEvent) => {
+            this.floatingPlacement.moveDrag(event.offsetX, event.offsetY);
+            this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => {
+              this.floatingPlacement.finishDrag();
+            });
+          })
+          .onActionCancel(() => this.floatingPlacement.cancelDrag())
+      )
+      .onDisAppear(() => this.floatingPlacement.cancelDrag())
+  }
+
+  @Builder
   pageContent() {
     Column() {
       this.header()
@@ -613,11 +662,16 @@ struct Index {
           } else if (this.tab === 2) {
             KnowledgePage({ onNotice: (title: string, message: string) => this.notice(title, message) })
           } else {
-            ProfilePage({ onNotice: (title: string, message: string) => this.notice(title, message) })
+            ProfilePage({ floatingAssistantEnabled: this.floatingAssistantEnabled,
+              onFloatingAssistantChange: (enabled: boolean) => this.floatingAssistantEnabled = enabled,
+              onNotice: (title: string, message: string) => this.notice(title, message) })
           }
         }.width('100%').constraintSize({ maxWidth: 640,
           minHeight: this.tab === 0 && this.messages.length === 0 && !this.showScenarios ? this.contentHeight : 0 })
-          .justifyContent(FlexAlign.Center).padding({ left: 20, right: 20 })
+          .justifyContent(FlexAlign.Center)
+          // 让末尾内容可以完整滚动到悬浮入口上方；菜单打开时保持内容尺寸。
+          .padding({ left: 20, right: 20,
+            bottom: this.floatingAssistantEnabled && this.tab !== 0 && !this.showScenarios ? 100 : 0 })
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
         .onAreaChange((_oldArea: Area, area: Area) => this.contentHeight = Number(area.height))
       if (this.tab === 0 && !this.showScenarios) {
@@ -635,18 +689,23 @@ struct Index {
       Column() {
         this.navigationDrawer()
       }
-      Stack() {
+      Stack({ alignContent: Alignment.TopStart }) {
         Column() {
           this.pageContent()
         }.width('100%').height('100%').enabled(!this.drawerOpen)
           .accessibilityLevel(this.drawerOpen ? 'no-hide-descendants' : 'auto')
+        if (this.floatingAssistantEnabled && this.floatingPlacement.canPlace &&
+          this.tab !== 0 && !this.showScenarios && !this.drawerOpen) {
+          this.floatingAssistant()
+        }
         if (this.drawerOpen) {
           Button({ type: ButtonType.Normal }) {
             Row().width('100%').height('100%')
           }.width('100%').height('100%').backgroundColor(Theme.overlay).borderRadius(0)
             .accessibilityText('关闭导航菜单').onClick(() => this.drawerOpen = false)
         }
-      }
+      }.width('100%').height('100%')
+        .onAreaChange((_oldArea: Area, area: Area) => this.resizeFloatingHost(Number(area.width), Number(area.height)))
     }.width('100%').height('100%').showSideBar(this.drawerOpen).showControlButton(false)
       .sideBarWidth('84%').minSideBarWidth(200).maxSideBarWidth(320).minContentWidth(0)
       .divider({ strokeWidth: 0 }).onChange((visible: boolean) => this.drawerOpen = visible)
