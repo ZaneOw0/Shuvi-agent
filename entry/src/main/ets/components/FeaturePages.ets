@@ -19,6 +19,11 @@ interface NoticePageOptions {
   onNotice: (title: string, message: string) => void;
 }
 
+interface ProfilePageOptions extends NoticePageOptions {
+  floatingAssistantEnabled: boolean;
+  onFloatingAssistantChange: (enabled: boolean) => void;
+}
+
 @Builder
 export function FeatureRow($$: FeatureRowOptions) {
   Button({ type: ButtonType.Normal }) {
@@ -94,7 +99,7 @@ export function KnowledgePage($$: NoticePageOptions) {
 }
 
 @Builder
-export function ProfilePage($$: NoticePageOptions) {
+export function ProfilePage($$: ProfilePageOptions) {
   Column({ space: 12 }) {
     Column({ space: 12 }) {
       BrandAvatar({ size: 72 })
@@ -104,6 +109,19 @@ export function ProfilePage($$: NoticePageOptions) {
         .backgroundColor(Theme.accent).borderRadius(12).constraintSize({ minHeight: 44 })
         .onClick(() => $$.onNotice('登录与注册', '账号服务待接入。本次不会收集账号信息。'))
     }.width('100%').padding({ top: 20, bottom: 24 })
+    Row({ space: 16 }) {
+      Text('悬浮助手入口').fontSize(16).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
+        .layoutWeight(1).accessibilityLevel('no')
+      Stack() {
+        Toggle({ type: ToggleType.Switch, isOn: $$.floatingAssistantEnabled })
+          .width(60).height(32).selectedColor(Theme.accent)
+          .responseRegion({ x: 0, y: -8, width: 60, height: 48 })
+          .accessibilityText('悬浮助手入口')
+          .accessibilityDescription('控制其他页面的助手头像按钮，仅本次运行有效。关闭后仍可通过左上角菜单进入助手。')
+          .id('floating-assistant-toggle').onChange($$.onFloatingAssistantChange)
+      }.width(60).height(48)
+    }.width('100%').padding({ left: 16, right: 16, top: 6, bottom: 6 })
+      .backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
     FeatureRow({ title: '我的设备', description: '多设备管理 · 待接入', icon: $r('app.media.ui_devices'),
       onOpen: () => $$.onNotice('我的设备', '设备管理待接入，没有设备已绑定或同步。') })
     FeatureRow({ title: '主题与外观', description: '当前：奶油白与莓紫 · 切换待接入', icon: $r('app.media.ui_palette'),
