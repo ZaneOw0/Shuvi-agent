@@ -32,7 +32,8 @@
 
 - 来源：开发者在 2026-10-08 会话中提供的角色插画。使用 imagegen 制作面部为主的头像适配版；这是 AI 编辑衍生图，不是原文件的无损裁剪。2026-10-09，开发者确认配色与 Logo 审核符合预期。
 - 当前 PNG：`entry/src/main/resources/base/media/shuvi_logo.png`，1254 × 1254，约 1.76 MiB。AppScope 同名资源为同一文件的副本；修改 Logo 时必须同步两处，避免 AppScope 合并资源覆盖产生差异。
-- `AppScope/app.json5` 的应用 icon 与 `entry/src/main/module.json5` 的入口 icon 都引用 `$media:shuvi_logo`；启动页 `startWindowIcon` 同步引用该 PNG。
+- `AppScope/app.json5` 的应用 icon 与 `entry/src/main/module.json5` 的入口 icon 都引用 `$media:shuvi_logo`；启动页 `startWindowIcon` 独立引用 `$media:shuvi_start_icon`。
+- 启动专用 PNG：`entry/src/main/resources/base/media/shuvi_start_icon.png`，256 × 256，由现有 Logo 等比缩小，不重新生成图案。更新 Logo 时需同步生成此资源，保持不超过 256 × 256 像素，满足 `@performance/start-window-icon-check`；该独立资源不在 AppScope 创建同名副本。
 - 启动页 base / dark 背景均设为奶油白，与当前固定浅色应用界面一致。原模板图标资源保留，但不再作为上述入口的引用目标。
 - 当前采用官方支持的单层图标用于原型展示；不是已验收的上架分层图标交付物。桌面图标与启动页列入本轮模拟器人工检查，最近任务显示未单独取得反馈。
 
@@ -46,3 +47,12 @@
 - 2026-10-09，开发者确认配色、Logo 和模拟器检查（含最大字体）均符合预期；记录来源为会话反馈，AI 未独立操作模拟器复验。未取得字体倍率和逐项截图，真机、Hypium 及本轮宿主测试未执行。
 
 本轮审核范围：配色与角色 Logo；模拟器上的桌面图标、启动页、助手首页、对话头像及其他三个页面；日程确认卡片、文字与按钮；最大字体下的遮挡与截断。以上范围由开发者汇总确认符合预期，不扩展为其他设备、上架要求或真实业务能力已通过。
+
+### 4.1 启动图标尺寸修复（2026-10-12）
+
+- CI 报告 `@performance/start-window-icon-check`：启动图标 1254 × 1254 超过建议上限 256 × 256。现有门禁对非空问题报告均判失败，包含 suggestion；保留门禁规则。
+- 经开发者确认，使用 Windows `System.Drawing` 高质量双三次插值将原 Logo 等比缩小，生成独立的 `shuvi_start_icon.png`（256 × 256，146,302 bytes，约 143 KiB）。仅修改 `startWindowIcon` 的资源引用，应用 icon 与页面头像继续使用原 Logo。
+- 规则依据：本机 DevEco Studio 26.0.0.821 随附的 `plugins/codelinter/arkPerfCheck/docs/start-window-icon-check-cn.md`，说明启动图标过大会增加解码耗时，建议不超过 256 × 256。
+- 验证改为项目根目录执行 `devecocli check lint --format json --output-path <报告路径>`，不再仅检查 `entry/src/main/ets`。修复前复现 1 条相同 suggestion（`.local/startup-icon-before-lint.json`），修复后错误、警告、建议均为 0（`.local/startup-icon-after-lint.json`）；CLI 退出码本身不能替代报告检查。
+- 使用 API 26 SDK、IDE 配套 Node.js 与 JDK 21 执行 Hvigor `assembleHap --mode module -p module=entry@default -p product=default -p buildMode=debug --no-daemon`，资源编译、`CompileArkTS` 与打包通过，退出码 0，日志 `.local/startup-icon-build.log`。保留既有 `TextAreaController` 能力警告与未配置签名提示，产物为未签名 HAP；本地结果不替代远程 CI。
+- 开发者针对本轮模拟器冷启动检查反馈「结果符合预期」：启动图标正常、无拉伸，并能进入首页。此项为开发者人工反馈，AI 未独立操作模拟器；未执行真机验收，也未重跑未修改的 Mock 业务或悬浮位置测试。
