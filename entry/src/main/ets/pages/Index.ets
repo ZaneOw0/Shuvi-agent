@@ -15,7 +15,10 @@
 import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { Theme } from '../components/Theme';
 import { WorkbenchPage, ProfilePage } from '../components/FeaturePages';
-import { KnowledgeLab } from '../knowledge/ui/KnowledgeLab';
+import { TextKnowledgeView } from '../knowledge/ui/TextKnowledgeView';
+import { TextKnowledgeAssembly } from '../knowledge/infra/TextKnowledgeAssembly';
+import { TextKnowledgeService } from '../knowledge/application/TextKnowledgeService';
+import { TextViewState } from '../knowledge/domain/TextKnowledgeModels';
 import {
   AssistantService, CalendarDraft, ChatMessage, DEMO_SCENARIOS, DemoScenario,
   OperationResult, OperationState, RequestState
@@ -39,6 +42,9 @@ struct Index {
   @State showScenarios: boolean = false;
   @State noticeTitle: string = '';
   @State noticeText: string = '';
+  @State knowledgeState: TextViewState = new TextViewState();
+  @State knowledgeService: TextKnowledgeService | undefined = undefined;
+  private knowledgeAssembly: TextKnowledgeAssembly | undefined = undefined;
   private service: AssistantService = new MockAssistantService();
   private requestId: string = '';
   private operationId: string = '';
@@ -56,9 +62,11 @@ struct Index {
   aboutToDisappear(): void {
     this.alive = false;
     this.service.cancel(this.requestId);
+    this.knowledgeAssembly?.close();
   }
 
   onBackPress(): boolean {
+    if (this.tab === 2 && this.knowledgeService?.back()) { return true; }
     if (this.noticeTitle.length > 0) {
       this.noticeTitle = '';
       return true;
@@ -91,10 +99,26 @@ struct Index {
     }
     this.inputController.stopEditing();
     this.tab = index;
+    if (index === 2) { this.openKnowledge(); }
     this.calendarOpen = false;
     this.showScenarios = false;
     this.noticeTitle = '';
     this.scroller.scrollEdge(Edge.Top);
+  }
+
+  private async openKnowledge(): Promise<void> {
+    if (this.knowledgeAssembly !== undefined) { return; }
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) { this.knowledgeState.message = '本机上下文不可用，资料未修改'; return; }
+    const assembly: TextKnowledgeAssembly = new TextKnowledgeAssembly(context, (): void => {
+      if (this.alive) { this.knowledgeState = assembly.service.viewState(); }
+    });
+    this.knowledgeAssembly = assembly;
+    try { await assembly.initialize(); this.knowledgeService = assembly.service; }
+    catch {
+      await assembly.close(); this.knowledgeAssembly = undefined; this.knowledgeService = undefined;
+      this.knowledgeState = assembly.service.viewState(); this.knowledgeState.message = '用户知识库打开失败，资料保留，可重试';
+    }
   }
 
   private addMessage(text: string, isUser: boolean = false): void {
@@ -444,10 +468,11 @@ struct Index {
     Column() {
       this.header()
       Row() {
-        Text('演示数据 · 重启后重置').fontSize(11).fontColor(Theme.muted).layoutWeight(1)
+        Text(this.tab === 2 ? '本机真实资料 · 重启后保留 · 未同步' : '演示数据 · 重启后重置')
+          .fontSize(11).fontColor(Theme.muted).layoutWeight(1)
         Button(`演示场景：${this.scenario}`, { type: ButtonType.Normal }).fontSize(11)
           .fontColor(Theme.accent).backgroundColor(Color.Transparent).constraintSize({ minHeight: 36 })
-          .enabled(!this.generating && !this.executing)
+          .enabled(this.tab !== 2 && !this.generating && !this.executing)
           .onClick(() => {
             this.inputController.stopEditing();
             this.showScenarios = !this.showScenarios;
@@ -477,11 +502,21 @@ struct Index {
                 onNotice: (title: string, message: string) => this.notice(title, message) })
             }
           } else if (this.tab === 2) {
-            KnowledgeLab()
+            if (this.knowledgeService !== undefined) {
+              TextKnowledgeView({ knowledgeState: this.knowledgeState, service: this.knowledgeService,
+                onRetryOpen: (): void => { this.openKnowledge(); } })
+            } else {
+              Column({ space: 12 }) {
+                Text(this.knowledgeState.message.length > 0 ? this.knowledgeState.message : '正在打开本机知识库…')
+                  .fontSize(15).fontColor(Theme.muted).width('100%')
+                Button('重试打开', { type: ButtonType.Normal }).constraintSize({ minHeight: 44 })
+                  .onClick((): void => { this.openKnowledge(); })
+              }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 20, bottom: 20 })
+            }
           } else {
             ProfilePage({ onNotice: (title: string, message: string) => this.notice(title, message) })
           }
-        }.width('100%').constraintSize({ maxWidth: 640 }).padding({ left: 20, right: 20 })
+        }.width('100%').constraintSize({ maxWidth: this.tab === 2 ? 1200 : 640 }).padding({ left: 20, right: 20 })
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
       if (this.tab === 0 && !this.showScenarios && this.noticeTitle.length === 0) {
         this.composer()

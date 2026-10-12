@@ -1,5 +1,8 @@
 import { chunkText } from '../main/ets/knowledge/pipeline/Chunker';
 import { ChunkSlice } from '../main/ets/knowledge/domain/KnowledgeTypes';
+import { TextDocument, TextFormat, TextRangeRole } from '../main/ets/knowledge/domain/TextKnowledgeModels';
+import { encodeTextUtf8 } from '../main/ets/knowledge/pipeline/TextNormalizer';
+import { processText } from '../main/ets/knowledge/pipeline/StructuredChunker';
 
 export interface CorpusDoc {
   name: string;
@@ -228,6 +231,18 @@ export function corpusCases(docs: CorpusDoc[]): CorpusTestCase[] {
   const cases: CorpusTestCase[] = [];
   for (let d = 0; d < docs.length; d++) {
     const doc: CorpusDoc = docs[d];
+    cases.push({ name: `M1 结构覆盖 · ${doc.name}`, run: async (): Promise<void> => {
+      const document: TextDocument = new TextDocument(); document.id = doc.name;
+      document.format = doc.name.endsWith('.md') ? TextFormat.Markdown : TextFormat.Txt;
+      const output = processText(encodeTextUtf8(doc.text), document, 'golden');
+      check(output.snapshot.normalized.originalText === doc.text, '原文丢失');
+      for (const chunk of output.chunks) {
+        check(chunk.retrievalText.length <= 512, '标题/表头后超限');
+        for (const range of chunk.ranges) {
+          if (range.role === TextRangeRole.Evidence) { check(doc.text.slice(range.originalStart, range.originalEnd) === chunk.evidenceText, '定位不一致'); }
+        }
+      }
+    } });
     for (let s = 0; s < SIZES.length; s++) {
       const size: number = SIZES[s];
       cases.push({
