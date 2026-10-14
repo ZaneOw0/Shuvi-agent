@@ -97,29 +97,40 @@ HarmonyPA/
 一键脚本把「设备/模拟器 → 签名 → 构建 → 安装运行」串起来：
 
 ```bash
-scripts/dev-run.sh                  # 自动选活动设备，否则启动模拟器；构建并安装运行
-scripts/dev-run.sh --force-sign     # 强制重新生成签名材料
-scripts/dev-run.sh --no-build       # 跳过构建，仅安装运行
-scripts/dev-run.sh --no-emulator    # 不自动启动模拟器（无设备直接报错）
-scripts/dev-run.sh --device <serial> --emulator <name> --product default
+scripts/dev-run.sh                  # 唯一活动设备；无活动时清单首模拟器；多活动停止
+scripts/dev-run.sh --emulator 'Mate 90 Pro' --product default
+scripts/dev-run.sh --force-sign     # 仅显式授权时强签；本轮验证不用
+scripts/dev-run.sh --no-build       # 显式跳构建，需已有产物，仍检查目标与签名
+scripts/dev-run.sh --no-emulator    # 不启动停止态实例，运行态可使用
+scripts/dev-run.sh --device '<serial>' --emulator '<name>' --product default
 scripts\dev-run.cmd                 # Windows 入口，转发到 dev-run.sh
 ```
 
+macOS 本机开发入口（2026-10-14 新增，与 `dev-run.sh` 相互独立）：`scripts/dev-run-mac.sh`。流程一致，但先做**登录预检**（`auth status` 需含 `Current user:`，否则提示 `devecocli auth login`）与**模拟器许可预检**（只读 `.emu_config` + 识别启动时的 `license agreements are not accepted`，提示 `devecocli emulator license`）；目标用 JSON 清单解析（实例名含空格安全），不做任何 Git 写操作，工具原始输出只落 `.local/mac-run/`，模板退出时按字节恢复。隔离回归 `scripts/tests/dev-run-mac.test.cjs`（两 Bash 各 12/12；含登录/许可阻断、尾随版本提醒容忍、JSON5 签名缓存复用、模板恢复）。
+
 环境变量：`EMULATOR_NAME`、`PRODUCT`、`DEVECOCLI_BIN`。
 
-**两处平台适配，勿改回依赖 PATH**：`dev-run.cmd` 显式定位 Git Bash（由 `where git` 推导并校验）——部分机器上 PATH 里的 `bash` 会命中 WSL 启动器而失败；`dev-run.sh` 依次探测 `devecocli` / `devecocli.cmd` / `devecocli.exe`——Git Bash 不按 PATHEXT 补后缀。
+**平台适配，勿改回依赖 PATH bash**：提交版 `dev-run.cmd` 由 `where git` 推导 Git Bash（`<Git>\cmd`、`mingw64\bin`、`usr\bin` 与标准安装位置为备选），显式拒绝 `System32\bash.exe`（PATH 的 `bash` 可能是 WSL），原样转发 `%*` 并返回 `.sh` 的真实退出码；保持 ASCII/CRLF、`setlocal enabledelayedexpansion`。CLI 后缀探测（`devecocli.cmd`/`.exe`）、`cygpath` 转 native 路径与 batch 环境槽分派属于未提交工作，未在本机/原生 Windows 复验。
+
+显式目标优先于其他活动设备；双参数必须可证明同一实例，否则启动前停止。JSON 清单/view 非零、畸形、重复或矛盾映射不回退；启动后核验同一 serial 就绪（最多 240 秒），run 始终带明确 serial 和同 product。构建失败不安装，授权/许可/签名冲突不盲重试，不卸载、不清资料、不创建/改名实例。详见 [scripts/README](scripts/README.md)。
 
 ### 6.1 签名：模板合成 + 本机缓存
 
-仓库中的 `build-profile.json5` 是**模板**（`signingConfigs: []`）。脚本运行时由模板合成带签名版本，结束（含异常退出，靠 `trap`）**自动还原为模板**；本机签名缓存在 `.local/`（gitignore，不入库），按模板哈希判断是否需要重新生成，模板变化时自动重签。
+仓库中的 `build-profile.json5` 是**模板**（`signingConfigs: []`）。运行前拒绝工作区/index 脏模板、签名残留及不明锁/备份，不 checkout 或覆盖用户编辑。缓存在 `.local/`（gitignore），键为**实际模板 SHA256 + product**；签名、build、run 使用同产品。旧 default 缓存仅可证明字节/完整模板匹配时内部迁移，不盲用、不删除。
 
-因此 `build-profile.json5` 不应出现本地改动——`git status` 里看到它被改动即为异常。签名材料本身仍由 `devecocli signature generate` 生成到本机 `~/.ohos/config/`，不入库。
+使用跨平台原子目录锁 `.local/dev-run.lock` 和本轮所有权备份。EXIT/INT/TERM 终止子进程后恢复并核验原始字节，才清自己文件及报完成；外部改动或恢复失败保留备份/锁并非零，人工核对，不自动清“陈旧锁”。SIGKILL/断电不保证 trap，下次停止。签名材料仍由工具在本机生成，不入库；auth/signature 及工具原始输出私有化，不进 AI 上下文或公共日志，公共输出仅阶段/RC/类别。
 
-**一次性手动步骤（脚本只提示、不代为执行）**：`devecocli auth login`（脚本仅做登录态预检）、`devecocli emulator license accept`（脚本不代为同意协议）。
+**一次性手动步骤（脚本只提示、不代为执行）**：`devecocli auth login`（脚本仅做登录态预检）、`devecocli emulator license accept` 与系统镜像下载（脚本不代为同意协议；镜像不随 DevEco Studio 分发，未下载时实例只是配置桩，`emulator start` 退出码 0 但无法进入 hdc）。
+
+**状态说明（2026-10-14）**：`dev-run.sh` / `dev-run.cmd` 均已恢复到提交版；跨平台重写中仍有效的取证基建（`dev-run-support.cjs`、重写后的 `capture-test-log.sh`）随本次提交入库，面向已回退实现的 86 例 `dev-run.test.cjs` 已移除（备份在仓库外，历史见 `spec/dev-run-portability/`）。macOS 本机启动用 `scripts/dev-run-mac.sh`。
+
+`capture-test-log.sh <scope> [窗口] [设备]` 保留接口，先 RUN_CMD 后设备日志；`CAPTURE_HOST_ONLY=1` 明确跳设备。Node 摘要代替 GNU sha1sum、空数组兼容 Bash 3.2，独占证据目录和索引；meta 分开 cmd/log 状态，命令失败优先传播原 RC，日志/元数据失败亦非零。原始流在私有临时目录，公共输出保守过滤，禁止将私有命令交给 RUN_CMD。
+
+隔离回归入口 `TEST_BASH=/bin/bash node --test scripts/tests/dev-run-mac.test.cjs`（两 Bash 各 12/12，证据 `.cache/test-logs/2026-10-14-dev-run-mac-bash{32,53}-2ac9098-4/`）。真实调用记录：2026-10-13 RC 1、240 秒就绪超时；2026-10-14 镜像缺失时启动前 `emulator-image-missing`，镜像就绪后 `dev-run-mac.sh` 端到端成功——锁定 `127.0.0.1:5555`、复用签名缓存、构建成功、安装启动 RC 0，设备侧确认包与进程存在（证据 `.cache/test-logs/2026-10-14-dev-run-mac-e2e-2ac9098-4/`）；模板字节始终一致。已知故障：停在 `Installing artifacts...` 属设备侧 hdc 会话停摆，恢复见 `scripts/README.md`。Windows 原生未实测。
 
 ### 6.2 pre-push 钩子
 
-`scripts/hooks/pre-push` 逐个提交检查，拒绝推送含签名配置的 `build-profile.json5`。`dev-run.sh` 会自动执行 `git config core.hooksPath scripts/hooks`。
+`scripts/hooks/pre-push` 逐个提交检查，拒绝推送含签名配置的 `build-profile.json5`。`dev-run.sh` **不执行 Git config**。人类另行授权后手动配置 `git config core.hooksPath scripts/hooks`，这不属于启动脚本操作；钩子旧源码注释的自动设置描述以本节为准。
 
 CI 门禁（顺序：依赖安装 → 代码检查 → 构建）：
 
