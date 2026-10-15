@@ -30,16 +30,19 @@ const optionalSources = [
   'knowledge/application/TextKnowledgeService',
   'knowledge/domain/DocumentParseModels', 'knowledge/domain/DocumentParsePorts',
   'knowledge/pipeline/DocumentParsePolicy', 'knowledge/pipeline/MineruProtocolCodec',
-  'knowledge/application/DocumentParseService'
+  'knowledge/application/DocumentParseService', 'knowledge/infra/MineruCredentialStore',
+  'knowledge/infra/MineruTransportAdapter', 'knowledge/infra/DocumentFileOperations', 'knowledge/infra/DocumentFileAdapter', 'knowledge/infra/DocumentParseRepository'
 ].map(s => `entry/src/main/ets/${s}.ets`).concat([
   'entry/src/test/TextPipelineCases.ets', 'entry/src/test/TextServiceCases.ets',
-  'entry/src/test/DocumentParseCases.ets', 'entry/src/test/DocumentParseServiceCases.ets'
+  'entry/src/test/DocumentParseCases.ets', 'entry/src/test/DocumentParseServiceCases.ets',
+  'entry/src/test/MineruCredentialStoreCases.ets'
 ]);
 for (const source of optionalSources) {
   if (fs.existsSync(path.join(project, source))) sources.push(source);
 }
 console.log(`[工具] Node=${process.version} SDK=${sdkHome} compiler=${ts.version} golden=text-m1-golden-v1`);
-for (const source of sources.concat(['entry/src/main/ets/pages/Index.ets', 'entry/src/test/eval/text-m1-golden.json'])) {
+for (const source of sources.concat(['entry/src/main/ets/pages/Index.ets', 'entry/src/test/eval/text-m1-golden.json',
+  'entry/src/test/run-host-tests.cjs', 'entry/src/test/mineru-host-loader.cjs', 'entry/src/test/mineru-transfer-host-cases.cjs', 'entry/src/test/mineru-repository-host-cases.cjs'])) {
   console.log(`[源与题集SHA256] ${source} ${crypto.createHash('sha256').update(fs.readFileSync(path.join(project, source))).digest('hex')}`);
 }
 const fingerprintRoot = path.join(project, 'entry/src/main/ets/knowledge');
@@ -154,6 +157,54 @@ for (const suite of ['TextPipeline', 'TextService', 'DocumentParse', 'DocumentPa
     }
   }
 }
+
+const credentialHost = require('./mineru-host-loader.cjs')(outputRoot, sdkHome, ts);
+const { mineruCredentialStoreCases } = credentialHost;
+for (const item of mineruCredentialStoreCases()) {
+  test(`MineruCredentialStore host boundary · ${item.name}`, item.run);
+}
+for (const item of require('./mineru-transfer-host-cases.cjs')(outputRoot, credentialHost.hostAssetEnums)) {
+  test(`Mineru transfer host boundary · ${item.name}`, item.run);
+}
+for (const item of require('./mineru-repository-host-cases.cjs')(outputRoot)) {
+  test(`Mineru repository host boundary · ${item.name}`, item.run);
+}
+
+test('保存视图源码契约 · 服务缺失可见且提交捕获输入先于清理', () => {
+  const view = fs.readFileSync(path.join(project, 'entry/src/main/ets/knowledge/ui/DocumentParseView.ets'), 'utf8');
+  const action = view.slice(view.indexOf('private async saveCredential()'), view.indexOf('  build()'));
+  const expected = ['let input: string = this.tokenInput', 'const service: DocumentParseService | undefined = this.service',
+    'this.clearSecret()', 'if (service === undefined)', 'await service.saveToken(input, replace)'];
+  let prior = -1;
+  for (const step of expected) {
+    const at = action.indexOf(step);
+    if (at <= prior) throw new Error('Save action ordering changed');
+    prior = at;
+  }
+  if (action.includes('service?.saveToken') || !action.includes('catch { this.credentialFeedback =') ||
+    !action.includes("finally { input = ''; this.clearSecret(); }") || !view.includes("@Prop @Watch('clearSecret') clearEpoch")) {
+    throw new Error('Save feedback or input lifetime contract missing');
+  }
+  if (view.indexOf('Text(this.parseState.message)') > view.indexOf('TextInput({') ||
+    !view.includes('Text(this.credentialFeedback)') || view.includes('this.credentialFeedback || this.parseState.message') ||
+    !view.includes('.enabled(this.service !== undefined && !this.parseState.busy && this.tokenInput.length > 0)') ||
+    !view.includes('.onClick((): void => { this.saveCredential(); })')) throw new Error('Save action visibility or wiring missing');
+});
+
+test('转发视图源码契约 · V1可观察任务进度前置且前台导航不暂停', () => {
+  const view = fs.readFileSync(path.join(project, 'entry/src/main/ets/knowledge/ui/DocumentParseView.ets'), 'utf8');
+  const index = fs.readFileSync(path.join(project, 'entry/src/main/ets/pages/Index.ets'), 'utf8');
+  const close = index.slice(index.indexOf('private closeParse()'), index.indexOf('private async openParse('));
+  if (close.includes('.pause(') || !close.includes('.clearInput(')) throw new Error('Foreground navigation canceled transfer');
+  if (!view.includes('@Observed\nclass DocumentParseTaskPresentation') || !view.includes('@ObjectLink taskRow: DocumentParseTaskPresentation') ||
+    !view.includes("@Link @Watch('updateTaskRows') parseState") || !view.includes('(row: DocumentParseTaskPresentation): string => row.taskId')) throw new Error('Stable-key V1 observation missing');
+  if (view.indexOf('ForEach(this.taskRows') > view.indexOf('DocumentParseOriginalRow({')) throw new Error('Task progress buried under consent rows');
+  for (const required of ['本次已供给 SDK', '未确认上传成功', 'ZIP 本次实际写入', '总长度未知', '服务未报告页进度', '失败阶段', '最后响应', 'resultDirectory', '内容待结构校验']) {
+    if (!view.includes(required)) throw new Error('Truthful progress summary missing');
+  }
+  const ability = fs.readFileSync(path.join(project, 'entry/src/main/ets/entryability/EntryAbility.ets'), 'utf8');
+  if (!ability.slice(ability.indexOf('onBackground()')).includes('DocumentParseAssembly.background()')) throw new Error('Background pause boundary missing');
+});
 
 test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => {
   const protectedFiles = {

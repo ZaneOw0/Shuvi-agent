@@ -2,7 +2,8 @@ import { DocumentParseService } from '../main/ets/knowledge/application/Document
 import {
   DocumentCredentialStatus, DocumentParseSnapshot, DocumentParseFailure, DocumentFileSelection, DocumentSelectedFile,
   DocumentOriginal, DocumentParseCancellation, DocumentParseAction, DocumentAllocationReceipt, DocumentInspection,
-  DocumentParseUsage, DocumentParseResultEnvelope, DocumentRemoteState, DocumentParseStage, DocumentParseBudget, DocumentPreflightStatus, DocumentParseFormat
+  DocumentParseUsage, DocumentParseResultEnvelope, DocumentRemoteState, DocumentParseStage, DocumentParseBudget, DocumentPreflightStatus, DocumentParseFormat,
+  DocumentParseStateListener, DocumentParseViewState, DocumentParseTask
 } from '../main/ets/knowledge/domain/DocumentParseModels';
 import {
   MineruCredentialPort, DocumentParseRepositoryPort, DocumentAssetPort, DocumentSelectionPort, DocumentPreflightPort,
@@ -15,13 +16,16 @@ export interface DocumentServiceTestCase { name: string; run: () => Promise<void
 export function documentServiceCheck(ok: boolean): void { if (!ok) { throw new Error('M2 frozen business expectation failed'); } }
 export class DocumentTestCredential implements MineruCredentialPort {
   configured: boolean = false; unavailable: boolean = false; saves: number = 0; clears: number = 0;
+  statusThrows: boolean = false; writeFailure: boolean = false; returnedStatus: DocumentCredentialStatus = DocumentCredentialStatus.Configured;
   async status(): Promise<DocumentCredentialStatus> {
+    if (this.statusThrows) { throw new Error('unit-nonsecret-refresh-detail'); }
     return this.unavailable ? DocumentCredentialStatus.Unavailable : this.configured ? DocumentCredentialStatus.Configured : DocumentCredentialStatus.Missing;
   }
   async save(input: string, replace: boolean): Promise<DocumentCredentialStatus> {
     this.saves++;
+    if (this.writeFailure) { throw new DocumentParseFailure('安全存储权限不足', '凭据新增', '201'); }
     if (this.unavailable || this.configured !== replace) { throw new DocumentParseFailure('安全存储拒绝', '设置'); }
-    this.configured = true; return DocumentCredentialStatus.Configured;
+    this.configured = this.returnedStatus === DocumentCredentialStatus.Configured; return this.returnedStatus;
   }
   async remove(): Promise<DocumentCredentialStatus> {
     if (this.unavailable) { throw new DocumentParseFailure('安全存储拒绝', '设置'); }
@@ -30,10 +34,11 @@ export class DocumentTestCredential implements MineruCredentialPort {
   clearTransient(): void { this.clears++; }
 }
 export class DocumentTestRepository implements DocumentParseRepositoryPort {
-  data: DocumentParseSnapshot = new DocumentParseSnapshot(); fail: boolean = false;
+  data: DocumentParseSnapshot = new DocumentParseSnapshot(); fail: boolean = false; rawFailure: boolean = false;
   async open(): Promise<void> {}
   async load(): Promise<DocumentParseSnapshot> { return this.data; }
   async save(snapshot: DocumentParseSnapshot): Promise<void> {
+    if (this.rawFailure) { throw new Error('unit-nonsecret-repository-detail'); }
     if (this.fail) { throw new DocumentParseFailure('持久化失败', '检查点'); }
     this.data = snapshot;
   }
@@ -43,6 +48,11 @@ export class DocumentTestSettingsSession {
   credential: DocumentTestCredential = new DocumentTestCredential();
   repository: DocumentTestRepository = new DocumentTestRepository();
   service: DocumentParseService = new DocumentParseService(this.credential, this.repository);
+}
+class DocumentTestStateObserver implements DocumentParseStateListener {
+  service: DocumentParseService; views: DocumentParseViewState[] = [];
+  constructor(service: DocumentParseService) { this.service = service; }
+  changed(): void { this.views.push(this.service.viewState()); }
 }
 export class DocumentTestAssets implements DocumentAssetPort, DocumentSelectionPort, DocumentPreflightPort {
   removed: string[] = []; saves: number = 0; failCleanup: boolean = false;
@@ -71,6 +81,8 @@ export class DocumentTestClock implements DocumentParseClockPort {
 export class DocumentTestNetwork implements MineruTaskPort {
   allocations: number = 0; uploads: number = 0; queries: number = 0; receives: number = 0; pauses: number = 0;
   mode: string = 'NORMAL'; states: DocumentRemoteState[] = [DocumentRemoteState.Waiting, DocumentRemoteState.Pending, DocumentRemoteState.Converting, DocumentRemoteState.Running, DocumentRemoteState.Done];
+  events: string[] = [];
+  onUpload: () => void = (): void => {};
   ordering: boolean = false; repository: DocumentTestRepository;
   onReceive: () => Promise<void> = async (): Promise<void> => {};
   constructor(repository: DocumentTestRepository) { this.repository = repository; }
@@ -81,12 +93,16 @@ export class DocumentTestNetwork implements MineruTaskPort {
     const result: DocumentAllocationReceipt = new DocumentAllocationReceipt(); result.batchId = 'unit-batch-1'; result.leaseId = 'lease-unit-upload'; return result;
   }
   async upload(action: DocumentParseAction): Promise<void> {
+    this.events.push('preflight');
+    if (this.mode === 'UPLOAD_PREFLIGHT') { throw new DocumentParseFailure('租约已失效', '上传前复核'); }
+    await action.onUploadStarting(); action.task.uploadRequestStarted = true; this.events.push('PUT'); this.onUpload();
     this.uploads++; this.ordering = this.repository.data.occupancy.batchId === 'unit-batch-1' && action.task.uploadAttempted && action.task.uploadLease === 'lease-unit-upload';
+    if (this.mode === 'UPLOAD_TIMEOUT') { action.cancel.invalid = true; action.cancel.reason = 'TIMEOUT'; throw new DocumentParseFailure('请求总墙钟超时', '原件PUT'); }
     if (this.mode === 'UPLOAD_UNKNOWN') { throw new DocumentParseFailure('上传响应未知', 'PUT'); }
     action.cancel.check();
   }
   async inspect(action: DocumentParseAction): Promise<DocumentInspection> {
-    this.queries++;
+    this.queries++; this.events.push('QUERY');
     if (this.mode === '429' || this.mode === 'AUTH' || this.mode === 'EXPIRED') { throw new DocumentParseFailure(this.mode, '查询'); }
     const result: DocumentInspection = new DocumentInspection(); result.batchId = action.task.batchId; result.dataId = action.task.dataId;
     result.state = this.states[Math.min(this.queries - 1, this.states.length - 1)]; result.resultLease = result.state === DocumentRemoteState.Done ? 'lease-unit-result' : '';
@@ -173,7 +189,7 @@ export function documentParseServiceCases(): DocumentServiceTestCase[] {
       documentServiceCheck(s.repository.data.occupancy.terminalObserved);
       await s.service.submit('unit-original'); documentServiceCheck(s.network.allocations === 1);
     } }
-  ]; return tests.concat(documentRecoveryCases(), [
+  ]; return tests.concat(documentTransferFixCases(), documentCredentialFeedbackCases(), documentRecoveryCases(), [
     { name: '仅本地准备四格式不外发且取消与PDF阻塞保留', run: async (): Promise<void> => {
       for (const suffix of ['pdf', 'docx', 'pptx', 'xlsx']) {
         const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.repository.data.originals = []; s.repository.data.grants = [];
@@ -212,6 +228,129 @@ export function documentParseServiceCases(): DocumentServiceTestCase[] {
       documentServiceCheck(s.service.capabilitySummary().indexOf('不提供完整PDF预览或高亮') >= 0);
     } }
   ]);
+}
+
+function documentTransferFixCases(): DocumentServiceTestCase[] {
+  return [
+    { name: 'PUT本地预检失败不得记成真正请求已发出', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_PREFLIGHT';
+      await s.service.submit('unit-original');
+      documentServiceCheck(s.network.uploads === 0 && !s.repository.data.tasks[0].uploadAttempted && s.repository.data.tasks[0].failure.indexOf('租约') >= 0);
+    } },
+    { name: 'PUT超时失效仍必须记录阶段错误而非吞掉', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_TIMEOUT'; await s.service.submit('unit-original');
+      documentServiceCheck(s.repository.data.tasks[0].stage === DocumentParseStage.UploadUnknown && s.repository.data.tasks[0].failure.indexOf('超时') >= 0 && !s.service.state.busy);
+    } },
+    { name: '旧已尝试任务先Query后同对象补传一次并持久化耗用', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_UNKNOWN'; await s.service.submit('unit-original');
+      s.network.events = []; s.network.mode = 'NORMAL'; s.network.states = [DocumentRemoteState.Waiting, DocumentRemoteState.Done];
+      const t: DocumentParseTask = s.repository.data.tasks[0]; t.queries = 7; const id: string = t.id;
+      await s.service.resume(id, true);
+      documentServiceCheck(s.network.events[0] === 'QUERY' && s.network.uploads === 2 && s.network.allocations === 1 && t.recoveryUploadUsed && t.uploadAttempted && t.queries === 9);
+      documentServiceCheck(t.stage === DocumentParseStage.Received && s.repository.data.results.length === 1 && t.id === id);
+    } },
+    { name: '补传未知后重开也不得再次补传或创建批次', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_UNKNOWN'; await s.service.submit('unit-original');
+      s.network.states = [DocumentRemoteState.Waiting]; await s.service.resume(s.repository.data.tasks[0].id, true);
+      documentServiceCheck(s.network.uploads === 2 && s.repository.data.tasks[0].recoveryUploadUsed);
+      await s.service.initialize(); await s.service.resume(s.repository.data.tasks[0].id, true);
+      documentServiceCheck(s.network.uploads === 2 && s.network.allocations === 1 && s.repository.data.tasks[0].failure.length > 0);
+    } },
+    { name: '旧租约失效不耗用网络补传且准确停止', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_UNKNOWN'; await s.service.submit('unit-original');
+      s.network.mode = 'UPLOAD_PREFLIGHT'; s.network.states = [DocumentRemoteState.Waiting]; await s.service.resume(s.repository.data.tasks[0].id, true);
+      documentServiceCheck(s.network.uploads === 1 && !s.repository.data.tasks[0].recoveryUploadUsed && s.repository.data.tasks[0].failure.indexOf('租约') >= 0);
+    } },
+    { name: '前台清密码不使活动凭据失效但显式暂停仍清认证', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); const clears: number = s.credential.clears;
+      s.network.onUpload = (): void => { s.service.clearInput(); };
+      await s.service.submit('unit-original');
+      documentServiceCheck(s.repository.data.results.length === 1 && s.credential.clears === clears && s.network.pauses === 0);
+      await s.service.pause(); documentServiceCheck(s.credential.clears > clears && s.network.pauses > 0);
+    } },
+    { name: '任务动作忙态立即发布且Query保留次数及完成时间', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); const observer: DocumentTestStateObserver = new DocumentTestStateObserver(s.service); s.service.subscribe(observer);
+      s.network.states = [DocumentRemoteState.Done]; await s.service.submit('unit-original');
+      documentServiceCheck(observer.views.some((v: DocumentParseViewState): boolean => v.busy) && s.repository.data.tasks[0].lastQueryAt > 0);
+      documentServiceCheck(s.service.viewState().snapshot.tasks[0].lastQueryAt === s.repository.data.tasks[0].lastQueryAt);
+    } },
+    { name: '原批次查询unknown与鉴权失败不补传不申请', run: async (): Promise<void> => {
+      for (const mode of ['UNKNOWN', 'AUTH']) {
+        const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_UNKNOWN'; await s.service.submit('unit-original');
+        s.network.mode = mode; s.network.states = [DocumentRemoteState.Unobserved]; await s.service.resume(s.repository.data.tasks[0].id, true);
+        documentServiceCheck(s.network.uploads === 1 && s.network.allocations === 1 && !s.repository.data.tasks[0].recoveryUploadUsed && s.repository.data.tasks[0].failure.length > 0);
+      }
+    } },
+    { name: '原件绑定改变拒绝旧任务恢复和补传', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_UNKNOWN'; await s.service.submit('unit-original');
+      s.repository.data.originals[0].hash = 'c'.repeat(64); s.network.mode = 'NORMAL'; s.network.states = [DocumentRemoteState.Waiting];
+      await s.service.resume(s.repository.data.tasks[0].id, true); documentServiceCheck(s.network.queries === 0 && s.network.uploads === 1 && s.network.allocations === 1);
+    } },
+    { name: '补传持久化失败必须零第二次PUT', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_UNKNOWN'; await s.service.submit('unit-original');
+      s.repository.fail = true; await s.service.resume(s.repository.data.tasks[0].id, true);
+      documentServiceCheck(s.network.uploads === 1 && s.network.allocations === 1 && s.repository.data.tasks[0].failure.length > 0 && !s.service.state.busy);
+    } },
+    { name: '已有批次上传前失败恢复Query后执行首次PUT不是补传', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_PREFLIGHT'; await s.service.submit('unit-original');
+      s.network.mode = 'NORMAL'; s.network.states = [DocumentRemoteState.Waiting, DocumentRemoteState.Done]; s.network.events = [];
+      await s.service.resume(s.repository.data.tasks[0].id, true);
+      documentServiceCheck(s.network.events[0] === 'QUERY' && s.network.uploads === 1 && s.network.allocations === 1 && !s.repository.data.tasks[0].recoveryUploadUsed && s.repository.data.results.length === 1);
+    } }
+  ];
+}
+
+function documentCredentialFeedbackCases(): DocumentServiceTestCase[] {
+  return [
+    { name: '保存遇忙必须可见拒绝且不调用凭据', run: async (): Promise<void> => {
+      const s: DocumentTestSettingsSession = new DocumentTestSettingsSession(); await s.service.initialize(); s.service.state.busy = true;
+      const clears: number = s.credential.clears;
+      const observer: DocumentTestStateObserver = new DocumentTestStateObserver(s.service); s.service.subscribe(observer);
+      await s.service.saveToken('unit-nonsecret-input', false);
+      documentServiceCheck(s.credential.saves === 0 && s.service.state.busy && observer.views.length > 0 && s.service.state.message.indexOf('未执行') >= 0);
+      documentServiceCheck(s.credential.clears === clears);
+    } },
+    { name: '保存开始发布忙态反馈结束发布确认状态并清输入', run: async (): Promise<void> => {
+      const s: DocumentTestSettingsSession = new DocumentTestSettingsSession(); await s.service.initialize();
+      const observer: DocumentTestStateObserver = new DocumentTestStateObserver(s.service); s.service.subscribe(observer);
+      await s.service.saveToken('unit-nonsecret-input', false);
+      documentServiceCheck(observer.views.some((view: DocumentParseViewState): boolean => view.busy && view.message.indexOf('正在') >= 0));
+      documentServiceCheck(!s.service.state.busy && s.service.state.credential === DocumentCredentialStatus.Configured && s.credential.clears > 0);
+      documentServiceCheck(observer.views.every((view: DocumentParseViewState): boolean => JSON.stringify(view).indexOf('unit-nonsecret-input') < 0));
+    } },
+    { name: '写入失败后的刷新再失败仍发布原阶段code与不可用', run: async (): Promise<void> => {
+      const s: DocumentTestSettingsSession = new DocumentTestSettingsSession(); await s.service.initialize();
+      s.credential.writeFailure = true; s.credential.statusThrows = true;
+      const observer: DocumentTestStateObserver = new DocumentTestStateObserver(s.service); s.service.subscribe(observer);
+      let rejected: boolean = false;
+      try { await s.service.saveToken('unit-nonsecret-input', false); } catch { rejected = true; }
+      documentServiceCheck(!rejected);
+      documentServiceCheck(!s.service.state.busy && s.service.state.credential === DocumentCredentialStatus.Unavailable && observer.views.length > 0);
+      documentServiceCheck(s.service.state.message.indexOf('凭据新增') >= 0 && s.service.state.message.indexOf('201') >= 0 && s.service.state.message.indexOf('unit-nonsecret-refresh-detail') < 0);
+    } },
+    { name: '保存端口返回未确认状态不能显示已安全保存', run: async (): Promise<void> => {
+      for (const status of [DocumentCredentialStatus.Missing, DocumentCredentialStatus.Unavailable]) {
+        const s: DocumentTestSettingsSession = new DocumentTestSettingsSession(); await s.service.initialize(); s.credential.returnedStatus = status;
+        await s.service.saveToken('unit-nonsecret-input', false);
+        documentServiceCheck(s.service.state.credential !== DocumentCredentialStatus.Configured && s.service.state.message.indexOf('已安全保存') < 0 && s.service.state.message.length > 0);
+      }
+    } },
+    { name: '撤销检查点失败可见且不进入Asset写入', run: async (): Promise<void> => {
+      const s: DocumentTestSettingsSession = new DocumentTestSettingsSession(); await s.service.initialize(); s.repository.fail = true;
+      await s.service.saveToken('unit-nonsecret-input', false);
+      documentServiceCheck(s.credential.saves === 0 && !s.service.state.busy && s.service.state.message.indexOf('持久化失败') >= 0);
+    } },
+    { name: '未知异常不回显原文且保存按钮最终解忙', run: async (): Promise<void> => {
+      const s: DocumentTestSettingsSession = new DocumentTestSettingsSession(); await s.service.initialize(); s.repository.rawFailure = true; s.credential.statusThrows = true;
+      await s.service.saveToken('unit-nonsecret-input', false);
+      documentServiceCheck(s.credential.saves === 0 && !s.service.state.busy && s.service.state.credential === DocumentCredentialStatus.Unavailable && s.service.state.message.indexOf('unit-nonsecret') < 0);
+    } },
+    { name: '删除失败后刷新再失败同样有可见错误', run: async (): Promise<void> => {
+      const s: DocumentTestSettingsSession = new DocumentTestSettingsSession(); await s.service.initialize(); s.credential.unavailable = true; s.credential.statusThrows = true;
+      await s.service.removeToken();
+      documentServiceCheck(!s.service.state.busy && s.service.state.credential === DocumentCredentialStatus.Unavailable && s.service.state.message.indexOf('安全存储拒绝') >= 0);
+    } }
+  ];
 }
 
 function documentRecoveryCases(): DocumentServiceTestCase[] {

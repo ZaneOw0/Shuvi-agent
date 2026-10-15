@@ -2,6 +2,7 @@ import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
 import { fileIo, ReadOptions } from '@kit.CoreFileKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { MineruTaskPort } from '../domain/DocumentParsePorts';
 import { DocumentParseAction, DocumentParseBudget, DocumentParseFailure, DocumentAllocationReceipt,
   DocumentInspection, DocumentLeaseBinding, DocumentParseUsage, DocumentParseResultEnvelope } from '../domain/DocumentParseModels';
@@ -20,6 +21,11 @@ function mineruSafeSession(): rcp.Session {
   const cache: rcp.CacheControl = { noCache: true, noStore: true, keepCache: false };
   const session: rcp.SessionConfiguration = { requestConfiguration: configuration, cacheControl: cache };
   return rcp.createSession(session);
+}
+function mineruTransportFailure(error: BusinessError, stage: string): DocumentParseFailure {
+  if (error instanceof DocumentParseFailure) { return error; }
+  const code: string = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? `${error.code}` : '';
+  return new DocumentParseFailure('本机或传输能力失败', stage, code);
 }
 function mineruBinding(action: DocumentParseAction, purpose: string, id: string): DocumentLeaseBinding {
   const binding: DocumentLeaseBinding = new DocumentLeaseBinding(); binding.id = id; binding.taskId = action.task.id;
@@ -43,7 +49,7 @@ function mineruEarlierUploadExpiry(address: string, binding: DocumentLeaseBindin
     binding.expiresAt = Math.min(binding.expiresAt, expires); binding.remoteExpiry = `${expires}`;
   }
 }
-class MineruUploadReader implements rcp.ReadFile {
+export class MineruUploadReader implements rcp.ReadFile {
   private file: fileIo.File; private action: DocumentParseAction; private offset: number = 0; private size: number;
   private md: cryptoFramework.Md = cryptoFramework.createMd('SHA256'); private reading: boolean = false;
   constructor(file: fileIo.File, action: DocumentParseAction) { this.file = file; this.action = action; this.size = action.original.bytes; }
@@ -53,16 +59,25 @@ class MineruUploadReader implements rcp.ReadFile {
     try {
     this.action.cancel.check();
     if (this.offset >= this.size) { return 0; }
-    const length: number = Math.min(buffer.byteLength, 65536, this.size - this.offset);
-    const options: ReadOptions = { offset: this.offset, length: length }; const n: number = await fileIo.read(this.file.fd, buffer, options);
-    if (n < 1 || n > length) { throw new DocumentParseFailure('上传读取不完整', '原件PUT'); }
-    this.action.cancel.check(); const blob: cryptoFramework.DataBlob = { data: new Uint8Array(buffer, 0, n) };
-    await this.md.update(blob); this.offset += n; return n;
+    if (buffer.byteLength === 0) { throw new DocumentParseFailure('SDK上传读取缓冲为空', '原件PUT'); }
+    const length: number = Math.min(buffer.byteLength, this.size - this.offset); let supplied: number = 0;
+    // Fill the requested range, including short file reads; never signal a premature EOF.
+    while (supplied < length) {
+      this.action.cancel.check(); const block: ArrayBuffer = new ArrayBuffer(Math.min(65536, length - supplied));
+      const options: ReadOptions = { offset: this.offset, length: block.byteLength }; const n: number = await fileIo.read(this.file.fd, block, options);
+      if (n < 1 || n > block.byteLength) { throw new DocumentParseFailure('上传读取不完整', '原件PUT'); }
+      this.action.cancel.check(); const bytes: Uint8Array = new Uint8Array(block, 0, n);
+      const blob: cryptoFramework.DataBlob = { data: bytes }; await this.md.update(blob); this.action.cancel.check();
+      new Uint8Array(buffer).set(bytes, supplied); this.offset += n; supplied += n;
+      this.action.task.uploadBytes = this.offset; this.action.onProgress();
+    }
+    return supplied;
     } finally { this.reading = false; }
   }
   async validate(): Promise<void> {
     const stat: fileIo.Stat = await fileIo.stat(this.file.fd);
-    if (this.offset !== this.size || stat.size !== this.size || documentDigestHex((await this.md.digest()).data) !== this.action.original.hash) {
+    const extra: ArrayBuffer = new ArrayBuffer(1); const options: ReadOptions = { offset: this.size, length: 1 };
+    if (!stat.isFile() || this.offset !== this.size || stat.size !== this.size || await fileIo.read(this.file.fd, extra, options) !== 0 || documentDigestHex((await this.md.digest()).data) !== this.action.original.hash) {
       throw new DocumentParseFailure('上传实际字节摘要不符', '原件PUT');
     }
     this.action.cancel.check();
@@ -77,25 +92,55 @@ export class MineruTransportAdapter implements MineruTaskPort {
   pause(): void { for (const session of this.sessions) { session.cancel(); session.close(); } this.sessions = []; this.credential.clearTransient(); }
   private async fetch(request: rcp.Request, authenticated: boolean, action: DocumentParseAction, incoming: rcp.IncomingDataCallback): Promise<rcp.Response> {
     action.cancel.check(); const session: rcp.Session = mineruSafeSession(); this.sessions.push(session);
-    let complete: boolean = false; let timer: number = -1; let requestActive: boolean = true;
+    let complete: boolean = false; let timer: number = -1; let requestActive: boolean = true; let status: number = 0;
+    let callbackTail: Promise<void> = Promise.resolve(); let callbackFailure: DocumentParseFailure | undefined = undefined;
     const handler: rcp.HttpEventsHandler = { onDataEnd: (): void => { complete = true; },
-      onStatusCodeReceive: (code: number): void => { if (code >= 300 && code < 400) { session.cancel(request); } } };
+      onStatusCodeReceive: (code: number): void => { status = code; if (code >= 300 && code < 400) { session.cancel(request); } },
+      onHeaderReceive: (headers: rcp.ResponseHeaders): void => {
+        if (!authenticated && request.method === 'GET') {
+          const length: string | string[] | undefined = headers['content-length'];
+          if (typeof length === 'string' && new RegExp('^[0-9]{1,12}$').test(length) && Number(length) > 0 && Number(length) <= DocumentParseBudget.resultBytes) {
+            action.task.downloadTotal = Number(length); action.onProgress();
+          }
+        }
+      } };
     const tracing: rcp.TracingConfiguration = { verbose: false, collectTimeInfo: false, plaintextInException: false, httpEventsHandler: handler };
     const timeoutConfig: rcp.Timeout = { connectMs: 30000, transferMs: 120000, inactivityMs: 30000 };
     const transferConfig: rcp.TransferConfiguration = { autoRedirect: false, timeout: timeoutConfig };
-    const config: rcp.Configuration = { tracing: tracing, transfer: transferConfig }; request.configuration = config; request.destination = incoming;
+    const config: rcp.Configuration = { tracing: tracing, transfer: transferConfig }; request.configuration = config;
+    request.destination = (buffer: ArrayBuffer): Promise<void> => {
+      const operation: Promise<void> = Promise.resolve().then(async (): Promise<void> => {
+        if (!requestActive) { throw new DocumentParseFailure('迟到数据未接收', '传输'); } action.cancel.check(); await incoming(buffer);
+      });
+      callbackTail = operation.then((): void => {}, (error: Error): void => { callbackFailure = error instanceof DocumentParseFailure ? error : new DocumentParseFailure('响应写入失败', '接收'); });
+      return operation;
+    };
     try {
+      if (request.method === 'PUT') { await action.onUploadStarting(); action.cancel.check(); }
       const timeout: Promise<rcp.Response> = new Promise<rcp.Response>((_resolve: (response: rcp.Response) => void, reject: (error: Object) => void): void => {
-        timer = setTimeout((): void => { action.cancel.invalid = true; session.cancel(request); reject(new DocumentParseFailure('请求总墙钟超时', '传输')); }, 120000);
+        timer = setTimeout((): void => { action.cancel.reason = 'TIMEOUT'; action.cancel.invalid = true; requestActive = false; reject(new DocumentParseFailure('请求总墙钟超时', request.method === 'PUT' ? '原件PUT' : '传输')); session.cancel(request); }, Math.min(DocumentParseBudget.requestMs, Math.max(1, action.cancel.deadline - Date.now())));
       });
       const work: Promise<rcp.Response> = authenticated ? this.credential.authenticatedFetch(request, session, (): void => {
         if (!requestActive) { throw new DocumentParseFailure('请求世代失效', '认证'); } action.cancel.check();
-      }) : session.fetch(request);
-      const response: rcp.Response = await Promise.race<rcp.Response>([work, timeout]);
+      }) : Promise.resolve().then((): Promise<rcp.Response> => {
+        action.cancel.check();
+        if (request.method === 'PUT') { action.task.uploadRequestStarted = true; action.task.lastAction = 'SDK PUT 已调用，等待响应'; action.onProgress(); }
+        return session.fetch(request);
+      }).catch((error: BusinessError): rcp.Response => {
+        if (error instanceof DocumentParseFailure) { throw new DocumentParseFailure(error.category, error.stage, error.serviceCode); }
+        const code: string = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? `${error.code}` : '';
+        throw new DocumentParseFailure('网络或TLS失败', request.method === 'PUT' ? '原件PUT' : '结果GET', code);
+      });
+      const settled: Promise<rcp.Response> = work.then(async (response: rcp.Response): Promise<rcp.Response> => {
+        await callbackTail; if (callbackFailure !== undefined) { throw callbackFailure; } return response;
+      });
+      const response: rcp.Response = await Promise.race<rcp.Response>([settled, timeout]);
       action.cancel.check(); mineruHttpStatus(response.statusCode, response.headers['retry-after']);
-      if (!complete) { throw new DocumentParseFailure('传输结束未经确认', '传输'); }
+      // An empty PUT response need not yield a body event. fetch settlement plus 200 and exact source validation are required.
+      if (request.method === 'PUT' && response.statusCode !== 200) { throw new DocumentParseFailure('上传HTTP未确认', '原件PUT', `${response.statusCode}`); }
+      if (request.method !== 'PUT' && !complete) { throw new DocumentParseFailure('传输结束未经确认', '传输'); }
       return response;
-    } catch (error) { session.cancel(request); if (error instanceof DocumentParseFailure) { throw error; } throw new DocumentParseFailure('网络或TLS失败', '传输'); }
+    } catch (error) { session.cancel(request); if (status >= 300 && status < 400) { throw new DocumentParseFailure('重定向被拒绝', '传输', `${status}`); } if (error instanceof DocumentParseFailure) { throw error; } throw new DocumentParseFailure('网络或TLS失败', '传输'); }
     finally {
       requestActive = false; clearTimeout(timer); request.headers = undefined; request.destination = undefined; request.content = undefined;
       session.close(); this.sessions = this.sessions.filter((s: rcp.Session): boolean => s !== session);
@@ -121,6 +166,9 @@ export class MineruTransportAdapter implements MineruTaskPort {
     const receipt: DocumentAllocationReceipt = new DocumentAllocationReceipt(); receipt.batchId = dto.batchId; receipt.leaseId = binding.id; return receipt;
   }
   async upload(action: DocumentParseAction): Promise<void> {
+    await this.uploadOriginalBytes(action).catch((error: BusinessError): void => { throw mineruTransportFailure(error, action.task.uploadRequestStarted ? '原件PUT' : '上传前复核'); });
+  }
+  private async uploadOriginalBytes(action: DocumentParseAction): Promise<void> {
     await this.assets.verify(action.original, action.cancel);
     const binding: DocumentLeaseBinding = mineruBinding(action, 'UPLOAD', action.task.uploadLease);
     await this.credential.withLease(binding, async (address: string): Promise<void> => {
@@ -129,6 +177,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
       try {
         const reader: MineruUploadReader = new MineruUploadReader(file, action);
         const request: rcp.Request = new rcp.Request(address, 'PUT'); request.content = new rcp.UploadFromFile(reader);
+        const headers: rcp.RequestHeaders = { 'content-length': `${action.original.bytes}` }; request.headers = headers;
         const cap: MineruBoundedBytes = new MineruBoundedBytes(); const discard: rcp.IncomingDataCallback = (bytes: ArrayBuffer): void => { action.cancel.check(); cap.reserve(bytes.byteLength, DocumentParseBudget.jsonBytes); };
         await this.fetch(request, false, action, discard); await reader.validate();
       } finally { await fileIo.close(file); }
@@ -146,6 +195,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
     } action.cancel.check(); return inspection;
   }
   async receive(action: DocumentParseAction, usage: DocumentParseUsage): Promise<DocumentParseResultEnvelope> {
+    action.task.downloadBytes = 0; action.task.downloadTotal = 0; action.onProgress();
     const sink: DocumentResultSink = await this.assets.resultSink(action, usage);
     try {
       const binding: DocumentLeaseBinding = mineruBinding(action, 'RESULT', action.task.resultLease);
@@ -154,6 +204,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
         const request: rcp.Request = new rcp.Request(address, 'GET');
         const incoming: rcp.IncomingDataCallback = async (buffer: ArrayBuffer): Promise<void> => { await sink.write(buffer); };
         const response: rcp.Response = await this.fetch(request, false, action, incoming);
+        await sink.waitForWrites();
         const length: string | string[] | undefined = response.headers['content-length'];
         if (length !== undefined && (typeof length !== 'string' || !new RegExp('^[0-9]{1,12}$').test(length) || Number(length) !== sink.actualBytes())) { throw new DocumentParseFailure('结果HTTP长度不符', '接收'); }
       });

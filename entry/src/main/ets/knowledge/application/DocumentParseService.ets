@@ -2,7 +2,7 @@ import {
   DocumentCredentialStatus, DocumentParseViewState, DocumentParseStateListener, DocumentParseFailure, documentValidateToken,
   DocumentParseCancellation, DocumentOriginal, DocumentFileSelection, DocumentParseGrant, DocumentTestAcknowledgement,
   DocumentParseAction, DocumentParseTask, DocumentParseStage, DocumentRemoteState, DocumentRemoteOccupancy,
-  DocumentParseBudget, DocumentAllocationReceipt, DocumentInspection, DocumentParseResultEnvelope, DocumentParseCleanup, DocumentParseUsage, documentCopySnapshot, DocumentPreflightStatus
+  DocumentParseBudget, DocumentAllocationReceipt, DocumentInspection, DocumentParseResultEnvelope, DocumentParseCleanup, DocumentParseUsage, documentCopySnapshot, DocumentPreflightStatus, DocumentParseFormat
 } from '../domain/DocumentParseModels';
 import { MineruCredentialPort, DocumentParseRepositoryPort, DocumentSelectionPort, DocumentAssetPort, DocumentPreflightPort, MineruTaskPort, DocumentParseClockPort } from '../domain/DocumentParsePorts';
 import { documentBudgetCheck, documentUsage, documentAcknowledged, documentSubmitReason, documentGrantMatches, documentRemoteTerminal, documentSafeId, documentHashValid } from '../pipeline/DocumentParsePolicy';
@@ -48,9 +48,9 @@ export class DocumentParseService {
   }
   viewState(): DocumentParseViewState {
     const view: DocumentParseViewState = new DocumentParseViewState(); view.snapshot = documentCopySnapshot(this.state.snapshot);
-    view.credential = this.state.credential; view.message = this.state.message; view.busy = this.state.busy; view.inputEpoch = this.state.inputEpoch; return view;
+    view.credential = this.state.credential; view.message = this.state.message; view.busy = this.state.busy; view.inputEpoch = this.state.inputEpoch; view.resultDirectory = this.state.resultDirectory; return view;
   }
-  clearInput(): void { this.credential.clearTransient(); this.state.inputEpoch++; this.emit(); }
+  clearInput(): void { this.emit(); }
   async setEnabled(isOn: boolean): Promise<void> {
     if (!isOn) {
       this.pauseImmediate();
@@ -117,7 +117,8 @@ export class DocumentParseService {
     this.emit();
   }
   async saveToken(input: string, replace: boolean): Promise<void> {
-    if (this.state.busy) { return; } this.state.busy = true;
+    if (this.state.busy) { input = ''; this.state.message = '当前有动作进行中，本次保存未执行'; this.emit(); return; }
+    this.state.busy = true; this.state.message = '正在保存安全凭据…'; this.emit();
     try {
       documentValidateToken(input);
       this.pauseImmediate();
@@ -128,21 +129,33 @@ export class DocumentParseService {
       this.queueInvalidLeases();
       await this.repository.save(this.state.snapshot);
       await this.retryCleanup();
-      this.state.credential = await this.credential.save(input, replace); this.state.message = '凭据已安全保存；未验证有效性或免费资格';
+      const saved: DocumentCredentialStatus = await this.credential.save(input, replace);
+      if (saved !== DocumentCredentialStatus.Configured) { throw new DocumentParseFailure('安全存储状态未确认，未显示保存成功', '保存后属性确认'); }
+      this.state.credential = saved; this.state.message = '凭据已安全保存；未验证有效性或免费资格';
     } catch (error) {
-      this.state.credential = await this.credential.status();
       this.state.message = error instanceof DocumentParseFailure ? error.message : '安全配置失败，未使用明文替代';
+      await this.refreshCredentialAfterFailure();
     } finally { input = ''; this.state.busy = false; this.clearInput(); }
   }
+  private async refreshCredentialAfterFailure(): Promise<void> {
+    try { this.state.credential = await this.credential.status(); }
+    catch { this.state.credential = DocumentCredentialStatus.Unavailable; this.state.message += '；配置状态刷新失败'; }
+  }
   async removeToken(): Promise<void> {
-    if (this.state.busy) { return; } this.state.busy = true;
+    if (this.state.busy) { this.state.message = '当前有动作进行中，本次删除未执行'; this.emit(); return; }
+    this.state.busy = true; this.state.message = '正在删除安全凭据…'; this.emit();
     try {
       this.pauseImmediate();
       this.state.snapshot.config.enabled = false;
       for (const grant of this.state.snapshot.grants) { grant.revoked = true; }
       this.state.snapshot.config.credentialRevision++; this.queueInvalidLeases(); await this.repository.save(this.state.snapshot); await this.retryCleanup();
-      this.state.credential = await this.credential.remove(); this.state.message = '凭据已删除；远端任务与数据可能仍保留';
-    } catch { this.state.credential = await this.credential.status(); this.state.message = '安全凭据删除失败，状态未冒称成功'; }
+      const removed: DocumentCredentialStatus = await this.credential.remove();
+      if (removed !== DocumentCredentialStatus.Missing) { throw new DocumentParseFailure('凭据删除未确认', '删除后属性确认'); }
+      this.state.credential = removed; this.state.message = '凭据已删除；远端任务与数据可能仍保留';
+    } catch (error) {
+      this.state.message = error instanceof DocumentParseFailure ? error.message : '安全凭据删除失败，状态未冒称成功';
+      await this.refreshCredentialAfterFailure();
+    }
     finally { this.state.busy = false; this.clearInput(); }
   }
   private queueInvalidLeases(): void {
@@ -156,7 +169,14 @@ export class DocumentParseService {
   private requireClock(): DocumentParseClockPort { if (this.clock === undefined) { throw new DocumentParseFailure('时间能力不可用', '解析'); } return this.clock; }
   private action(task: DocumentParseTask, original: DocumentOriginal, grant: DocumentParseGrant): DocumentParseAction {
     const action: DocumentParseAction = new DocumentParseAction(); action.task = task; action.original = original; action.grant = grant;
-    action.cancel.deadline = Date.now() + DocumentParseBudget.pollMs; this.activeAction = action; return action;
+    action.cancel.deadline = Date.now() + DocumentParseBudget.pollMs;
+    let lastProgress: number = 0;
+    action.onProgress = (): void => {
+      if (action.cancel.invalid || this.activeAction !== action) { return; }
+      const now: number = Date.now();
+      if (now - lastProgress >= 250) { lastProgress = now; this.emit(); }
+    };
+    this.activeAction = action; return action;
   }
   private check(action: DocumentParseAction): void {
     action.cancel.check();
@@ -164,12 +184,49 @@ export class DocumentParseService {
       !this.state.snapshot.tasks.some((task: DocumentParseTask): boolean => task.id === action.task.id) ||
       !this.state.snapshot.originals.some((o: DocumentOriginal): boolean => o.id === action.original.id && o.hash === action.task.hash && o.version === action.task.version) ||
       !documentGrantMatches(action.original, action.grant, this.state.snapshot.config.credentialRevision)) {
-      action.cancel.invalid = true; throw new DocumentParseFailure('任务/授权/凭据世代失效', '解析');
+      action.cancel.reason = 'INVALIDATED'; action.cancel.invalid = true; throw new DocumentParseFailure('任务/授权/凭据世代失效', '解析');
     }
   }
   private async checkpoint(action: DocumentParseAction, stage: DocumentParseStage): Promise<void> {
     this.check(action); action.task.stage = stage; action.task.checkpoint = stage;
+    action.task.lastAction = stage; this.state.message = stage;
     await this.repository.save(this.state.snapshot); this.check(action); this.emit();
+  }
+  private async uploadOriginal(action: DocumentParseAction, recovery: boolean): Promise<void> {
+    this.check(action);
+    if (action.task.uploadLease.length === 0) { throw new DocumentParseFailure('原上传租约缺失，不申请新批次', '上传前复核'); }
+    if (recovery && action.task.recoveryUploadUsed) { throw new DocumentParseFailure('同对象补传机会已用，停止待核对', '上传前复核'); }
+    const priorAttempt: boolean = action.task.uploadAttempted;
+    action.task.lastAction = '复核原件与原上传租约'; this.state.message = action.task.lastAction; this.emit();
+    action.onUploadStarting = async (): Promise<void> => {
+      this.check(action);
+      const original: DocumentOriginal = action.original;
+      if (original.hash !== action.task.hash || original.version !== action.task.version || original.preflight !== DocumentPreflightStatus.Passed || original.bytes < 1 || original.bytes > DocumentParseBudget.originalBytes ||
+        original.format === DocumentParseFormat.Pdf && (original.pages < 1 || original.pages > DocumentParseBudget.pdfPages)) { throw new DocumentParseFailure('原件身份或预算已变', '上传前复核'); }
+      if (recovery && (action.task.remote !== DocumentRemoteState.Waiting || action.task.recoveryUploadUsed)) { throw new DocumentParseFailure('本次未确认waiting-file或补传已用', '上传前复核'); }
+      // Durable intent precedes SDK fetch. Crash at this boundary is conservative, never an automatic retry.
+      if (recovery) { action.task.recoveryUploadUsed = true; }
+      action.task.uploadAttempted = true; action.task.uploadRequestStarted = false; action.task.uploadBytes = 0;
+      await this.checkpoint(action, DocumentParseStage.Uploading);
+    };
+    try { await this.requireNetwork().upload(action); this.check(action); }
+    catch (error) {
+      if (action.task.uploadRequestStarted || priorAttempt) { action.task.stage = DocumentParseStage.UploadUnknown; }
+      if (error instanceof DocumentParseFailure) { throw error; }
+      throw new DocumentParseFailure('上传结果未知，原身份保留', '原件PUT');
+    }
+    action.task.uploaded = true; await this.checkpoint(action, DocumentParseStage.Waiting);
+    await this.requireNetwork().removeLeases([action.task.uploadLease]); action.task.uploadLease = ''; await this.repository.save(this.state.snapshot);
+  }
+  private async recordFailure(action: DocumentParseAction, error: Object): Promise<void> {
+    if (!this.state.snapshot.tasks.some((t: DocumentParseTask): boolean => t.id === action.task.id)) { return; }
+    if (action.cancel.invalid && action.cancel.reason !== 'TIMEOUT' && action.cancel.reason !== 'INVALIDATED') { return; }
+    const failure: DocumentParseFailure = error instanceof DocumentParseFailure ? error : new DocumentParseFailure('动作失败，远端状态未核实', action.task.lastAction);
+    if (action.task.stage !== DocumentParseStage.UploadUnknown && action.task.stage !== DocumentParseStage.Received && action.task.stage !== DocumentParseStage.RemoteFailed && action.task.stage !== DocumentParseStage.Uncertain && action.task.stage !== DocumentParseStage.Failed) { action.task.stage = DocumentParseStage.Paused; }
+    action.task.failure = failure.message; action.task.failureStage = failure.stage; action.task.failureCode = failure.serviceCode;
+    this.state.message = failure.message;
+    try { await this.repository.save(this.state.snapshot); }
+    catch { this.state.message = `${failure.message}；检查点写入失败，远端占用保留，禁止新提交`; }
   }
   async submit(originalId: string): Promise<void> {
     if (this.state.busy) { return; }
@@ -179,7 +236,7 @@ export class DocumentParseService {
       this.state.message = original === undefined ? '原件不存在' : this.submitReason(original) || '未完成逐文件确认或能力不可用'; this.emit(); return;
     }
     if (this.state.snapshot.tasks.some((t: DocumentParseTask): boolean => t.originalId === originalId)) { this.state.message = '已有任务，请查询该身份，不重复申请'; this.emit(); return; }
-    this.state.busy = true;
+    this.state.busy = true; this.state.message = '正在复核本件测试原件'; this.emit();
     const task: DocumentParseTask = new DocumentParseTask(); task.id = this.requireClock().id(); task.dataId = task.id;
     task.originalId = original.id; task.hash = original.hash; task.version = original.version; task.grantId = grant.id;
     task.credentialRevision = grant.credentialRevision; task.windowStart = this.requireClock().now(); task.epoch = 1;
@@ -199,53 +256,40 @@ export class DocumentParseService {
       if (!documentSafeId(receipt.batchId) || !receipt.leaseId.startsWith('lease-')) { throw new DocumentParseFailure('申请身份非法', '申请'); }
       task.batchId = receipt.batchId; task.uploadLease = receipt.leaseId; this.state.snapshot.occupancy.batchId = receipt.batchId;
       await this.checkpoint(action, DocumentParseStage.LeaseReady);
-      task.uploadAttempted = true; await this.checkpoint(action, DocumentParseStage.Uploading);
-      try { this.check(action); await this.requireNetwork().upload(action); this.check(action); }
-      catch (error) {
-        task.stage = DocumentParseStage.UploadUnknown;
-        if (error instanceof DocumentParseFailure) { throw error; }
-        throw new DocumentParseFailure('上传结果未知，原身份保留', '原件PUT');
-      }
-      task.uploaded = true; await this.checkpoint(action, DocumentParseStage.Waiting);
-      await this.requireNetwork().removeLeases([task.uploadLease]); task.uploadLease = ''; await this.repository.save(this.state.snapshot);
+      await this.uploadOriginal(action, false);
       await this.poll(action);
     } catch (error) {
-      if (!action.cancel.invalid && this.state.snapshot.tasks.some((t: DocumentParseTask): boolean => t.id === task.id)) {
+      if ((!action.cancel.invalid || action.cancel.reason === 'TIMEOUT' || action.cancel.reason === 'INVALIDATED') && this.state.snapshot.tasks.some((t: DocumentParseTask): boolean => t.id === task.id)) {
         if (allocatedRequest && task.batchId.length === 0) { task.stage = DocumentParseStage.Uncertain; }
         else if (!allocatedRequest) { this.state.snapshot.occupancy = new DocumentRemoteOccupancy(); task.stage = DocumentParseStage.Failed; }
         else if (task.stage !== DocumentParseStage.UploadUnknown && task.stage !== DocumentParseStage.Received) { task.stage = DocumentParseStage.Paused; }
-        task.failure = error instanceof DocumentParseFailure ? error.message : '动作失败，远端状态未核实';
-        try { await this.repository.save(this.state.snapshot); } catch { this.state.message = '检查点写入失败，远端占用保留，禁止新提交'; }
+        await this.recordFailure(action, error);
       }
     } finally { this.activeAction = undefined; this.state.busy = false; this.emit(); }
   }
-  private async poll(action: DocumentParseAction): Promise<void> {
-    const clock: DocumentParseClockPort = this.requireClock(); let delay: number = 5000;
-    while (action.task.queries < 90 && clock.now() - action.task.windowStart < 900000) {
-      this.check(action); await clock.sleep(delay); this.check(action);
+  private async poll(action: DocumentParseAction, recovery: boolean = false): Promise<void> {
+    const clock: DocumentParseClockPort = this.requireClock(); let delay: number = recovery ? 0 : 5000; let sessionQueries: number = 0;
+    while (sessionQueries < DocumentParseBudget.pollCount && clock.now() - action.task.windowStart < DocumentParseBudget.pollMs) {
+      this.check(action); if (delay > 0) { await clock.sleep(delay); } this.check(action);
       if (clock.now() - action.task.windowStart + DocumentParseBudget.requestMs > 900000) { break; }
-      action.task.queries++; await this.repository.save(this.state.snapshot); this.check(action);
+      sessionQueries++; action.task.queries++; action.task.lastAction = 'Query同一批次'; this.state.message = action.task.lastAction;
+      await this.repository.save(this.state.snapshot); this.check(action); this.emit();
       const inspected: DocumentInspection = await this.requireNetwork().inspect(action); this.check(action);
       if (inspected.batchId !== action.task.batchId || inspected.dataId !== action.task.dataId || inspected.state === DocumentRemoteState.Unobserved) { throw new DocumentParseFailure('查询身份或状态不符', '查询'); }
-      action.task.remote = inspected.state; action.task.extractedPages = inspected.extractedPages; action.task.totalPages = inspected.totalPages;
+      action.task.lastQueryAt = clock.now(); action.task.remote = inspected.state; action.task.extractedPages = inspected.extractedPages; action.task.totalPages = inspected.totalPages;
       const slot: DocumentRemoteOccupancy = this.state.snapshot.occupancy;
       if (slot.taskId === action.task.id) { slot.lastState = inspected.state; slot.terminalObserved = documentRemoteTerminal(inspected.state); }
       if (inspected.state === DocumentRemoteState.Failed) {
+        action.task.failure = 'MinerU返回failed，未生成可接收结果'; action.task.failureStage = '云解析'; action.task.failureCode = '';
         await this.checkpoint(action, DocumentParseStage.RemoteFailed);
         await this.requireNetwork().removeLeases([action.task.uploadLease, action.task.resultLease]); action.task.uploadLease = ''; action.task.resultLease = '';
         await this.repository.save(this.state.snapshot); return;
       }
-      if (inspected.state === DocumentRemoteState.Waiting && !action.task.uploadAttempted && action.task.uploadLease.length > 0) {
+      if (inspected.state === DocumentRemoteState.Waiting && !action.task.uploaded && recovery) {
+        await this.checkpoint(action, DocumentParseStage.Waiting);
         await this.assets?.verify(action.original, action.cancel); this.check(action);
-        action.task.uploadAttempted = true; await this.checkpoint(action, DocumentParseStage.Uploading);
-        try { await this.requireNetwork().upload(action); this.check(action); }
-        catch (error) {
-          action.task.stage = DocumentParseStage.UploadUnknown;
-          if (error instanceof DocumentParseFailure) { throw error; }
-          throw new DocumentParseFailure('上传结果未知，原身份保留', '原件PUT');
-        }
-        action.task.uploaded = true; await this.checkpoint(action, DocumentParseStage.Waiting);
-        await this.requireNetwork().removeLeases([action.task.uploadLease]); action.task.uploadLease = ''; await this.repository.save(this.state.snapshot);
+        await this.uploadOriginal(action, action.task.uploadAttempted);
+        recovery = false;
       }
       if (inspected.state === DocumentRemoteState.Done) {
         await this.checkpoint(action, DocumentParseStage.Done);
@@ -283,20 +327,20 @@ export class DocumentParseService {
     this.assets?.cancelLocal(); this.preflight?.cancelLocal();
     if (this.localCancel !== undefined) { this.localCancel.invalid = true; }
     if (this.activeAction !== undefined) {
-      this.activeAction.cancel.invalid = true; this.activeAction.task.epoch++;
-      this.activeAction.task.stage = this.activeAction.task.batchId.length === 0 ? DocumentParseStage.Uncertain : this.activeAction.task.stage === DocumentParseStage.Uploading ? DocumentParseStage.UploadUnknown : DocumentParseStage.Paused;
+      this.activeAction.cancel.reason = 'PAUSE'; this.activeAction.cancel.invalid = true; this.activeAction.task.epoch++;
+      if (this.activeAction.task.stage !== DocumentParseStage.Received && this.activeAction.task.stage !== DocumentParseStage.RemoteFailed) {
+        this.activeAction.task.stage = this.activeAction.task.batchId.length === 0 ? DocumentParseStage.Uncertain : this.activeAction.task.stage === DocumentParseStage.Uploading ? DocumentParseStage.UploadUnknown : DocumentParseStage.Paused;
+      }
+      this.activeAction.task.lastAction = '本机暂停，远端可能继续';
     }
     if (this.tombstoneCancel !== undefined) { this.tombstoneCancel.invalid = true; }
-    this.network?.pause(); this.clearInput();
+    this.network?.pause(); this.credential.clearTransient(); this.clearInput();
   }
   async pause(): Promise<void> {
     this.pauseImmediate(); try { await this.repository.save(this.state.snapshot); this.state.message = '已停本机动作，远端可能继续；未释放未知占用'; }
     catch { this.state.message = '暂停检查点保存失败，远端占用仍保留'; } this.emit();
   }
   async close(): Promise<void> { await this.pause(); await this.repository.close(); this.listeners = []; }
-  private pauseFailedResume(task: DocumentParseTask): void {
-    if (task.stage !== DocumentParseStage.UploadUnknown && task.stage !== DocumentParseStage.Received) { task.stage = DocumentParseStage.Paused; }
-  }
   async resume(taskId: string, sameAccountConfirmed: boolean): Promise<void> {
     if (this.state.busy || !sameAccountConfirmed || !this.state.snapshot.config.enabled || this.state.credential !== DocumentCredentialStatus.Configured) {
       this.state.message = '须启用解析并确认同账号继续先前同一测试任务；不会自动重提'; this.emit(); return;
@@ -309,15 +353,13 @@ export class DocumentParseService {
     if (original === undefined || grant === undefined || !documentGrantMatches(original, grant, this.state.snapshot.config.credentialRevision) || task.credentialRevision !== this.state.snapshot.config.credentialRevision) {
       this.state.message = '原件/授权/凭据版本已变；仅允许单独确认复核旧远端占用，不假同账号'; this.emit(); return;
     }
-    this.state.busy = true; task.grantId = grant.id; task.epoch++; task.queries = 0; task.windowStart = this.requireClock().now(); task.failure = '';
+    if (original.hash !== task.hash || original.version !== task.version || this.state.snapshot.occupancy.taskId !== task.id) { this.state.message = '原件或远端占用身份不符，停止'; this.emit(); return; }
+    this.state.busy = true; task.grantId = grant.id; task.epoch++; task.windowStart = this.requireClock().now(); task.failure = ''; task.failureStage = ''; task.failureCode = '';
+    task.lastAction = '正在查询原批次，不申请新任务'; this.state.message = task.lastAction; this.emit();
     const action: DocumentParseAction = this.action(task, original, grant);
-    try { await this.repository.save(this.state.snapshot); this.check(action); await this.retryCleanup(); this.check(action); await this.poll(action); }
+    try { await this.repository.save(this.state.snapshot); this.check(action); await this.retryCleanup(); this.check(action); await this.poll(action, true); }
     catch (error) {
-      if (!action.cancel.invalid) {
-        this.pauseFailedResume(task);
-        task.failure = error instanceof DocumentParseFailure ? error.message : '恢复失败，原身份保留';
-        try { await this.repository.save(this.state.snapshot); } catch { this.state.message = '恢复检查点保存失败'; }
-      }
+      await this.recordFailure(action, error);
     } finally { this.activeAction = undefined; this.state.busy = false; this.emit(); }
   }
   async deleteOriginal(originalId: string): Promise<void> {

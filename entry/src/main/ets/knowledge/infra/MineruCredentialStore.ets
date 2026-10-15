@@ -9,6 +9,18 @@ import { DocumentCredentialStatus, DocumentLeaseBinding, DocumentParseFailure, d
 
 const MINERU_TOKEN_ALIAS: string = 'shuvi.m2.mineru.precision.token.v1';
 const MINERU_KEY_ALIAS: string = 'shuvi.m2.parse.lease.aes256.v1';
+export interface MineruAssetStorePort {
+  query(query: asset.AssetMap): Promise<asset.AssetMap[]>;
+  add(attributes: asset.AssetMap): Promise<void>;
+  update(query: asset.AssetMap, attributes: asset.AssetMap): Promise<void>;
+  remove(query: asset.AssetMap): Promise<void>;
+}
+class MineruPlatformAssetStore implements MineruAssetStorePort {
+  query(query: asset.AssetMap): Promise<asset.AssetMap[]> { return asset.query(query); }
+  add(attributes: asset.AssetMap): Promise<void> { return asset.add(attributes); }
+  update(query: asset.AssetMap, attributes: asset.AssetMap): Promise<void> { return asset.update(query, attributes); }
+  remove(query: asset.AssetMap): Promise<void> { return asset.remove(query); }
+}
 function mineruAssetQuery(alias: string, kind: asset.ReturnType): asset.AssetMap {
   const query: asset.AssetMap = new Map<asset.Tag, asset.Value>();
   query.set(asset.Tag.ALIAS, new util.TextEncoder().encodeInto(alias)); query.set(asset.Tag.RETURN_TYPE, kind); return query;
@@ -16,10 +28,23 @@ function mineruAssetQuery(alias: string, kind: asset.ReturnType): asset.AssetMap
 function mineruAssetAlias(alias: string): asset.AssetMap {
   const query: asset.AssetMap = new Map<asset.Tag, asset.Value>(); query.set(asset.Tag.ALIAS, new util.TextEncoder().encodeInto(alias)); return query;
 }
-async function mineruAttributes(alias: string): Promise<asset.AssetMap[]> {
-  return asset.query(mineruAssetQuery(alias, asset.ReturnType.ATTRIBUTES)).catch((error: BusinessError): asset.AssetMap[] => {
-    if (error.code === 24000002) { return []; }
-    throw new DocumentParseFailure('安全存储不可用或设备锁定', '属性查询');
+function mineruAssetFailure(error: BusinessError, stage: string): DocumentParseFailure {
+  const code: number = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? error.code : 0;
+  let category: string = '安全存储操作失败';
+  if (code === 201) { category = '安全存储权限不足'; }
+  else if (code === 401) { category = '安全存储参数被拒绝'; }
+  else if (code === 24000001 || code === 24000017) { category = '安全存储服务不可用'; }
+  else if (code === 24000002) { category = '安全存储记录不存在'; }
+  else if (code === 24000003) { category = '安全存储记录冲突，未自动覆盖'; }
+  else if (code === 24000004) { category = '安全存储访问被拒绝'; }
+  else if (code === 24000005) { category = '安全存储锁屏状态不符'; }
+  return new DocumentParseFailure(category, stage, code === 0 ? '' : `${code}`);
+}
+async function mineruAttributes(store: MineruAssetStorePort, alias: string, stage: string = '属性查询'): Promise<asset.AssetMap[]> {
+  // Defer the call too: SDK parameter validation can throw before returning its Promise.
+  return Promise.resolve().then((): Promise<asset.AssetMap[]> => store.query(mineruAssetQuery(alias, asset.ReturnType.ATTRIBUTES))).catch((error: BusinessError): asset.AssetMap[] => {
+    if (typeof error?.code === 'number' && error.code === 24000002) { return []; }
+    throw mineruAssetFailure(error, stage);
   });
 }
 function mineruLeaseAAD(binding: DocumentLeaseBinding): string {
@@ -31,56 +56,76 @@ export class MineruCredentialStore implements MineruCredentialPort {
   private generation: number = 0;
   private activeRequests: rcp.Request[] = [];
   private activeBytes: Uint8Array[] = [];
-  constructor(filesDir: string) { this.root = `${filesDir}/knowledge_parse_v1`; }
+  private assetStore: MineruAssetStorePort;
+  constructor(filesDir: string, assetStore: MineruAssetStorePort = new MineruPlatformAssetStore()) {
+    this.root = `${filesDir}/knowledge_parse_v1`; this.assetStore = assetStore;
+  }
   clearTransient(): void {
     this.generation++; for (const request of this.activeRequests) { request.headers = undefined; }
     for (const bytes of this.activeBytes) { bytes.fill(0); }
   }
   async status(): Promise<DocumentCredentialStatus> {
-    try {
-      const rows: asset.AssetMap[] = await mineruAttributes(MINERU_TOKEN_ALIAS);
-      if (rows.length > 1) { return DocumentCredentialStatus.Unavailable; }
-      if (rows.length === 1 && (rows[0].get(asset.Tag.ACCESSIBILITY) !== asset.Accessibility.DEVICE_UNLOCKED || rows[0].get(asset.Tag.SYNC_TYPE) !== asset.SyncType.NEVER)) { return DocumentCredentialStatus.Unavailable; }
-      return rows.length === 1 ? DocumentCredentialStatus.Configured : DocumentCredentialStatus.Missing;
-    } catch { return DocumentCredentialStatus.Unavailable; }
+    try { return await this.checkedStatus('属性查询'); } catch { return DocumentCredentialStatus.Unavailable; }
   }
-  private async addSecret(alias: string, bytes: Uint8Array): Promise<void> {
+  private async checkedStatus(stage: string): Promise<DocumentCredentialStatus> {
+    const rows: asset.AssetMap[] = await mineruAttributes(this.assetStore, MINERU_TOKEN_ALIAS, stage);
+    if (rows.length > 1 || (rows.length === 1 && (rows[0].get(asset.Tag.ACCESSIBILITY) !== asset.Accessibility.DEVICE_UNLOCKED || rows[0].get(asset.Tag.SYNC_TYPE) !== asset.SyncType.NEVER))) {
+      throw new DocumentParseFailure('安全存储记录或保护属性不符', stage);
+    }
+    return rows.length === 1 ? DocumentCredentialStatus.Configured : DocumentCredentialStatus.Missing;
+  }
+  private async addSecret(alias: string, bytes: Uint8Array, stage: string): Promise<void> {
     const attrs: asset.AssetMap = new Map<asset.Tag, asset.Value>();
     attrs.set(asset.Tag.ALIAS, new util.TextEncoder().encodeInto(alias)); attrs.set(asset.Tag.SECRET, bytes);
     attrs.set(asset.Tag.ACCESSIBILITY, asset.Accessibility.DEVICE_UNLOCKED); attrs.set(asset.Tag.SYNC_TYPE, asset.SyncType.NEVER);
-    attrs.set(asset.Tag.IS_PERSISTENT, false); attrs.set(asset.Tag.CONFLICT_RESOLUTION, asset.ConflictResolution.THROW_ERROR);
-    await asset.add(attrs);
+    // Omission keeps the documented false default without requesting persistent-data permission.
+    attrs.set(asset.Tag.CONFLICT_RESOLUTION, asset.ConflictResolution.THROW_ERROR);
+    await Promise.resolve().then((): Promise<void> => this.assetStore.add(attrs)).catch((error: BusinessError): void => { throw mineruAssetFailure(error, stage); });
   }
   async save(input: string, replace: boolean): Promise<DocumentCredentialStatus> {
     documentValidateToken(input); const bytes: Uint8Array = new util.TextEncoder().encodeInto(input);
     try {
-      const current: DocumentCredentialStatus = await this.status();
-      if (current === DocumentCredentialStatus.Unavailable || (current === DocumentCredentialStatus.Configured) !== replace) {
-        throw new DocumentParseFailure('安全存储状态不符', '设置');
+      const current: DocumentCredentialStatus = await this.checkedStatus('保存前属性查询');
+      if ((current === DocumentCredentialStatus.Configured) !== replace) {
+        throw new DocumentParseFailure('安全存储状态不符，未自动新增或覆盖', '保存前属性查询');
       }
       if (replace) {
         const attrs: asset.AssetMap = new Map<asset.Tag, asset.Value>(); attrs.set(asset.Tag.SECRET, bytes);
-        await asset.update(mineruAssetAlias(MINERU_TOKEN_ALIAS), attrs);
-      } else { await this.addSecret(MINERU_TOKEN_ALIAS, bytes); }
-      const finalStatus: DocumentCredentialStatus = await this.status();
-      if (finalStatus !== DocumentCredentialStatus.Configured) { throw new DocumentParseFailure('安全存储确认失败', '设置'); }
+        await Promise.resolve().then((): Promise<void> => this.assetStore.update(mineruAssetAlias(MINERU_TOKEN_ALIAS), attrs))
+          .catch((error: BusinessError): void => { throw mineruAssetFailure(error, '凭据更新'); });
+      } else { await this.addSecret(MINERU_TOKEN_ALIAS, bytes, '凭据新增'); }
+      let finalStatus: DocumentCredentialStatus;
+      try { finalStatus = await this.checkedStatus('保存后属性确认'); }
+      catch (error) {
+        const category: string = error instanceof DocumentParseFailure ? `写入已返回，状态未确认：${error.category}` : '写入已返回，状态未确认';
+        throw new DocumentParseFailure(category, '保存后属性确认', error instanceof DocumentParseFailure ? error.serviceCode : '');
+      }
+      if (finalStatus !== DocumentCredentialStatus.Configured) { throw new DocumentParseFailure('写入已返回，状态未确认：记录缺失', '保存后属性确认'); }
       return finalStatus;
-    } catch { throw new DocumentParseFailure('安全存储写入失败或设备锁定', '设置'); }
+    } catch (error) {
+      if (error instanceof DocumentParseFailure) { throw error; }
+      throw new DocumentParseFailure('安全存储操作失败', '凭据保存');
+    }
     finally { bytes.fill(0); this.clearTransient(); }
   }
   async remove(): Promise<DocumentCredentialStatus> {
     try {
-      const state: DocumentCredentialStatus = await this.status();
-      if (state === DocumentCredentialStatus.Unavailable) { throw new DocumentParseFailure('安全存储不可用', '设置'); }
-      if (state === DocumentCredentialStatus.Configured) { await asset.remove(mineruAssetAlias(MINERU_TOKEN_ALIAS)); }
-      const finalStatus: DocumentCredentialStatus = await this.status();
-      if (finalStatus !== DocumentCredentialStatus.Missing) { throw new DocumentParseFailure('凭据删除未确认', '设置'); }
+      const state: DocumentCredentialStatus = await this.checkedStatus('删除前属性查询');
+      if (state === DocumentCredentialStatus.Configured) {
+        await Promise.resolve().then((): Promise<void> => this.assetStore.remove(mineruAssetAlias(MINERU_TOKEN_ALIAS)))
+          .catch((error: BusinessError): void => { throw mineruAssetFailure(error, '凭据删除'); });
+      }
+      const finalStatus: DocumentCredentialStatus = await this.checkedStatus('删除后属性确认');
+      if (finalStatus !== DocumentCredentialStatus.Missing) { throw new DocumentParseFailure('凭据删除未确认', '删除后属性确认'); }
       return finalStatus;
-    } catch { throw new DocumentParseFailure('安全存储删除失败或设备锁定', '设置'); }
+    } catch (error) {
+      if (error instanceof DocumentParseFailure) { throw error; }
+      throw new DocumentParseFailure('安全存储删除失败', '凭据删除');
+    }
     finally { this.clearTransient(); }
   }
   private async secret(alias: string): Promise<Uint8Array> {
-    const rows: asset.AssetMap[] = await asset.query(mineruAssetQuery(alias, asset.ReturnType.ALL));
+    const rows: asset.AssetMap[] = await this.assetStore.query(mineruAssetQuery(alias, asset.ReturnType.ALL));
     if (rows.length !== 1) { throw new DocumentParseFailure('安全凭据不可用', '认证'); }
     const raw: asset.Value | undefined = rows[0].get(asset.Tag.SECRET);
     if (!(raw instanceof Uint8Array)) { throw new DocumentParseFailure('安全凭据类型非法', '认证'); }
@@ -94,7 +139,11 @@ export class MineruCredentialStore implements MineruCredentialPort {
       check(); const token: string = util.TextDecoder.create('utf-8', { fatal: true }).decodeToString(bytes);
       documentValidateToken(token);
       const headers: rcp.RequestHeaders = { 'authorization': `Bearer ${token}`, 'content-type': 'application/json', 'accept': 'application/json' };
-      request.headers = headers; check(); return await session.fetch(request);
+      request.headers = headers; check(); return await Promise.resolve().then((): Promise<rcp.Response> => session.fetch(request)).catch((error: BusinessError): rcp.Response => {
+        if (error instanceof DocumentParseFailure) { throw new DocumentParseFailure(error.category, error.stage, error.serviceCode); }
+        const code: string = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? `${error.code}` : '';
+        throw new DocumentParseFailure('控制请求网络或TLS失败', '控制请求', code);
+      });
     } catch (error) { if (error instanceof DocumentParseFailure) { throw error; } throw new DocumentParseFailure('控制请求失败、鉴权或网络不可用', '控制请求'); }
     finally {
       bytes.fill(0); request.headers = undefined;
@@ -103,11 +152,11 @@ export class MineruCredentialStore implements MineruCredentialPort {
     }
   }
   private async key(allowCreate: boolean): Promise<cryptoFramework.SymKey> {
-    const attrs: asset.AssetMap[] = await mineruAttributes(MINERU_KEY_ALIAS);
+    const attrs: asset.AssetMap[] = await mineruAttributes(this.assetStore, MINERU_KEY_ALIAS);
     if (attrs.length === 0) {
       if (!allowCreate) { throw new DocumentParseFailure('原地址密钥缺失，租约不可恢复', '安全存储'); }
       const random: cryptoFramework.DataBlob = await cryptoFramework.createRandom().generateRandom(32);
-      try { await this.addSecret(MINERU_KEY_ALIAS, random.data); } finally { random.data.fill(0); }
+      try { await this.addSecret(MINERU_KEY_ALIAS, random.data, '地址密钥新增'); } finally { random.data.fill(0); }
     } else if (attrs.length !== 1 || attrs[0].get(asset.Tag.ACCESSIBILITY) !== asset.Accessibility.DEVICE_UNLOCKED || attrs[0].get(asset.Tag.SYNC_TYPE) !== asset.SyncType.NEVER) { throw new DocumentParseFailure('地址密钥身份异常', '安全存储'); }
     const bytes: Uint8Array = await this.secret(MINERU_KEY_ALIAS);
     try {

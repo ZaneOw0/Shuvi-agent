@@ -1,26 +1,48 @@
 import { Theme } from '../../components/Theme';
-import { DocumentParseViewState, DocumentCredentialStatus, DocumentOriginal, DocumentTestAcknowledgement, DocumentParseTask, DocumentParseResultEnvelope } from '../domain/DocumentParseModels';
+import { DocumentParseViewState, DocumentCredentialStatus, DocumentOriginal, DocumentTestAcknowledgement, DocumentParseTask, DocumentParseResultEnvelope, DocumentParseStage } from '../domain/DocumentParseModels';
 import { DocumentParseService } from '../application/DocumentParseService';
 
 @Component
 export struct DocumentParseView {
-  @Link parseState: DocumentParseViewState;
+  @Link @Watch('updateTaskRows') parseState: DocumentParseViewState;
   @Prop settingsMode: boolean = true;
   service: DocumentParseService | undefined = undefined;
   onClose: () => void = (): void => {};
   @Prop @Watch('clearSecret') clearEpoch: number = 0;
   @State private tokenInput: string = '';
+  @State private credentialFeedback: string = '';
   @State private resumeId: string = '';
   @State private deleteId: string = '';
   @State private slotConfirm: boolean = false;
   @State private showSettings: boolean = true;
+  @State private taskRows: DocumentParseTaskPresentation[] = [];
   private tokenController: TextInputController = new TextInputController();
   clearSecret(): void { this.tokenInput = ''; this.tokenController.stopEditing(); }
-  aboutToAppear(): void { this.showSettings = this.settingsMode; }
+  aboutToAppear(): void {
+    this.showSettings = this.settingsMode;
+    this.updateTaskRows();
+    if (this.service === undefined) { this.credentialFeedback = '安全配置服务不可用，保存未执行'; }
+  }
   aboutToDisappear(): void { this.clearSecret(); this.service?.clearInput(); }
+  updateTaskRows(): void {
+    const next: DocumentParseTaskPresentation[] = [];
+    for (const task of this.parseState.snapshot.tasks) {
+      const prior: DocumentParseTaskPresentation | undefined = this.taskRows.find((row: DocumentParseTaskPresentation): boolean => row.taskId === task.id);
+      const row: DocumentParseTaskPresentation = prior ?? new DocumentParseTaskPresentation();
+      const original: DocumentOriginal | undefined = this.parseState.snapshot.originals.find((o: DocumentOriginal): boolean => o.id === task.originalId);
+      row.update(task, original?.bytes ?? 0, original?.title ?? task.dataId); next.push(row);
+    }
+    this.taskRows = next;
+  }
   private async saveCredential(): Promise<void> {
-    let input: string = this.tokenInput; this.clearSecret();
-    try { await this.service?.saveToken(input, this.parseState.credential === DocumentCredentialStatus.Configured); }
+    let input: string = this.tokenInput;
+    const service: DocumentParseService | undefined = this.service;
+    const replace: boolean = this.parseState.credential === DocumentCredentialStatus.Configured;
+    this.credentialFeedback = ''; this.clearSecret();
+    try {
+      if (service === undefined) { this.credentialFeedback = '安全配置服务不可用，保存未执行'; return; }
+      await service.saveToken(input, replace);
+    } catch { this.credentialFeedback = '安全配置动作失败，未确认保存；请重新打开设置查看状态'; }
     finally { input = ''; this.clearSecret(); }
   }
   build() {
@@ -33,6 +55,10 @@ export struct DocumentParseView {
         Button('引擎设置', { type: ButtonType.Normal }).onClick((): void => { this.clearSecret(); this.service?.clearInput(); this.showSettings = true; })
         Button('解析准备 / 任务', { type: ButtonType.Normal }).onClick((): void => { this.clearSecret(); this.service?.clearInput(); this.showSettings = false; })
       }.width('100%')
+      Text(this.parseState.message).fontSize(13).fontColor(Theme.muted).width('100%')
+      if (this.credentialFeedback.length > 0) {
+        Text(this.credentialFeedback).fontSize(13).fontColor(Theme.amber).width('100%')
+      }
       if (this.showSettings) {
       Text(this.parseState.credential).fontColor(Theme.muted).width('100%')
       TextInput({ text: this.tokenInput, placeholder: '输入 Token', controller: this.tokenController })
@@ -40,13 +66,12 @@ export struct DocumentParseView {
         .enableAutoFill(false).enablePreviewText(false)
         .maxLength(1025).onChange((text: string): void => { this.tokenInput = text; })
       Row({ space: 12 }) {
-        Button('保存 / 更新').enabled(!this.parseState.busy && this.tokenInput.length > 0)
+        Button('保存 / 更新').enabled(this.service !== undefined && !this.parseState.busy && this.tokenInput.length > 0)
           .onClick((): void => { this.saveCredential(); })
         Button('删除凭据').enabled(!this.parseState.busy && this.parseState.credential === DocumentCredentialStatus.Configured)
           .onClick((): void => { this.clearSecret(); this.service?.removeToken(); })
       }.width('100%')
       }
-      Text(this.parseState.message).fontSize(13).fontColor(Theme.muted).width('100%')
       Text(this.parseState.limitation).fontSize(13).fontColor(Theme.muted).width('100%')
       Text(this.service?.capabilitySummary() ?? '解析能力不可用').fontSize(13).fontColor(Theme.muted).width('100%')
       Row({ space: 12 }) {
@@ -57,41 +82,44 @@ export struct DocumentParseView {
       Text('普通个人资料外发门禁未通过。仅允许逐件非敏感免费测试；保存原件不代表同意上传。')
         .fontSize(13).fontColor(Theme.muted).width('100%')
       if (!this.showSettings) {
-      Button('选择文件，仅保存原件').enabled(!this.parseState.busy).onClick((): void => { this.service?.prepare(); })
-      ForEach(this.parseState.snapshot.originals, (original: DocumentOriginal) => {
-        DocumentParseOriginalRow({ original: original, service: this.service, refreshEpoch: this.parseState.inputEpoch,
-          submitBlockReason: this.service?.submitReason(original) ?? '解析能力不可用' })
-      }, (original: DocumentOriginal): string => original.id)
       Text('解析任务').fontSize(16).fontWeight(FontWeight.Medium).width('100%')
+      if (this.parseState.busy) {
+        Row({ space: 8 }) {
+          LoadingProgress().width(20).height(20)
+          Text(this.parseState.message).fontSize(13).layoutWeight(1)
+        }.width('100%')
+      }
       Button('暂停本机动作').onClick((): void => { this.clearSecret(); this.service?.pause(); })
       if (this.parseState.snapshot.occupancy.taskId.length > 0 && !this.parseState.snapshot.occupancy.terminalObserved) {
         Text('有未决云占用；本机暂停/删除不会解除。远端任务可能继续，留存与删除能力未知。').fontSize(13).fontColor(Theme.amber).width('100%')
         Button('核对原云任务').onClick((): void => { this.slotConfirm = true; })
       }
-      ForEach(this.parseState.snapshot.tasks, (task: DocumentParseTask) => {
-        Column({ space: 6 }) {
-          Text(task.stage).fontWeight(FontWeight.Medium).width('100%')
-          Text(`${task.dataId} · 查询 ${task.queries} 次 · ${task.extractedPages}/${task.totalPages || '未知'} 服务页`).fontSize(12).fontColor(Theme.muted).width('100%')
-          Text(task.failure).fontSize(12).fontColor(Theme.muted).width('100%')
-          Button('继续查询同一任务').enabled(!this.parseState.busy)
-            .onClick((): void => { this.resumeId = task.id; })
-        }.width('100%').alignItems(HorizontalAlign.Start)
-      }, (task: DocumentParseTask): string => task.id)
+      ForEach(this.taskRows, (row: DocumentParseTaskPresentation) => {
+        DocumentParseTaskRow({ taskRow: row, actionBusy: this.parseState.busy,
+          onResume: (id: string): void => { this.resumeId = id; } })
+      }, (row: DocumentParseTaskPresentation): string => row.taskId)
       ForEach(this.parseState.snapshot.results, (result: DocumentParseResultEnvelope) => {
         Column({ space: 6 }) {
-          Text('结果已接收，待结构校验').fontWeight(FontWeight.Medium).width('100%')
+          Text('解析服务成功，ZIP 已保存，内容待结构校验').fontWeight(FontWeight.Medium).width('100%')
           Text(`${result.bytes} 字节 · ${result.assetId}`).fontSize(12).width('100%')
+          Text(`${this.parseState.resultDirectory}/${result.assetId}`).fontSize(11).width('100%').wordBreak(WordBreak.BREAK_ALL)
+          Text(`任务 ${result.taskId} · 原件 SHA256 ${result.originalHash}`).fontSize(11).width('100%').wordBreak(WordBreak.BREAK_ALL)
           Text(`SHA256 ${result.hash}`).fontSize(11).width('100%')
-          Text(`接收时间 ${result.receivedAt} · 不可检索，未校验成员或CRC`).fontSize(12).fontColor(Theme.muted).width('100%')
+          Text(`接收时间 ${new Date(result.receivedAt).toLocaleString()} · 不可检索，未校验成员或CRC`).fontSize(12).fontColor(Theme.muted).width('100%')
         }.width('100%').alignItems(HorizontalAlign.Start)
       }, (result: DocumentParseResultEnvelope): string => result.assetId)
+      Button('选择文件，仅保存原件').enabled(!this.parseState.busy).onClick((): void => { this.service?.prepare(); })
+      ForEach(this.parseState.snapshot.originals, (original: DocumentOriginal) => {
+        DocumentParseOriginalRow({ original: original, service: this.service, refreshEpoch: this.parseState.inputEpoch,
+          submitBlockReason: this.service?.submitReason(original) ?? '解析能力不可用' })
+      }, (original: DocumentOriginal): string => original.id)
       Text('本机副本管理').fontSize(16).fontWeight(FontWeight.Medium).width('100%')
       ForEach(this.parseState.snapshot.originals, (saved: DocumentOriginal) => {
         Button(`删除本机副本：${saved.title}`, { type: ButtonType.Normal }).width('100%')
           .onClick((): void => { this.deleteId = saved.id; })
       }, (saved: DocumentOriginal): string => `delete-${saved.id}`)
       if (this.resumeId.length > 0 || this.slotConfirm) {
-        Text('确认当前凭据为先前同账号，继续查询已同意的同一非敏感免费测试任务；不重提原件。凭据已变时只能复核占用，不能自动下载。').fontSize(13).width('100%')
+         Text('确认当前凭据为先前同账号，查询同一测试任务，不申请新批次。仅当远端明确等待文件、原租约有效且原件授权未变时，对同一对象最多完整补传一次；凭据已变只能复核占用。').fontSize(13).width('100%')
         Row({ space: 12 }) {
           Button('确认继续').onClick((): void => {
             if (this.slotConfirm) { this.service?.inspectOccupancy(true); } else { this.service?.resume(this.resumeId, true); }
@@ -113,6 +141,61 @@ export struct DocumentParseView {
       }
       }
     }.padding(20).width('100%').alignItems(HorizontalAlign.Start)
+  }
+}
+
+@Observed
+class DocumentParseTaskPresentation {
+  taskId: string = ''; title: string = ''; stageText: string = ''; remoteText: string = '';
+  queryText: string = ''; uploadText: string = ''; downloadText: string = ''; pageText: string = '';
+  lastActionText: string = ''; failureText: string = ''; failureDetail: string = '';
+  uploading: boolean = false; downloading: boolean = false; terminal: boolean = false;
+  suppliedBytes: number = 0; originalBytes: number = 0; writtenBytes: number = 0; resultTotal: number = 0;
+  update(task: DocumentParseTask, originalBytes: number, title: string): void {
+    this.taskId = task.id; this.title = title; this.stageText = task.stage; this.remoteText = `云阶段 ${task.remote || '尚未观察'}`;
+    this.queryText = `累计查询 ${task.queries} 次 · 最后响应 ${task.lastQueryAt > 0 ? new Date(task.lastQueryAt).toLocaleString() : '未记录'}`;
+    this.uploading = task.stage === DocumentParseStage.Uploading; this.downloading = task.stage === DocumentParseStage.Downloading;
+    this.terminal = task.stage === DocumentParseStage.Received || task.stage === DocumentParseStage.RemoteFailed;
+    this.suppliedBytes = task.uploadBytes; this.originalBytes = originalBytes; this.writtenBytes = task.downloadBytes; this.resultTotal = task.downloadTotal;
+    this.uploadText = `本次已供给 SDK ${task.uploadBytes}/${originalBytes} 字节 · ${task.uploaded ? 'PUT 200 及原字节校验已确认' : '未确认上传成功'}`;
+    this.downloadText = `ZIP 本次实际写入 ${task.downloadBytes} 字节${task.downloadTotal > 0 ? ' / HTTP 长度 ' + task.downloadTotal : ' · 总长度未知'}`;
+    this.pageText = task.totalPages > 0 ? `服务报告 ${task.extractedPages}/${task.totalPages} 页` : '服务未报告页进度';
+    this.lastActionText = `${task.lastAction || task.checkpoint} · 同对象补传${task.recoveryUploadUsed ? '已耗用' : '未耗用'}`;
+    this.failureText = task.failure; this.failureDetail = task.failureStage.length > 0 ? `失败阶段 ${task.failureStage} · code ${task.failureCode || '未提供'}` : '';
+  }
+}
+
+@Component
+struct DocumentParseTaskRow {
+  @ObjectLink taskRow: DocumentParseTaskPresentation;
+  @Prop actionBusy: boolean = false;
+  onResume: (id: string) => void = (_id: string): void => {};
+  build() {
+    Column({ space: 6 }) {
+      Text(this.taskRow.title).fontSize(15).fontWeight(FontWeight.Medium).width('100%')
+      Text(this.taskRow.stageText).fontWeight(FontWeight.Medium).width('100%')
+      Text(this.taskRow.taskId).fontSize(11).fontColor(Theme.muted).width('100%').wordBreak(WordBreak.BREAK_ALL)
+      Text(this.taskRow.remoteText).fontSize(13).width('100%')
+      Text(this.taskRow.queryText).fontSize(12).fontColor(Theme.muted).width('100%')
+      Text(this.taskRow.uploadText).fontSize(12).width('100%')
+      if (this.taskRow.uploading && this.taskRow.originalBytes > 0) {
+        Progress({ value: this.taskRow.suppliedBytes, total: this.taskRow.originalBytes, type: ProgressType.Linear }).width('100%')
+      }
+      Text(this.taskRow.pageText).fontSize(12).fontColor(Theme.muted).width('100%')
+      Text(this.taskRow.downloadText).fontSize(12).width('100%')
+      if (this.taskRow.downloading && this.taskRow.resultTotal > 0) {
+        Progress({ value: this.taskRow.writtenBytes, total: this.taskRow.resultTotal, type: ProgressType.Linear }).width('100%')
+      }
+      Text(this.taskRow.lastActionText).fontSize(12).fontColor(Theme.muted).width('100%')
+      if (this.taskRow.failureText.length > 0) {
+        Text(this.taskRow.failureText).fontSize(13).fontColor(Theme.amber).width('100%')
+        Text(this.taskRow.failureDetail).fontSize(12).fontColor(Theme.muted).width('100%')
+      }
+      if (!this.taskRow.terminal) {
+        Button('继续查询同一任务').enabled(!this.actionBusy).onClick((): void => { this.onResume(this.taskRow.taskId); })
+      }
+    }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 10, bottom: 10 })
+      .border({ width: { bottom: 1 }, color: Theme.line })
   }
 }
 

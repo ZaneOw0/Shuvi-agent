@@ -110,6 +110,7 @@ export class DocumentResultSink {
   private md: cryptoFramework.Md = cryptoFramework.createMd('SHA256'); private tail: Promise<void> = Promise.resolve();
   private closed: boolean = false; private failed: boolean = false;
   private writing: boolean = false;
+  private writtenBytes: number = 0;
   constructor(root: string, temp: string, action: DocumentParseAction) { this.root = root; this.temp = temp; this.action = action; }
   private part(): string { return documentAssetPath(this.temp, `part-${this.action.task.id}`); }
   private target(): string { return documentAssetPath(this.root, `result-${this.action.task.id}`); }
@@ -118,7 +119,11 @@ export class DocumentResultSink {
     if (await fileIo.access(this.part()) || await fileIo.access(this.target())) { throw new DocumentParseFailure('结果唯一身份已存在', '下载'); }
     this.file = await fileIo.open(this.part(), fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.NOFOLLOW);
   }
-  actualBytes(): number { return this.cap.count; }
+  actualBytes(): number { return this.writtenBytes; }
+  async waitForWrites(): Promise<void> {
+    await this.tail;
+    if (this.failed || this.writing || this.writtenBytes !== this.cap.count) { throw new DocumentParseFailure('结果异步写入未完整', '下载'); }
+  }
   async write(buffer: ArrayBuffer): Promise<void> {
     this.action.cancel.check(); if (this.closed || this.failed || this.writing) { throw new DocumentParseFailure('结果写队列已关闭或SDK未等待异步回调', '下载'); }
     this.writing = true;
@@ -133,7 +138,8 @@ export class DocumentResultSink {
         while (written < block.length) {
           const rest: Uint8Array = block.slice(written); const options: WriteOptions = { offset: offset + at + written, length: rest.length };
           const n: number = await fileIo.write(this.file.fd, rest.buffer, options);
-          if (n < 1 || n > rest.length) { throw new DocumentParseFailure('结果实际写入不完整', '下载'); } written += n;
+           if (n < 1 || n > rest.length) { throw new DocumentParseFailure('结果实际写入不完整', '下载'); } written += n;
+           this.writtenBytes += n; this.action.task.downloadBytes = this.writtenBytes; this.action.onProgress();
         }
         const blob: cryptoFramework.DataBlob = { data: block }; await this.md.update(blob); at += block.length;
       }
@@ -143,7 +149,7 @@ export class DocumentResultSink {
     finally { this.writing = false; }
   }
   async finish(): Promise<DocumentParseResultEnvelope> {
-    await this.tail; this.action.cancel.check();
+    await this.waitForWrites(); this.action.cancel.check();
     if (this.file === undefined || this.failed || this.cap.count < 22) { throw new DocumentParseFailure('结果传输未完整', '下载'); }
     const stat: fileIo.Stat = await fileIo.stat(this.file.fd);
     if (!stat.isFile() || stat.size !== this.cap.count) { throw new DocumentParseFailure('结果实长不符', '下载'); }

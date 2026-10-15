@@ -11,6 +11,8 @@ import { documentSafeId, documentHashValid } from '../pipeline/DocumentParsePoli
 
 export const DOCUMENT_PARSE_STORE: string = 'shuvi_parse_stage_v1.db';
 const DOCUMENT_PARSE_LAYOUT: string = 'parse-stage-explicit-columns-v1';
+const DOCUMENT_TRANSFER_LAYOUT: string = 'parse-stage-transfer-additive-v2';
+const DOCUMENT_TRANSFER_DDL: string = 'CREATE TABLE task_transfer (task_id TEXT PRIMARY KEY,recovery_used INTEGER,request_started INTEGER,upload_bytes INTEGER,download_bytes INTEGER,download_total INTEGER,last_query INTEGER,last_action TEXT,failure_stage TEXT,failure_code TEXT)';
 const DOCUMENT_PARSE_DDL: string[] = [
   'CREATE TABLE parse_meta (id INTEGER PRIMARY KEY,layout TEXT,enabled INTEGER,revision INTEGER)',
   'CREATE TABLE original (id TEXT PRIMARY KEY,asset TEXT,title TEXT,hash TEXT,bytes INTEGER,format TEXT,version INTEGER,preflight TEXT,pages INTEGER,reason TEXT,saved INTEGER)',
@@ -80,7 +82,7 @@ function parseReadTask(rows: relationalStore.ResultSet): DocumentParseTask {
   t.extractedPages = parseRowNumber(rows, 'extracted'); t.totalPages = parseRowNumber(rows, 'total');
   if (!documentSafeId(t.id) || !documentSafeId(t.dataId) || !documentSafeId(t.originalId) || !documentSafeId(t.grantId) || t.batchId.length > 0 && !documentSafeId(t.batchId) ||
     t.uploadLease.length > 0 && !new RegExp('^lease-[a-zA-Z0-9_-]+$').test(t.uploadLease) || t.resultLease.length > 0 && !new RegExp('^lease-[a-zA-Z0-9_-]+$').test(t.resultLease) ||
-    !documentHashValid(t.hash) || t.version < 1 || t.queries > 90 || t.totalPages > 200 || t.extractedPages > t.totalPages) { throw new DocumentParseFailure('任务行非法', '任务库'); }
+    !documentHashValid(t.hash) || t.version < 1 || t.totalPages > 200 || t.extractedPages > t.totalPages) { throw new DocumentParseFailure('任务行非法', '任务库'); }
   return t;
 }
 export class DocumentParseRepository implements DocumentParseRepositoryPort {
@@ -107,12 +109,26 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
           await tx.execute('INSERT INTO remote_slot(id,task_id,data_id,batch_id,revision,state,terminal) VALUES(1,?,?,?,0,?,0)', ['', '', '', '']);
           await tx.commit(); store.version = 1;
         } catch { await tx.rollback(); throw new DocumentParseFailure('建库未完成', '持久化'); }
-      } else if (store.version !== 1 || ddl.length !== 7 || ddl.some((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) < 0)) {
-        throw new DocumentParseFailure('既有解析库版本或布局未知，拒绝覆盖/清库', '持久化');
+      } else {
+        const oldLayout: boolean = store.version === 1 && ddl.length === 7 && ddl.every((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) >= 0);
+        const extendedLayout: boolean = (store.version === 1 || store.version === 2) && ddl.length === 8 && ddl.every((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) >= 0 || statement === DOCUMENT_TRANSFER_DDL);
+        if (!oldLayout && !extendedLayout) { throw new DocumentParseFailure('既有解析库版本或布局未知，拒绝覆盖/清库', '持久化'); }
       }
       const meta: relationalStore.ResultSet = await store.querySql('SELECT layout FROM parse_meta WHERE id=1');
-      try { if (!meta.goToNextRow() || meta.getString(0) !== DOCUMENT_PARSE_LAYOUT || meta.goToNextRow()) { throw new DocumentParseFailure('布局标识未知', '持久化'); } }
+      let layout: string = '';
+      try { if (!meta.goToNextRow()) { throw new DocumentParseFailure('布局标识缺失', '持久化'); } layout = meta.getString(0); if (meta.goToNextRow()) { throw new DocumentParseFailure('布局标识重复', '持久化'); } }
       finally { meta.close(); }
+      if (layout === DOCUMENT_PARSE_LAYOUT && store.version === 1 && ddl.length <= 7) {
+        const migration: relationalStore.Transaction = await store.createTransaction();
+        try {
+          await migration.execute(DOCUMENT_TRANSFER_DDL);
+          await migration.execute("INSERT INTO task_transfer(task_id,recovery_used,request_started,upload_bytes,download_bytes,download_total,last_query,last_action,failure_stage,failure_code) SELECT id,0,0,0,0,0,0,'旧记录：实际PUT是否发出未知','','' FROM task");
+          await migration.execute('UPDATE parse_meta SET layout=? WHERE id=1', [DOCUMENT_TRANSFER_LAYOUT]);
+          await migration.commit();
+        } catch { await migration.rollback(); throw new DocumentParseFailure('增量迁移未完成，旧库未清空', '持久化'); }
+      } else if (layout !== DOCUMENT_TRANSFER_LAYOUT || ddl.length !== 8) { throw new DocumentParseFailure('布局标识未知', '持久化'); }
+      // Version finalization is restart-safe after a committed migration. No existing table or asset is replaced.
+      store.version = 2;
     } catch (error) { await store.close(); this.store = undefined; if (error instanceof DocumentParseFailure) { throw error; } throw new DocumentParseFailure('解析库打开失败，资料未清理', '持久化'); }
   }
   async load(): Promise<DocumentParseSnapshot> {
@@ -127,6 +143,19 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
     try { while (grants.goToNextRow()) { s.grants.push(parseReadGrant(grants)); } } finally { grants.close(); }
     const tasks: relationalStore.ResultSet = await store.querySql('SELECT id,original,data_id,batch_id,grant_id,hash,version,revision,stage,checkpoint,remote,epoch,queries,window_start,uploaded,upload_attempted,upload_lease,result_lease,failure,extracted,total FROM task');
     try { while (tasks.goToNextRow()) { s.tasks.push(parseReadTask(tasks)); } } finally { tasks.close(); }
+    const transfers: relationalStore.ResultSet = await store.querySql('SELECT task_id,recovery_used,request_started,upload_bytes,download_bytes,download_total,last_query,last_action,failure_stage,failure_code FROM task_transfer');
+    const transferIds: string[] = [];
+    try { while (transfers.goToNextRow()) {
+      const id: string = parseRowString(transfers, 'task_id'); const t: DocumentParseTask | undefined = s.tasks.find((task: DocumentParseTask): boolean => task.id === id);
+      if (t === undefined || transferIds.indexOf(id) >= 0) { throw new DocumentParseFailure('传输记录关联非法', '任务库'); } transferIds.push(id);
+      t.recoveryUploadUsed = parseRowBool(transfers, 'recovery_used'); t.uploadRequestStarted = parseRowBool(transfers, 'request_started');
+      t.uploadBytes = parseRowNumber(transfers, 'upload_bytes'); t.downloadBytes = parseRowNumber(transfers, 'download_bytes'); t.downloadTotal = parseRowNumber(transfers, 'download_total');
+      t.lastQueryAt = parseRowNumber(transfers, 'last_query'); t.lastAction = parseRowString(transfers, 'last_action');
+      t.failureStage = parseRowString(transfers, 'failure_stage'); t.failureCode = parseRowString(transfers, 'failure_code');
+      if (t.uploadBytes > DocumentParseBudget.originalBytes || t.downloadBytes > DocumentParseBudget.resultBytes || t.downloadTotal > DocumentParseBudget.resultBytes ||
+        t.lastAction.length > 300 || t.failureStage.length > 100 || !new RegExp('^[0-9-]{0,30}$').test(t.failureCode)) { throw new DocumentParseFailure('传输记录非法', '任务库'); }
+    } } finally { transfers.close(); }
+    if (transferIds.length !== s.tasks.length) { throw new DocumentParseFailure('任务传输记录缺失，拒绝重置', '任务库'); }
     const slot: relationalStore.ResultSet = await store.querySql('SELECT id,task_id,data_id,batch_id,revision,state,terminal FROM remote_slot');
     try {
       if (!slot.goToNextRow() || parseRowNumber(slot, 'id') !== 1) { throw new DocumentParseFailure('远端占用行缺失', '任务库'); }
@@ -160,10 +189,11 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
       const tx: relationalStore.Transaction = await this.requireStore().createTransaction();
       try {
         await tx.execute('UPDATE parse_meta SET enabled=?,revision=? WHERE id=1', [s.config.enabled ? 1 : 0, s.config.credentialRevision]);
-        for (const table of ['original', 'grant', 'task', 'result', 'cleanup']) { await tx.execute(`DELETE FROM ${table}`); }
+        for (const table of ['original', 'grant', 'task', 'task_transfer', 'result', 'cleanup']) { await tx.execute(`DELETE FROM ${table}`); }
         for (const o of s.originals) { await tx.execute('INSERT INTO original(id,asset,title,hash,bytes,format,version,preflight,pages,reason,saved) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [o.id,o.assetId,o.title,o.hash,o.bytes,o.format,o.version,o.preflight,o.pages,o.preflightReason,o.savedAt]); }
         for (const g of s.grants) { await tx.execute('INSERT INTO grant(id,original,hash,version,format,revision,policy,parameters,full_file,images,nonsensitive,privacy_unknown,free,issued,revoked) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [g.id,g.originalId,g.hash,g.version,g.format,g.credentialRevision,g.policy,g.parameters,g.acknowledgement.fullFile ? 1 : 0,g.acknowledgement.embeddedImages ? 1 : 0,g.acknowledgement.nonSensitive ? 1 : 0,g.acknowledgement.privacyUnknown ? 1 : 0,g.acknowledgement.freeEligible ? 1 : 0,g.issuedAt,g.revoked ? 1 : 0]); }
         for (const t of s.tasks) { await tx.execute('INSERT INTO task(id,original,data_id,batch_id,grant_id,hash,version,revision,stage,checkpoint,remote,epoch,queries,window_start,uploaded,upload_attempted,upload_lease,result_lease,failure,extracted,total) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [t.id,t.originalId,t.dataId,t.batchId,t.grantId,t.hash,t.version,t.credentialRevision,t.stage,t.checkpoint,t.remote,t.epoch,t.queries,t.windowStart,t.uploaded ? 1 : 0,t.uploadAttempted ? 1 : 0,t.uploadLease,t.resultLease,t.failure,t.extractedPages,t.totalPages]); }
+        for (const t of s.tasks) { await tx.execute('INSERT INTO task_transfer(task_id,recovery_used,request_started,upload_bytes,download_bytes,download_total,last_query,last_action,failure_stage,failure_code) VALUES(?,?,?,?,?,?,?,?,?,?)', [t.id,t.recoveryUploadUsed ? 1 : 0,t.uploadRequestStarted ? 1 : 0,t.uploadBytes,t.downloadBytes,t.downloadTotal,t.lastQueryAt,t.lastAction,t.failureStage,t.failureCode]); }
         const o: DocumentRemoteOccupancy = s.occupancy;
         await tx.execute('UPDATE remote_slot SET task_id=?,data_id=?,batch_id=?,revision=?,state=?,terminal=? WHERE id=1', [o.taskId,o.dataId,o.batchId,o.credentialRevision,o.lastState,o.terminalObserved ? 1 : 0]);
         for (const r of s.results) { await tx.execute('INSERT INTO result(asset,task_id,data_id,original_hash,version,bytes,hash,received,status,complete,signature) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [r.assetId,r.taskId,r.dataId,r.originalHash,r.version,r.bytes,r.hash,r.receivedAt,r.status,r.completeTransport ? 1 : 0,r.signature ? 1 : 0]); }

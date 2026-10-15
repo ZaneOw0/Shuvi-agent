@@ -43,6 +43,7 @@ export class DocumentParseFailure extends Error {
 }
 export class DocumentParseCancellation {
   invalid: boolean = false;
+  reason: string = '';
   deadline: number = Date.now() + DocumentParseBudget.localMs;
   check(): void {
     if (this.invalid) { throw new DocumentParseFailure('已暂停或世代失效', '本机动作'); }
@@ -82,6 +83,9 @@ export class DocumentParseTask {
   remote: DocumentRemoteState = DocumentRemoteState.Unobserved;
   epoch: number = 0; queries: number = 0; windowStart: number = 0;
   uploaded: boolean = false; uploadAttempted: boolean = false;
+  recoveryUploadUsed: boolean = false; uploadRequestStarted: boolean = false;
+  uploadBytes: number = 0; downloadBytes: number = 0; downloadTotal: number = 0;
+  lastQueryAt: number = 0; lastAction: string = ''; failureStage: string = ''; failureCode: string = '';
   uploadLease: string = ''; resultLease: string = ''; failure: string = '';
   extractedPages: number = 0; totalPages: number = 0;
 }
@@ -113,6 +117,7 @@ export class DocumentParseViewState {
   snapshot: DocumentParseSnapshot = new DocumentParseSnapshot();
   credential: DocumentCredentialStatus = DocumentCredentialStatus.Missing;
   message: string = ''; busy: boolean = false; inputEpoch: number = 0;
+  resultDirectory: string = '';
   limitation: string = 'PDF / DOCX / PPTX / XLSX 仅转发；产物结构、原生位置、索引均未验证';
 }
 export class DocumentAllocationReceipt { batchId: string = ''; leaseId: string = ''; }
@@ -124,6 +129,8 @@ export class DocumentParseAction {
   original: DocumentOriginal = new DocumentOriginal(); task: DocumentParseTask = new DocumentParseTask();
   grant: DocumentParseGrant = new DocumentParseGrant(); cancel: DocumentParseCancellation = new DocumentParseCancellation();
   onAllocation: (batchId: string) => Promise<void> = async (_batchId: string): Promise<void> => { throw new DocumentParseFailure('申请身份持久化回调缺失', '申请'); };
+  onUploadStarting: () => Promise<void> = async (): Promise<void> => { throw new DocumentParseFailure('上传持久化回调缺失', '原件PUT'); };
+  onProgress: () => void = (): void => {};
 }
 export interface DocumentParseStateListener { changed(): void; }
 
@@ -166,6 +173,9 @@ export function documentCopySnapshot(source: DocumentParseSnapshot): DocumentPar
     const copy: DocumentParseTask = new DocumentParseTask(); copy.id = t.id; copy.originalId = t.originalId; copy.dataId = t.dataId; copy.batchId = t.batchId; copy.grantId = t.grantId;
     copy.hash = t.hash; copy.version = t.version; copy.credentialRevision = t.credentialRevision; copy.stage = t.stage; copy.checkpoint = t.checkpoint; copy.remote = t.remote;
     copy.epoch = t.epoch; copy.queries = t.queries; copy.windowStart = t.windowStart; copy.uploaded = t.uploaded; copy.uploadAttempted = t.uploadAttempted;
+    copy.recoveryUploadUsed = t.recoveryUploadUsed; copy.uploadRequestStarted = t.uploadRequestStarted;
+    copy.uploadBytes = t.uploadBytes; copy.downloadBytes = t.downloadBytes; copy.downloadTotal = t.downloadTotal;
+    copy.lastQueryAt = t.lastQueryAt; copy.lastAction = t.lastAction; copy.failureStage = t.failureStage; copy.failureCode = t.failureCode;
     copy.uploadLease = t.uploadLease; copy.resultLease = t.resultLease; copy.failure = t.failure; copy.extractedPages = t.extractedPages; copy.totalPages = t.totalPages; s.tasks.push(copy);
   }
   for (const r of source.results) {

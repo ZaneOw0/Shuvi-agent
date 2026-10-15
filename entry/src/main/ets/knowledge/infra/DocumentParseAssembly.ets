@@ -23,6 +23,7 @@ export class DocumentParseAssembly implements DocumentParseStateListener {
     const credential: MineruCredentialStore = new MineruCredentialStore(context.filesDir);
     const assets: DocumentFileAdapter = new DocumentFileAdapter(context);
     this.service = new DocumentParseService(credential, new DocumentParseRepository(context));
+    this.service.state.resultDirectory = `${context.filesDir}/knowledge_parse_v1`;
     this.service.attachLocal(assets, assets, new DocumentPdfPreflight(context.filesDir));
     this.service.attachRemote(new MineruTransportAdapter(credential, assets, context.filesDir), new DocumentPlatformClock());
     this.onChanged = changed; this.service.subscribe(this); DocumentParseAssembly.sessions.push(this);

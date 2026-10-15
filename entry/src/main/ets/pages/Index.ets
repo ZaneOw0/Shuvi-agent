@@ -133,7 +133,7 @@ struct Index {
     }
   }
   private closeParse(): void {
-    this.parseService?.clearInput(); this.parseService?.pause(); this.parseOpen = false;
+    this.parseService?.clearInput(); this.parseOpen = false;
   }
   private async openParse(settings: boolean): Promise<void> {
     this.parseSettings = settings; this.parseOpen = true; this.scroller.scrollEdge(Edge.Top);
