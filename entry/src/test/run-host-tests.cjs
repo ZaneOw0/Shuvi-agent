@@ -27,9 +27,13 @@ const sources = [
 const optionalSources = [
   'knowledge/pipeline/TextNormalizer', 'knowledge/pipeline/MarkdownStructure',
   'knowledge/pipeline/StructuredChunker', 'knowledge/pipeline/QueryPreparation',
-  'knowledge/application/TextKnowledgeService'
+  'knowledge/application/TextKnowledgeService',
+  'knowledge/domain/DocumentParseModels', 'knowledge/domain/DocumentParsePorts',
+  'knowledge/pipeline/DocumentParsePolicy', 'knowledge/pipeline/MineruProtocolCodec',
+  'knowledge/application/DocumentParseService'
 ].map(s => `entry/src/main/ets/${s}.ets`).concat([
-  'entry/src/test/TextPipelineCases.ets', 'entry/src/test/TextServiceCases.ets'
+  'entry/src/test/TextPipelineCases.ets', 'entry/src/test/TextServiceCases.ets',
+  'entry/src/test/DocumentParseCases.ets', 'entry/src/test/DocumentParseServiceCases.ets'
 ]);
 for (const source of optionalSources) {
   if (fs.existsSync(path.join(project, source))) sources.push(source);
@@ -139,12 +143,42 @@ for (const testCase of chunkerCases()) {
 for (const testCase of corpusCases(corpusDocs)) {
   test(`语料 · ${testCase.name}`, testCase.run);
 }
-for (const suite of ['TextPipeline', 'TextService']) {
+for (const suite of ['TextPipeline', 'TextService', 'DocumentParse', 'DocumentParseService']) {
   const source = path.join(project, `entry/src/test/${suite}Cases.ets`);
   if (fs.existsSync(source)) {
     const module = require(path.join(outputRoot, `entry/src/test/${suite}Cases.js`));
-    for (const item of module[suite === 'TextPipeline' ? 'textPipelineCases' : 'textServiceCases']()) {
+    const entrypoint = { TextPipeline: 'textPipelineCases', TextService: 'textServiceCases',
+      DocumentParse: 'documentParseCases', DocumentParseService: 'documentParseServiceCases' }[suite];
+    for (const item of module[entrypoint]()) {
       test(`${suite} · ${item.name}`, item.run);
     }
   }
 }
+
+test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => {
+  const protectedFiles = {
+    'entry/src/main/ets/knowledge/domain/TextKnowledgeModels.ets': '530e82f28659c7febdfe74c9e7c7f265c0217ba9ed933fad5b168a0310c1be7f',
+    'entry/src/main/ets/knowledge/domain/TextKnowledgePorts.ets': 'a49b943f8e879ef9a7176f2779702a0e679de0851dd59169080b835c1c17f9a2',
+    'entry/src/main/ets/knowledge/application/TextKnowledgeService.ets': '7bb0f0bd519fff14ea1ba869a4f0267a956ebffdd8123ab8553ddc8bd34da0b5',
+    'entry/src/main/ets/knowledge/infra/TextRdbRepository.ets': '7c19a1f442a0c5953e52591f565996066cc032a8befd696d7081938338d434bb',
+    'entry/src/main/ets/knowledge/infra/TextFileAdapter.ets': 'c65bc087f958b28ad04dcf18bf3c43482defd98a3a8ff9b96cdfaa4fa4d7200a',
+    'entry/src/main/ets/knowledge/infra/TextKnowledgeAssembly.ets': 'bcb885a767a3679f1182bfe883630f8e9d3d2cfd50574371e09260082b763f3d',
+    'entry/src/main/ets/knowledge/pipeline/TextNormalizer.ets': 'dc4e861e99dc69883350b4d23e9289e455e9a3e7bb8eb880a7e6dad8595a3760',
+    'entry/src/test/eval/text-m1-golden.json': 'f060e0ed13451a56e89625b32946b906b718d9238996bc85d30e8edd7e1f9494',
+    'scripts/dev-run-mac.sh': 'c8d74af19a7cf3fb702ee50770507394f03e0c6a2f15ad5fdb4f09720dd19216',
+    'scripts/capture-test-log.sh': '9ce0bc2acdda0736175d65fad4389493c7c180960fa524c79bc9a8528a089526',
+    'oh-package.json5': '8707e54246dcaad85b94274888d84f0b7f0dabcc074d5d092f80d4e2fef87657'
+  };
+  for (const file of Object.keys(protectedFiles)) {
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(path.join(project, file))).digest('hex');
+    if (hash !== protectedFiles[file]) throw new Error('Protected baseline bytes changed');
+  }
+  for (const source of sources.filter(s => /knowledge\/(domain|pipeline|application)\/(Document|Mineru)/.test(s))) {
+    const text = fs.readFileSync(path.join(project, source), 'utf8');
+    if (/@kit\.|\b(any|unknown|as)\b|JSON\.parse|TextNormalizer|TextKnowledgeService/.test(text)) throw new Error('Pure M2 boundary violated');
+  }
+  const permissions = fs.readFileSync(path.join(project, 'entry/src/main/module.json5'), 'utf8').match(/ohos\.permission\.[A-Z_]+/g) || [];
+  if (JSON.stringify(permissions) !== JSON.stringify(['ohos.permission.INTERNET'])) throw new Error('Permission scope changed');
+  const backup = JSON.parse(fs.readFileSync(path.join(project, 'entry/src/main/resources/base/profile/backup_config.json'), 'utf8'));
+  if (backup.allowToBackupRestore !== true || backup.excludes.some(p => !p.includes('knowledge_parse_v1') && !p.includes('shuvi_parse_stage_v1.db'))) throw new Error('M1 backup isolation changed');
+});

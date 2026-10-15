@@ -16,6 +16,7 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { DocumentParseAssembly } from '../knowledge/infra/DocumentParseAssembly';
 
 const DOMAIN = 0x0000;
 
@@ -30,6 +31,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    DocumentParseAssembly.background();
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
   }
 
@@ -57,6 +59,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onBackground(): void {
+    DocumentParseAssembly.background();
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
   }

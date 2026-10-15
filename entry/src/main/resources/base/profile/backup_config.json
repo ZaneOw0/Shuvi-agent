@@ -1,3 +1,11 @@
 {
-  "allowToBackupRestore": true
+  "allowToBackupRestore": true,
+  "excludes": [
+    "/data/storage/el2/base/files/knowledge_parse_v1/",
+    "/data/storage/el2/base/cache/knowledge_parse_v1/",
+    "/data/storage/el2/database/rdb/shuvi_parse_stage_v1.db",
+    "/data/storage/el2/database/rdb/shuvi_parse_stage_v1.db-wal",
+    "/data/storage/el2/database/rdb/shuvi_parse_stage_v1.db-shm",
+    "/data/storage/el2/database/rdb/shuvi_parse_stage_v1.db-journal"
+  ]
 }

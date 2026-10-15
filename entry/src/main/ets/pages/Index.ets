@@ -19,6 +19,10 @@ import { TextKnowledgeView } from '../knowledge/ui/TextKnowledgeView';
 import { TextKnowledgeAssembly } from '../knowledge/infra/TextKnowledgeAssembly';
 import { TextKnowledgeService } from '../knowledge/application/TextKnowledgeService';
 import { TextViewState } from '../knowledge/domain/TextKnowledgeModels';
+import { DocumentParseAssembly } from '../knowledge/infra/DocumentParseAssembly';
+import { DocumentParseService } from '../knowledge/application/DocumentParseService';
+import { DocumentParseViewState } from '../knowledge/domain/DocumentParseModels';
+import { DocumentParseView } from '../knowledge/ui/DocumentParseView';
 import {
   AssistantService, CalendarDraft, ChatMessage, DEMO_SCENARIOS, DemoScenario,
   OperationResult, OperationState, RequestState
@@ -45,6 +49,11 @@ struct Index {
   @State knowledgeState: TextViewState = new TextViewState();
   @State knowledgeService: TextKnowledgeService | undefined = undefined;
   private knowledgeAssembly: TextKnowledgeAssembly | undefined = undefined;
+  @State parseState: DocumentParseViewState = new DocumentParseViewState();
+  @State parseService: DocumentParseService | undefined = undefined;
+  @State parseOpen: boolean = false;
+  @State parseSettings: boolean = false;
+  private parseAssembly: DocumentParseAssembly | undefined = undefined;
   private service: AssistantService = new MockAssistantService();
   private requestId: string = '';
   private operationId: string = '';
@@ -63,9 +72,11 @@ struct Index {
     this.alive = false;
     this.service.cancel(this.requestId);
     this.knowledgeAssembly?.close();
+    this.parseAssembly?.close();
   }
 
   onBackPress(): boolean {
+    if (this.parseOpen) { this.closeParse(); return true; }
     if (this.tab === 2 && this.knowledgeService?.back()) { return true; }
     if (this.noticeTitle.length > 0) {
       this.noticeTitle = '';
@@ -94,6 +105,7 @@ struct Index {
   }
 
   private changeTab(index: number): void {
+    if (index !== this.tab && this.parseOpen) { this.closeParse(); }
     if (index !== this.tab && this.generating) {
       this.cancelGeneration();
     }
@@ -119,6 +131,21 @@ struct Index {
       await assembly.close(); this.knowledgeAssembly = undefined; this.knowledgeService = undefined;
       this.knowledgeState = assembly.service.viewState(); this.knowledgeState.message = '用户知识库打开失败，资料保留，可重试';
     }
+  }
+  private closeParse(): void {
+    this.parseService?.clearInput(); this.parseService?.pause(); this.parseOpen = false;
+  }
+  private async openParse(settings: boolean): Promise<void> {
+    this.parseSettings = settings; this.parseOpen = true; this.scroller.scrollEdge(Edge.Top);
+    if (this.parseAssembly !== undefined) { this.parseService?.clearInput(); return; }
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) { this.parseState.message = '本机上下文不可用，解析准备未打开'; return; }
+    const assembly: DocumentParseAssembly = new DocumentParseAssembly(context, (): void => {
+      if (this.alive) { this.parseState = assembly.service.viewState(); }
+    });
+    this.parseAssembly = assembly;
+    try { await assembly.initialize(); this.parseService = assembly.service; this.parseState = assembly.service.viewState(); }
+    catch { await assembly.close(); this.parseAssembly = undefined; this.parseService = undefined; this.parseState = assembly.service.viewState(); }
   }
 
   private addMessage(text: string, isUser: boolean = false): void {
@@ -468,7 +495,7 @@ struct Index {
     Column() {
       this.header()
       Row() {
-        Text(this.tab === 2 ? '本机真实资料 · 重启后保留 · 未同步' : '演示数据 · 重启后重置')
+        Text(this.tab === 2 || this.parseOpen ? '本机真实资料 · 重启后保留 · 未同步' : '演示数据 · 重启后重置')
           .fontSize(11).fontColor(Theme.muted).layoutWeight(1)
         Button(`演示场景：${this.scenario}`, { type: ButtonType.Normal }).fontSize(11)
           .fontColor(Theme.accent).backgroundColor(Color.Transparent).constraintSize({ minHeight: 36 })
@@ -491,7 +518,19 @@ struct Index {
               .backgroundColor(Theme.surface).borderRadius(18).margin({ top: 16, bottom: 20 })
           } else if (this.showScenarios) {
             this.scenarioPanel()
-          } else if (this.tab === 0) {
+           } else if (this.parseOpen) {
+             if (this.parseService !== undefined) {
+               DocumentParseView({ parseState: this.parseState, service: this.parseService,
+                 settingsMode: this.parseSettings, clearEpoch: this.parseState.inputEpoch,
+                 onClose: (): void => { this.closeParse(); } })
+             } else {
+               Column({ space: 12 }) {
+                 Text(this.parseState.message || '正在打开独立解析准备区…').fontSize(14).width('100%')
+                 Button('重试打开解析准备').onClick((): void => { this.openParse(this.parseSettings); })
+                 Button('返回').onClick((): void => { this.closeParse(); })
+               }.width('100%').padding(20)
+             }
+           } else if (this.tab === 0) {
             this.assistant()
           } else if (this.tab === 1) {
             if (this.calendarOpen) {
@@ -503,8 +542,9 @@ struct Index {
             }
           } else if (this.tab === 2) {
             if (this.knowledgeService !== undefined) {
-              TextKnowledgeView({ knowledgeState: this.knowledgeState, service: this.knowledgeService,
-                onRetryOpen: (): void => { this.openKnowledge(); } })
+               TextKnowledgeView({ knowledgeState: this.knowledgeState, service: this.knowledgeService,
+                 onRetryOpen: (): void => { this.openKnowledge(); },
+                 onParsePrepare: (): void => { this.openParse(false); } })
             } else {
               Column({ space: 12 }) {
                 Text(this.knowledgeState.message.length > 0 ? this.knowledgeState.message : '正在打开本机知识库…')
@@ -514,7 +554,8 @@ struct Index {
               }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 20, bottom: 20 })
             }
           } else {
-            ProfilePage({ onNotice: (title: string, message: string) => this.notice(title, message) })
+            ProfilePage({ onNotice: (title: string, message: string) => this.notice(title, message),
+              onParseSettings: (): void => { this.openParse(true); } })
           }
         }.width('100%').constraintSize({ maxWidth: this.tab === 2 ? 1200 : 640 }).padding({ left: 20, right: 20 })
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)

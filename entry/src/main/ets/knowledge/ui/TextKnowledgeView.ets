@@ -7,6 +7,7 @@ export struct TextKnowledgeView {
   @Link knowledgeState: TextViewState;
   service: TextKnowledgeService | undefined = undefined;
   onRetryOpen: () => void = (): void => {};
+  onParsePrepare: () => void = (): void => {};
   @State renameId: string = '';
   @State renameText: string = '';
   @State confirmationIds: string[] = [];
@@ -140,6 +141,7 @@ export struct TextKnowledgeView {
         Button('历史', { type: ButtonType.Normal }).onClick(() => this.service?.loadHistory(false))
         Button(this.knowledgeState.busy ? '处理中…' : '导入资料', { type: ButtonType.Normal })
           .enabled(!this.knowledgeState.busy).onClick(() => this.service?.importFiles())
+        Button('复杂文件解析准备', { type: ButtonType.Normal }).onClick((): void => { this.onParsePrepare(); })
       }.width('100%')
       Row({ space: 8 }) {
         Checkbox({ name: 'include-archived' }).select(this.knowledgeState.includeArchived)
