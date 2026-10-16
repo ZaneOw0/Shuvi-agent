@@ -12,7 +12,12 @@ import { documentSafeId, documentHashValid } from '../pipeline/DocumentParsePoli
 export const DOCUMENT_PARSE_STORE: string = 'shuvi_parse_stage_v1.db';
 const DOCUMENT_PARSE_LAYOUT: string = 'parse-stage-explicit-columns-v1';
 const DOCUMENT_TRANSFER_LAYOUT: string = 'parse-stage-transfer-additive-v2';
+const DOCUMENT_SLOT_RETIRE_LAYOUT: string = 'parse-stage-slot-retire-additive-v3';
+const DOCUMENT_SLOT_RETIRE_ALTER: string = 'ALTER TABLE remote_slot ADD COLUMN retired INTEGER DEFAULT 0';
 const DOCUMENT_TRANSFER_DDL: string = 'CREATE TABLE task_transfer (task_id TEXT PRIMARY KEY,recovery_used INTEGER,request_started INTEGER,upload_bytes INTEGER,download_bytes INTEGER,download_total INTEGER,last_query INTEGER,last_action TEXT,failure_stage TEXT,failure_code TEXT)';
+function documentSlotRetireDDL(statement: string): boolean {
+  return statement.startsWith('CREATE TABLE remote_slot (') && new RegExp(',\\s*retired\\s+INTEGER\\s+DEFAULT\\s+0\\s*\\)$').test(statement);
+}
 const DOCUMENT_PARSE_DDL: string[] = [
   'CREATE TABLE parse_meta (id INTEGER PRIMARY KEY,layout TEXT,enabled INTEGER,revision INTEGER)',
   'CREATE TABLE original (id TEXT PRIMARY KEY,asset TEXT,title TEXT,hash TEXT,bytes INTEGER,format TEXT,version INTEGER,preflight TEXT,pages INTEGER,reason TEXT,saved INTEGER)',
@@ -112,7 +117,8 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
       } else {
         const oldLayout: boolean = store.version === 1 && ddl.length === 7 && ddl.every((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) >= 0);
         const extendedLayout: boolean = (store.version === 1 || store.version === 2) && ddl.length === 8 && ddl.every((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) >= 0 || statement === DOCUMENT_TRANSFER_DDL);
-        if (!oldLayout && !extendedLayout) { throw new DocumentParseFailure('既有解析库版本或布局未知，拒绝覆盖/清库', '持久化'); }
+        const retireLayout: boolean = (store.version === 2 || store.version === 3) && ddl.length === 8 && ddl.every((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) >= 0 || statement === DOCUMENT_TRANSFER_DDL || documentSlotRetireDDL(statement));
+        if (!oldLayout && !extendedLayout && !retireLayout) { throw new DocumentParseFailure('既有解析库版本或布局未知，拒绝覆盖/清库', '持久化'); }
       }
       const meta: relationalStore.ResultSet = await store.querySql('SELECT layout FROM parse_meta WHERE id=1');
       let layout: string = '';
@@ -124,11 +130,22 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
           await migration.execute(DOCUMENT_TRANSFER_DDL);
           await migration.execute("INSERT INTO task_transfer(task_id,recovery_used,request_started,upload_bytes,download_bytes,download_total,last_query,last_action,failure_stage,failure_code) SELECT id,0,0,0,0,0,0,'旧记录：实际PUT是否发出未知','','' FROM task");
           await migration.execute('UPDATE parse_meta SET layout=? WHERE id=1', [DOCUMENT_TRANSFER_LAYOUT]);
-          await migration.commit();
+          await migration.commit(); layout = DOCUMENT_TRANSFER_LAYOUT;
         } catch { await migration.rollback(); throw new DocumentParseFailure('增量迁移未完成，旧库未清空', '持久化'); }
-      } else if (layout !== DOCUMENT_TRANSFER_LAYOUT || ddl.length !== 8) { throw new DocumentParseFailure('布局标识未知', '持久化'); }
+      }
+      if (layout === DOCUMENT_TRANSFER_LAYOUT) {
+        const migration: relationalStore.Transaction = await store.createTransaction();
+        try {
+          await migration.execute(DOCUMENT_SLOT_RETIRE_ALTER);
+          await migration.execute('UPDATE parse_meta SET layout=? WHERE id=1', [DOCUMENT_SLOT_RETIRE_LAYOUT]);
+          await migration.commit(); layout = DOCUMENT_SLOT_RETIRE_LAYOUT;
+        } catch { await migration.rollback(); throw new DocumentParseFailure('停止跟踪迁移未完成，旧库未清空', '持久化'); }
+      }
+      if (layout !== DOCUMENT_SLOT_RETIRE_LAYOUT) { throw new DocumentParseFailure('布局标识未知', '持久化'); }
+      try { const probe: relationalStore.ResultSet = await store.querySql('SELECT retired FROM remote_slot WHERE id=1'); probe.close(); }
+      catch { throw new DocumentParseFailure('停止跟踪字段缺失，拒绝旧布局冒用', '持久化'); }
       // Version finalization is restart-safe after a committed migration. No existing table or asset is replaced.
-      store.version = 2;
+      store.version = 3;
     } catch (error) { await store.close(); this.store = undefined; if (error instanceof DocumentParseFailure) { throw error; } throw new DocumentParseFailure('解析库打开失败，资料未清理', '持久化'); }
   }
   async load(): Promise<DocumentParseSnapshot> {
@@ -156,11 +173,12 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
         t.lastAction.length > 300 || t.failureStage.length > 100 || !new RegExp('^[0-9-]{0,30}$').test(t.failureCode)) { throw new DocumentParseFailure('传输记录非法', '任务库'); }
     } } finally { transfers.close(); }
     if (transferIds.length !== s.tasks.length) { throw new DocumentParseFailure('任务传输记录缺失，拒绝重置', '任务库'); }
-    const slot: relationalStore.ResultSet = await store.querySql('SELECT id,task_id,data_id,batch_id,revision,state,terminal FROM remote_slot');
+    const slot: relationalStore.ResultSet = await store.querySql('SELECT id,task_id,data_id,batch_id,revision,state,terminal,retired FROM remote_slot');
     try {
       if (!slot.goToNextRow() || parseRowNumber(slot, 'id') !== 1) { throw new DocumentParseFailure('远端占用行缺失', '任务库'); }
       s.occupancy.taskId = parseRowString(slot, 'task_id'); s.occupancy.dataId = parseRowString(slot, 'data_id'); s.occupancy.batchId = parseRowString(slot, 'batch_id');
       s.occupancy.credentialRevision = parseRowNumber(slot, 'revision'); s.occupancy.lastState = parseStoredRemote(parseRowString(slot, 'state')); s.occupancy.terminalObserved = parseRowBool(slot, 'terminal');
+      s.occupancy.retired = parseRowBool(slot, 'retired');
       if (slot.goToNextRow() || s.occupancy.taskId.length > 0 && (!documentSafeId(s.occupancy.taskId) || !documentSafeId(s.occupancy.dataId)) || s.occupancy.batchId.length > 0 && !documentSafeId(s.occupancy.batchId)) { throw new DocumentParseFailure('远端占用身份非法', '任务库'); }
     } finally { slot.close(); }
     const results: relationalStore.ResultSet = await store.querySql('SELECT asset,task_id,data_id,original_hash,version,bytes,hash,received,status,complete,signature FROM result');
@@ -195,7 +213,7 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
         for (const t of s.tasks) { await tx.execute('INSERT INTO task(id,original,data_id,batch_id,grant_id,hash,version,revision,stage,checkpoint,remote,epoch,queries,window_start,uploaded,upload_attempted,upload_lease,result_lease,failure,extracted,total) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [t.id,t.originalId,t.dataId,t.batchId,t.grantId,t.hash,t.version,t.credentialRevision,t.stage,t.checkpoint,t.remote,t.epoch,t.queries,t.windowStart,t.uploaded ? 1 : 0,t.uploadAttempted ? 1 : 0,t.uploadLease,t.resultLease,t.failure,t.extractedPages,t.totalPages]); }
         for (const t of s.tasks) { await tx.execute('INSERT INTO task_transfer(task_id,recovery_used,request_started,upload_bytes,download_bytes,download_total,last_query,last_action,failure_stage,failure_code) VALUES(?,?,?,?,?,?,?,?,?,?)', [t.id,t.recoveryUploadUsed ? 1 : 0,t.uploadRequestStarted ? 1 : 0,t.uploadBytes,t.downloadBytes,t.downloadTotal,t.lastQueryAt,t.lastAction,t.failureStage,t.failureCode]); }
         const o: DocumentRemoteOccupancy = s.occupancy;
-        await tx.execute('UPDATE remote_slot SET task_id=?,data_id=?,batch_id=?,revision=?,state=?,terminal=? WHERE id=1', [o.taskId,o.dataId,o.batchId,o.credentialRevision,o.lastState,o.terminalObserved ? 1 : 0]);
+        await tx.execute('UPDATE remote_slot SET task_id=?,data_id=?,batch_id=?,revision=?,state=?,terminal=?,retired=? WHERE id=1', [o.taskId,o.dataId,o.batchId,o.credentialRevision,o.lastState,o.terminalObserved ? 1 : 0,o.retired ? 1 : 0]);
         for (const r of s.results) { await tx.execute('INSERT INTO result(asset,task_id,data_id,original_hash,version,bytes,hash,received,status,complete,signature) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [r.assetId,r.taskId,r.dataId,r.originalHash,r.version,r.bytes,r.hash,r.receivedAt,r.status,r.completeTransport ? 1 : 0,r.signature ? 1 : 0]); }
         for (const c of s.cleanup) { await tx.execute('INSERT INTO cleanup(id,assets,leases,original_bytes,result_bytes,failure) VALUES(?,?,?,?,?,?)', [c.id,c.assets.join('\n'),c.leases.join('\n'),c.originalBytes,c.resultBytes,c.failure]); }
         await tx.commit();

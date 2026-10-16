@@ -49,6 +49,9 @@ function mineruEarlierUploadExpiry(address: string, binding: DocumentLeaseBindin
     binding.expiresAt = Math.min(binding.expiresAt, expires); binding.remoteExpiry = `${expires}`;
   }
 }
+// RCP substitutes a default Content-Type when the header is absent; a single space suppresses it so the
+// presigned upload URL keeps its signature (the MinerU contract requires the raw PUT without Content-Type).
+const MINERU_UPLOAD_NO_CONTENT_TYPE: string = ' ';
 export class MineruUploadReader implements rcp.ReadFile {
   private file: fileIo.File; private action: DocumentParseAction; private offset: number = 0; private size: number;
   private md: cryptoFramework.Md = cryptoFramework.createMd('SHA256'); private reading: boolean = false;
@@ -177,7 +180,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
       try {
         const reader: MineruUploadReader = new MineruUploadReader(file, action);
         const request: rcp.Request = new rcp.Request(address, 'PUT'); request.content = new rcp.UploadFromFile(reader);
-        const headers: rcp.RequestHeaders = { 'content-length': `${action.original.bytes}` }; request.headers = headers;
+        const headers: rcp.RequestHeaders = { 'content-length': `${action.original.bytes}`, 'content-type': MINERU_UPLOAD_NO_CONTENT_TYPE }; request.headers = headers;
         const cap: MineruBoundedBytes = new MineruBoundedBytes(); const discard: rcp.IncomingDataCallback = (bytes: ArrayBuffer): void => { action.cancel.check(); cap.reserve(bytes.byteLength, DocumentParseBudget.jsonBytes); };
         await this.fetch(request, false, action, discard); await reader.validate();
       } finally { await fileIo.close(file); }

@@ -7,7 +7,7 @@ import {
 export function documentSubmitReason(original: DocumentOriginal, grant: DocumentParseGrant | undefined, snapshot: DocumentParseSnapshot, credential: DocumentCredentialStatus): string {
   if (!snapshot.config.enabled) { return '全局解析关闭'; }
   if (credential !== DocumentCredentialStatus.Configured) { return '凭据未配置或安全存储不可用'; }
-  if (snapshot.occupancy.taskId.length > 0 && !snapshot.occupancy.terminalObserved) { return '存在未决远端占用；暂停或本机删除不等于云取消'; }
+  if (snapshot.occupancy.taskId.length > 0 && !snapshot.occupancy.terminalObserved && !snapshot.occupancy.retired) { return '存在未决远端占用；暂停或本机删除不等于云取消'; }
   if (original.preflight !== DocumentPreflightStatus.Passed) { return original.preflightReason || '身份预检尚未通过'; }
   if (!Number.isSafeInteger(original.bytes) || original.bytes < 1 || original.bytes > DocumentParseBudget.originalBytes) { return '原件大小超限'; }
   if (original.format === DocumentParseFormat.Pdf && (!Number.isSafeInteger(original.pages) || original.pages < 1 || original.pages > 50)) { return '无法核定PDF为1–50原页'; }

@@ -91,8 +91,16 @@ export struct DocumentParseView {
       }
       Button('暂停本机动作').onClick((): void => { this.clearSecret(); this.service?.pause(); })
       if (this.parseState.snapshot.occupancy.taskId.length > 0 && !this.parseState.snapshot.occupancy.terminalObserved) {
-        Text('有未决云占用；本机暂停/删除不会解除。远端任务可能继续，留存与删除能力未知。').fontSize(13).fontColor(Theme.amber).width('100%')
+        Text(this.parseState.snapshot.occupancy.retired ? '已停止本机跟踪先前云占用；不代表云端删除或取消，远端记录可能仍保留。' : '有未决云占用；本机暂停/删除不会解除。远端任务可能继续，留存与删除能力未知。')
+          .fontSize(13).fontColor(this.parseState.snapshot.occupancy.retired ? Theme.muted : Theme.amber).width('100%')
         Button('核对原云任务').onClick((): void => { this.slotConfirm = true; })
+        if (this.service?.canRetireOccupancy() ?? false) {
+          Text('远端确认仍是 waiting-file（文件从未送达）。如你确认不再上传或等待该测试件，可停止本机跟踪；停止后本机不再阻止提交新测试件，不表示云端删除或取消。').fontSize(13).fontColor(Theme.amber).width('100%')
+          Row({ space: 12 }) {
+            Button('停止本机跟踪').onClick((): void => { this.service?.retireOccupancy(true); })
+            Button('继续等待').onClick((): void => { this.service?.dismissRetireOccupancy(); })
+          }.width('100%')
+        }
       }
       ForEach(this.taskRows, (row: DocumentParseTaskPresentation) => {
         DocumentParseTaskRow({ taskRow: row, actionBusy: this.parseState.busy,

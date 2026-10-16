@@ -3,7 +3,7 @@ import {
   DocumentCredentialStatus, DocumentParseSnapshot, DocumentParseFailure, DocumentFileSelection, DocumentSelectedFile,
   DocumentOriginal, DocumentParseCancellation, DocumentParseAction, DocumentAllocationReceipt, DocumentInspection,
   DocumentParseUsage, DocumentParseResultEnvelope, DocumentRemoteState, DocumentParseStage, DocumentParseBudget, DocumentPreflightStatus, DocumentParseFormat,
-  DocumentParseStateListener, DocumentParseViewState, DocumentParseTask
+  DocumentParseStateListener, DocumentParseViewState, DocumentParseTask, DocumentParseGrant
 } from '../main/ets/knowledge/domain/DocumentParseModels';
 import {
   MineruCredentialPort, DocumentParseRepositoryPort, DocumentAssetPort, DocumentSelectionPort, DocumentPreflightPort,
@@ -418,6 +418,31 @@ function documentRecoveryCases(): DocumentServiceTestCase[] {
       s.network.mode = 'NORMAL'; s.network.states = [DocumentRemoteState.Failed];
       await s.service.inspectOccupancy(false); documentServiceCheck(s.network.queries === 0);
       await s.service.inspectOccupancy(true); documentServiceCheck(s.network.queries === 1 && s.repository.data.occupancy.terminalObserved);
+    } },
+    { name: '核对后远端仍等待文件经二次确认可停止本机跟踪', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_UNKNOWN'; await s.service.submit('unit-original');
+      await s.service.deleteOriginal('unit-original');
+      documentServiceCheck(!s.repository.data.occupancy.terminalObserved && !s.repository.data.occupancy.retired && !s.service.canRetireOccupancy());
+      await s.service.retireOccupancy(true); documentServiceCheck(!s.repository.data.occupancy.retired);
+      s.network.mode = 'NORMAL'; s.network.states = [DocumentRemoteState.Waiting];
+      await s.service.inspectOccupancy(true);
+      documentServiceCheck(s.service.canRetireOccupancy() && s.repository.data.occupancy.lastState === DocumentRemoteState.Waiting);
+      await s.service.retireOccupancy(false); documentServiceCheck(!s.repository.data.occupancy.retired);
+      await s.service.retireOccupancy(true);
+      documentServiceCheck(s.repository.data.occupancy.retired && s.service.state.message.indexOf('不表示云端删除') >= 0 && !s.service.canRetireOccupancy());
+    } },
+    { name: '停止跟踪仅限等待文件且提交门禁随停止跟踪解除', run: async (): Promise<void> => {
+      const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UPLOAD_UNKNOWN'; await s.service.submit('unit-original');
+      await s.service.deleteOriginal('unit-original');
+      s.network.mode = 'NORMAL'; s.network.states = [DocumentRemoteState.Running]; await s.service.inspectOccupancy(true);
+      documentServiceCheck(!s.service.canRetireOccupancy() && !s.repository.data.occupancy.retired);
+      s.network.states = [DocumentRemoteState.Waiting]; await s.service.inspectOccupancy(true);
+      documentServiceCheck(s.service.canRetireOccupancy());
+      await s.service.retireOccupancy(true);
+      const original: DocumentOriginal = documentUnitOriginal(); original.id = 'unit-original-2'; original.assetId = 'original-unit-2'; original.hash = 'c'.repeat(64);
+      const grant: DocumentParseGrant = documentUnitGrant(original); grant.id = 'unit-grant-2';
+      s.repository.data.originals.push(original); s.repository.data.grants.push(grant);
+      documentServiceCheck(s.service.submitReason(original) === '');
     } }
   ];
   for (const failure of ['RESULT_LIMIT', 'RESULT_ID', 'RESULT_PARTIAL', 'RESULT_SCHEMA']) {

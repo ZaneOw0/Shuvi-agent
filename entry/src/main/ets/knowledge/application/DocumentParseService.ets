@@ -20,6 +20,7 @@ export class DocumentParseService {
   private clock: DocumentParseClockPort | undefined = undefined;
   private activeAction: DocumentParseAction | undefined = undefined;
   private tombstoneCancel: DocumentParseCancellation | undefined = undefined;
+  private retireArmed: boolean = false;
   attachRemote(network: MineruTaskPort, clock: DocumentParseClockPort): void { this.network = network; this.clock = clock; }
   attachLocal(selection: DocumentSelectionPort, assets: DocumentAssetPort, preflight: DocumentPreflightPort): void {
     this.selection = selection; this.assets = assets; this.preflight = preflight;
@@ -334,6 +335,7 @@ export class DocumentParseService {
       this.activeAction.task.lastAction = '本机暂停，远端可能继续';
     }
     if (this.tombstoneCancel !== undefined) { this.tombstoneCancel.invalid = true; }
+    this.retireArmed = false;
     this.network?.pause(); this.credential.clearTransient(); this.clearInput();
   }
   async pause(): Promise<void> {
@@ -409,13 +411,39 @@ export class DocumentParseService {
     this.state.busy = true; const action: DocumentParseAction = new DocumentParseAction();
     action.task.id = slot.taskId; action.task.dataId = slot.dataId; action.task.batchId = slot.batchId; action.task.credentialRevision = slot.credentialRevision;
     action.cancel.deadline = Date.now() + 120000; this.tombstoneCancel = action.cancel;
+    this.retireArmed = false;
     try {
       const inspected: DocumentInspection = await this.requireNetwork().inspect(action); action.cancel.check();
       if (inspected.batchId !== slot.batchId || inspected.dataId !== slot.dataId) { throw new DocumentParseFailure('占用复核身份不符', '查询'); }
       slot.lastState = inspected.state; slot.terminalObserved = documentRemoteTerminal(inspected.state);
+      this.retireArmed = !slot.terminalObserved && inspected.state === DocumentRemoteState.Waiting && this.occupancyRetireEligible(slot);
       await this.repository.save(this.state.snapshot); await this.requireNetwork().removeLeases([inspected.resultLease]);
-      this.state.message = slot.terminalObserved ? '已观察原任务终态；不表示云端数据删除' : '原任务仍未终态，占用保留';
-    } catch (error) { this.state.message = error instanceof DocumentParseFailure ? error.message : '原任务无法复核，占用仍保留'; }
+      this.state.message = slot.terminalObserved ? '已观察原任务终态；不表示云端数据删除'
+        : this.retireArmed ? '远端仍为 waiting-file（文件从未送达）；可停止本机跟踪或继续等待' : '原任务仍未终态，占用保留';
+    } catch (error) { this.retireArmed = false; this.state.message = error instanceof DocumentParseFailure ? error.message : '原任务无法复核，占用仍保留'; }
     finally { this.tombstoneCancel = undefined; this.state.busy = false; this.emit(); }
+  }
+  private occupancyRetireEligible(slot: DocumentRemoteOccupancy): boolean {
+    if (slot.retired) { return false; }
+    const task: DocumentParseTask | undefined = this.state.snapshot.tasks.find((t: DocumentParseTask): boolean => t.id === slot.taskId);
+    if (task === undefined) { return true; }
+    return !task.uploaded && task.stage !== DocumentParseStage.Uploading;
+  }
+  canRetireOccupancy(): boolean {
+    const slot: DocumentRemoteOccupancy = this.state.snapshot.occupancy;
+    return this.retireArmed && slot.taskId.length > 0 && !slot.terminalObserved && slot.lastState === DocumentRemoteState.Waiting && this.occupancyRetireEligible(slot);
+  }
+  dismissRetireOccupancy(): void {
+    if (!this.retireArmed) { return; }
+    this.retireArmed = false; this.state.message = '继续保留占用跟踪；未申请新批次'; this.emit();
+  }
+  async retireOccupancy(confirmed: boolean): Promise<void> {
+    if (this.state.busy || !confirmed || !this.canRetireOccupancy()) { this.state.message = '停止跟踪须在核对确认远端仍等待文件后再确认'; this.emit(); return; }
+    const slot: DocumentRemoteOccupancy = this.state.snapshot.occupancy; this.retireArmed = false; slot.retired = true;
+    try {
+      await this.repository.save(this.state.snapshot);
+      this.state.message = '已停止本机跟踪先前占用；不表示云端删除或取消，远端记录可能仍保留';
+    } catch { slot.retired = false; this.state.message = '停止跟踪写入失败，占用保留'; }
+    this.emit();
   }
 }

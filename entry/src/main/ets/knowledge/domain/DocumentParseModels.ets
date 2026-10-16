@@ -92,6 +92,7 @@ export class DocumentParseTask {
 export class DocumentRemoteOccupancy {
   taskId: string = ''; dataId: string = ''; batchId: string = ''; credentialRevision: number = 0;
   lastState: DocumentRemoteState = DocumentRemoteState.Unobserved; terminalObserved: boolean = false;
+  retired: boolean = false;
 }
 export class DocumentLeaseBinding {
   id: string = ''; taskId: string = ''; hash: string = ''; version: number = 0;
@@ -186,5 +187,6 @@ export function documentCopySnapshot(source: DocumentParseSnapshot): DocumentPar
     const copy: DocumentParseCleanup = new DocumentParseCleanup(); copy.id = c.id; copy.assets = c.assets.slice(); copy.leases = c.leases.slice(); copy.originalBytes = c.originalBytes; copy.resultBytes = c.resultBytes; copy.failure = c.failure; s.cleanup.push(copy);
   }
   s.occupancy.taskId = source.occupancy.taskId; s.occupancy.dataId = source.occupancy.dataId; s.occupancy.batchId = source.occupancy.batchId;
-  s.occupancy.credentialRevision = source.occupancy.credentialRevision; s.occupancy.lastState = source.occupancy.lastState; s.occupancy.terminalObserved = source.occupancy.terminalObserved; return s;
+  s.occupancy.credentialRevision = source.occupancy.credentialRevision; s.occupancy.lastState = source.occupancy.lastState; s.occupancy.terminalObserved = source.occupancy.terminalObserved;
+  s.occupancy.retired = source.occupancy.retired; return s;
 }

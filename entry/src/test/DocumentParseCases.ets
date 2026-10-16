@@ -69,6 +69,14 @@ export function documentParseCases(): DocumentPolicyTestCase[] {
       const snapshot: DocumentParseSnapshot = new DocumentParseSnapshot(); snapshot.config.enabled = true; snapshot.config.credentialRevision = 1;
       snapshot.occupancy.taskId = 'other-unit';
       documentPolicyCheck(documentSubmitReason(original, grant, snapshot, DocumentCredentialStatus.Configured) !== '');
+    } },
+    { name: '停止本机跟踪或终态占用不阻止新件提交', run: async (): Promise<void> => {
+      const original: DocumentOriginal = documentUnitOriginal(); const grant: DocumentParseGrant = documentUnitGrant(original);
+      const snapshot: DocumentParseSnapshot = new DocumentParseSnapshot(); snapshot.config.enabled = true; snapshot.config.credentialRevision = 1;
+      snapshot.occupancy.taskId = 'other-unit'; snapshot.occupancy.retired = true;
+      documentPolicyCheck(documentSubmitReason(original, grant, snapshot, DocumentCredentialStatus.Configured) === '');
+      snapshot.occupancy.retired = false; snapshot.occupancy.terminalObserved = true;
+      documentPolicyCheck(documentSubmitReason(original, grant, snapshot, DocumentCredentialStatus.Configured) === '');
     } }
   ]; return cases.concat(documentProtocolCases(), documentMetadataCases());
 }

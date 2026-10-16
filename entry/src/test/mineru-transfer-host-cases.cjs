@@ -44,7 +44,7 @@ module.exports = function transferHostCases(outputRoot, asset) {
         if (behavior === 'SDK_ERROR') throw Object.assign(new Error('must-not-expose-detail'), { code: 1007900001 });
         if (request.method === 'PUT') {
           assert.equal(request.headers['content-length'], String(files.get('/host/files/knowledge_parse_v1/original-unit').length));
-          assert.equal(request.headers['content-type'], undefined);
+          assert.equal(request.headers['content-type'], ' ');
           const reader = request.content.fileOrPath;
           const supplied = [];
           for (;;) { const b = new ArrayBuffer(131072); const n = await reader.read(b); if (!n) break; supplied.push(Buffer.from(b).subarray(0, n)); if (behavior === 'PARTIAL') break; }
