@@ -16,7 +16,7 @@ interface WorkbenchPageOptions {
 interface NoticePageOptions {
   onNotice: (title: string, message: string) => void;
 }
-interface ParseProfilePageOptions extends NoticePageOptions { onParseSettings: () => void; }
+interface ParseProfilePageOptions extends NoticePageOptions { onParseSettings: () => void; onEmbeddingSettings: () => void; }
 
 @Builder
 export function FeatureRow($$: FeatureRowOptions) {
@@ -100,6 +100,7 @@ export function ProfilePage($$: ParseProfilePageOptions) {
     FeatureRow({ title: '我的设备', description: '多设备管理 · 待接入', mark: '设',
       onOpen: () => $$.onNotice('我的设备', '设备管理待接入，没有设备已绑定或同步。') })
     FeatureRow({ title: '解析引擎', description: 'MinerU 精准 · Token 本机安全配置', mark: '解', onOpen: $$.onParseSettings })
+    FeatureRow({ title: '嵌入模型', description: '独立 Key · 四提供商本机配置', mark: '嵌', onOpen: $$.onEmbeddingSettings })
     FeatureRow({ title: '主题与外观', description: '当前：纸白与松绿 · 切换待接入', mark: '色',
       onOpen: () => $$.onNotice('主题与外观', '初稿采用纸白与松绿配色。主题切换和自定义将在后续实现。') })
     FeatureRow({ title: '关于 Shuvi', description: '让想法，成为行动', mark: '休',

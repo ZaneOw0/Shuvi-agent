@@ -1,6 +1,9 @@
 import { relationalStore } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
-import { TextRepositoryPort } from '../domain/TextKnowledgePorts';
+import { TextCandidatePort, TextDirectCandidatePort } from '../domain/TextKnowledgePorts';
+import { knowledgeLiteralScore } from '../pipeline/KnowledgeMatchPolicy';
+import { KnowledgeStoreHost } from './KnowledgeStoreHost';
+import { KnowledgeLegacyHistoryPort } from '../application/KnowledgeSearchService';
 import {
   TextBudget, TextFailure, TextDocument, TextFormat, TextStage, TextJob, TextChunk, TextUsage,
   TextCleanup, TextCancellation, TextQueryInput, TextSearchResult, TextHistory, TextHit, TextChannel, TextReferenceState
@@ -45,19 +48,19 @@ function rowDocument(rows: relationalStore.ResultSet): TextDocument {
   }
   return doc;
 }
-export class TextRdbRepository implements TextRepositoryPort {
-  private context: common.Context;
+export class TextRdbRepository implements TextDirectCandidatePort, KnowledgeLegacyHistoryPort {
+  private host: KnowledgeStoreHost;
   private store: relationalStore.RdbStore | undefined = undefined;
   private tail: Promise<void> = Promise.resolve();
   private activeChannel: TextChannel = TextChannel.Unavailable;
-  constructor(context: common.Context) { this.context = context; }
+  constructor(context: common.Context, host: KnowledgeStoreHost = KnowledgeStoreHost.forContext(context)) { this.host = host; }
   channel(): TextChannel { return this.activeChannel; }
   private requireStore(): relationalStore.RdbStore {
     if (this.store === undefined) { throw new TextFailure('RDB', 'open', '用户知识库尚未打开'); }
     return this.store;
   }
   private write<T>(operation: () => Promise<T>): Promise<T> {
-    const result: Promise<T> = this.tail.then(operation);
+    const result: Promise<T> = this.host.enqueue<T>(operation);
     this.tail = result.then((): void => {}, (_error: Error): void => {}); return result;
   }
   private async transaction(operation: (transaction: relationalStore.Transaction) => Promise<void>): Promise<void> {
@@ -79,14 +82,14 @@ export class TextRdbRepository implements TextRepositoryPort {
   }
   async open(): Promise<void> {
     if (this.store !== undefined) { return; }
-    const supported: boolean = relationalStore.isTokenizerSupported(relationalStore.Tokenizer.CUSTOM_TOKENIZER);
-    const config: relationalStore.StoreConfig = { name: TEXT_USER_STORE, securityLevel: relationalStore.SecurityLevel.S3, vector: false };
-    if (supported) { config.tokenizer = relationalStore.Tokenizer.CUSTOM_TOKENIZER; }
-    try { this.store = await relationalStore.getRdbStore(this.context, config); }
-    catch {
-      config.tokenizer = relationalStore.Tokenizer.NONE_TOKENIZER;
-      this.store = await relationalStore.getRdbStore(this.context, config);
-    }
+    try {
+      this.store = await this.host.acquireM1(async (store: relationalStore.RdbStore, supported: boolean): Promise<TextChannel> => {
+        this.store = store; await this.bootstrap(supported); return this.activeChannel;
+      });
+      this.activeChannel = this.host.textChannel;
+    } catch (error) { this.store = undefined; if (error instanceof Error) { throw error; } throw new TextFailure('RDB', 'open', '用户库打开失败'); }
+  }
+  private async bootstrap(supported: boolean): Promise<void> {
     const store: relationalStore.RdbStore = this.requireStore();
     const tables: number = await this.scalar("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
     if (tables === 0) {
@@ -106,6 +109,11 @@ export class TextRdbRepository implements TextRepositoryPort {
     } else if (await this.meta('layout') !== TEXT_LAYOUT) {
       throw new TextFailure('SCHEMA', 'open', '用户库版本未知，拒绝清库或覆盖修复');
     }
+    const required: string[] = ['text_meta','text_doc','text_job','text_generation','text_chunk','text_cleanup','text_query','text_question_part','text_citation'];
+    for (const name of required) {
+      if (await this.scalar("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",[name]) !== 1) { throw new TextFailure('SCHEMA','open','M1 原表缺失，拒绝扩展或清库修复'); }
+    }
+    const identity: relationalStore.ResultSet = await store.querySql('SELECT d.id,d.hash,d.version,d.active,c.ranges,g.snapshot FROM text_doc d LEFT JOIN text_chunk c ON c.doc=d.id LEFT JOIN text_generation g ON g.id=c.generation LIMIT 0'); identity.close();
     // Verify LIKE independently; an exception is unavailable, not an empty success.
     const like: relationalStore.ResultSet = await store.querySql("SELECT '中文 keyword %_' LIKE ? ESCAPE '\\'", [textLikePattern('%_')]);
     try {
@@ -144,7 +152,7 @@ export class TextRdbRepository implements TextRepositoryPort {
     }
     await store.executeSql('INSERT OR REPLACE INTO text_meta(key,value) VALUES(?,?)', ['channel', this.activeChannel]);
   }
-  async close(): Promise<void> { await this.tail; if (this.store !== undefined) { await this.store.close(); this.store = undefined; } }
+  async close(): Promise<void> { await this.tail; if (this.store !== undefined) { await this.host.release(); this.store = undefined; } }
   async list(): Promise<TextDocument[]> {
     const rows: relationalStore.ResultSet = await this.requireStore().querySql('SELECT * FROM text_doc ORDER BY created DESC,id');
     const docs: TextDocument[] = [];
@@ -271,20 +279,37 @@ export class TextRdbRepository implements TextRepositoryPort {
     });
   }
   async search(input: TextQueryInput, archived: boolean, cancel: TextCancellation): Promise<TextSearchResult> {
+    return this.recall(input, archived, cancel, 5);
+  }
+  async candidates(input: TextQueryInput, archived: boolean, cancel: TextCancellation): Promise<TextSearchResult> {
+    return this.recall(input, archived, cancel, 20);
+  }
+  async directCandidates(input: TextQueryInput, archived: boolean, cancel: TextCancellation): Promise<TextSearchResult> {
+    cancel.check(); const result = new TextSearchResult(); result.input = input; result.channel = TextChannel.Like;
+    const rows = await this.requireStore().querySql('SELECT c.id,c.doc,c.generation,c.snapshot,c.kind,c.text,c.evidence,c.ranges,d.title,d.version,d.hash FROM text_chunk c JOIN text_doc d ON d.id=c.doc AND d.active=c.generation JOIN text_generation g ON g.id=c.generation AND g.complete=1 WHERE (?=1 OR d.archived=0) ORDER BY c.doc,c.ordinal',[archived ? 1 : 0]); let scanned: number = 0;
+    try { while (rows.goToNextRow()) {
+      cancel.check(); if (++scanned > TextBudget.activeChunks) { throw new TextFailure('BUDGET','direct','活动正文超限'); }
+      const score = knowledgeLiteralScore(rows.getString(6),input); if (score > 0) {
+        const hit = new TextHit(); hit.chunkId = rows.getString(0); hit.documentId = rows.getString(1); hit.generation = rows.getString(2); hit.snapshotId = rows.getString(3); hit.kind = textNodeKind(rows.getString(4)); hit.retrievalText = rows.getString(5); hit.text = rows.getString(6); hit.ranges = decodeRanges(rows.getString(7)); hit.title = rows.getString(8); hit.documentVersion = rows.getLong(9); hit.originalHash = rows.getString(10); hit.channel = TextChannel.Like; hit.score = score; result.hits.push(hit); result.hits.sort(compareTextHits); if (result.hits.length > 20) { result.hits.pop(); }
+      }
+      if (scanned%100 === 0) { await new Promise<void>((resolve: () => void): void => { setTimeout(resolve,0); }); }
+    } } finally { rows.close(); } cancel.check(); return result;
+  }
+  private async recall(input: TextQueryInput, archived: boolean, cancel: TextCancellation, limit: number): Promise<TextSearchResult> {
     cancel.check();
     const result: TextSearchResult = new TextSearchResult(); result.input = input;
     let fts: boolean = this.activeChannel === TextChannel.Fts;
-    try { result.hits = await this.searchRows(input, archived, fts, cancel); }
+    try { result.hits = await this.searchRows(input, archived, fts, cancel, limit); }
     catch {
       if (!fts) { throw new TextFailure('QUERY', 'LIKE', '字面关键词检索失败，不是无召回'); }
       fts = false; this.activeChannel = TextChannel.Like;
       result.notice = 'FTS 查询失败，实际使用 LIKE 字面关键词降级';
-      result.hits = await this.searchRows(input, archived, false, cancel);
+      result.hits = await this.searchRows(input, archived, false, cancel, limit);
     }
     result.channel = fts ? TextChannel.Fts : TextChannel.Like;
-    result.hits.sort(compareTextHits); result.hits = result.hits.slice(0, 5); cancel.check(); return result;
+    result.hits.sort(compareTextHits); result.hits = result.hits.slice(0, limit); cancel.check(); return result;
   }
-  private async searchRows(input: TextQueryInput, archived: boolean, fts: boolean, cancel: TextCancellation): Promise<TextHit[]> {
+  private async searchRows(input: TextQueryInput, archived: boolean, fts: boolean, cancel: TextCancellation, limit: number): Promise<TextHit[]> {
     const clauses: string[] = []; const args: relationalStore.ValueType[] = [archived ? 1 : 0];
     let join: string = '';
     if (fts) { join = ' JOIN text_fts ON text_fts.chunk_id=c.id'; clauses.push('text_fts MATCH ?'); args.push(textFtsInput(input.terms)); }
@@ -303,7 +328,7 @@ export class TextRdbRepository implements TextRepositoryPort {
         hit.documentVersion = rows.getLong(9); hit.originalHash = rows.getString(10);
         hit.channel = fts ? TextChannel.Fts : TextChannel.Like; hit.score = textKeywordScore(hit.retrievalText, input.terms);
         // Score is literal occurrence count, not a fabricated semantic confidence.
-        hits.push(hit); hits.sort(compareTextHits); if (hits.length > 5) { hits.pop(); }
+        hits.push(hit); hits.sort(compareTextHits); if (hits.length > limit) { hits.pop(); }
         count++; if (count % 100 === 0) { await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 0); }); }
         if (count > TextBudget.activeChunks) { throw new TextFailure('BUDGET', 'query', '活动索引行数异常'); }
       }
@@ -422,6 +447,17 @@ export class TextRdbRepository implements TextRepositoryPort {
     }
     for (const cleanup of await this.cleanups()) { for (const id of cleanup.assetIds) { ids.push(id); } }
     return ids;
+  }
+  async historyBefore(created: number, id: string, limit: number): Promise<TextHistory[]> {
+    if (!Number.isSafeInteger(created) || created < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 20) { throw new TextFailure('BUDGET','history','旧历史游标非法'); }
+    const rows: relationalStore.ResultSet = await this.requireStore().querySql('SELECT * FROM text_query WHERE created<? OR (created=? AND id<?) ORDER BY created DESC,id DESC LIMIT ?',[created,created,id,limit]);
+    const records: TextHistory[] = [];
+    try { while (rows.goToNextRow()) {
+      const record: TextHistory = new TextHistory(); record.id = rows.getString(0); record.createdAt = rows.getLong(1);
+      if (rows.getString(2) !== 'question-parts-v1') { throw new TextFailure('SCHEMA','history','未知旧历史布局'); }
+      record.result.input.actualInput = rows.getString(3); record.result.input.notice = rows.getString(4); record.result.channel = storedChannel(rows.getString(5)); records.push(record);
+    } } finally { rows.close(); }
+    for (const record of records) { record.result.input.fullQuestion = await this.questionParts(record.id); record.result.hits = await this.citations(record.id); } return records;
   }
   async saveHistory(history: TextHistory): Promise<void> {
     const result: TextSearchResult = history.result;

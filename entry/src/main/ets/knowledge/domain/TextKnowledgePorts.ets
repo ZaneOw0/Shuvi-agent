@@ -45,3 +45,13 @@ export interface TextRepositoryPort {
   history(offset: number, limit: number): Promise<TextHistory[]>;
 }
 export interface TextStateListener { changed(): void; }
+
+// No history side effects. The original repository search contract stays top five.
+export interface TextCandidatePort extends TextRepositoryPort {
+  candidates(input: TextQueryInput, includeArchived: boolean, cancel: TextCancellation): Promise<TextSearchResult>;
+  directCandidates?(input: TextQueryInput, includeArchived: boolean, cancel: TextCancellation): Promise<TextSearchResult>;
+}
+
+export interface TextDirectCandidatePort extends TextCandidatePort {
+  directCandidates(input: TextQueryInput, includeArchived: boolean, cancel: TextCancellation): Promise<TextSearchResult>;
+}

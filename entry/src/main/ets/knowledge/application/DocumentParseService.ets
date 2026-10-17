@@ -1,3 +1,4 @@
+import { KnowledgeSourceProtectionPort } from '../domain/KnowledgePorts';
 import {
   DocumentCredentialStatus, DocumentParseViewState, DocumentParseStateListener, DocumentParseFailure, documentValidateToken,
   DocumentParseCancellation, DocumentOriginal, DocumentFileSelection, DocumentParseGrant, DocumentTestAcknowledgement,
@@ -21,6 +22,8 @@ export class DocumentParseService {
   private activeAction: DocumentParseAction | undefined = undefined;
   private tombstoneCancel: DocumentParseCancellation | undefined = undefined;
   private retireArmed: boolean = false;
+  private sourceProtection: KnowledgeSourceProtectionPort | undefined = undefined;
+  attachSourceProtection(protection: KnowledgeSourceProtectionPort): void { this.sourceProtection = protection; }
   attachRemote(network: MineruTaskPort, clock: DocumentParseClockPort): void { this.network = network; this.clock = clock; }
   attachLocal(selection: DocumentSelectionPort, assets: DocumentAssetPort, preflight: DocumentPreflightPort): void {
     this.selection = selection; this.assets = assets; this.preflight = preflight;
@@ -93,7 +96,12 @@ export class DocumentParseService {
         this.state.snapshot.cleanup = this.state.snapshot.cleanup.filter((c: DocumentParseCleanup): boolean => c.id !== pending.id);
         this.state.snapshot.originals.push(original);
         try { await this.repository.save(this.state.snapshot); }
-        catch { this.state.snapshot.originals = this.state.snapshot.originals.filter((o: DocumentOriginal): boolean => o.id !== original.id); await this.assets.remove([original.assetId]); throw new DocumentParseFailure('原件登记失败', '持久化'); }
+        catch {
+          this.state.snapshot.originals = this.state.snapshot.originals.filter((o: DocumentOriginal): boolean => o.id !== original.id);
+          const protection: KnowledgeSourceProtectionPort | undefined = this.sourceProtection;
+          if (protection !== undefined) { await protection.withSource<void>(original.id,async (): Promise<void> => { await protection.assertCleanup([original.assetId]); await this.assets?.remove([original.assetId]); }); }
+          throw new DocumentParseFailure('原件登记失败，清理由持久意图继续保护', '持久化');
+        }
         // Preserve original before PDFKit. Expired/blocked preflight cannot remove this durable copy.
         try { await this.preflight.inspect(original, cancel); }
         catch { original.preflight = DocumentPreflightStatus.Blocked; original.preflightReason = '页数预检中断，原件保留但不外发'; }
@@ -365,6 +373,20 @@ export class DocumentParseService {
     } finally { this.activeAction = undefined; this.state.busy = false; this.emit(); }
   }
   async deleteOriginal(originalId: string): Promise<void> {
+    const protection: KnowledgeSourceProtectionPort | undefined = this.sourceProtection;
+    if (protection === undefined) { this.state.message = '知识库引用保护不可用，解析副本未删除'; this.emit(); return; }
+    try {
+      await protection.withSource<void>(originalId, async (): Promise<void> => {
+        const original: DocumentOriginal | undefined = this.state.snapshot.originals.find((item: DocumentOriginal): boolean => item.id === originalId);
+        if (original === undefined) { return; }
+        const taskIds: string[] = this.state.snapshot.tasks.filter((task: DocumentParseTask): boolean => task.originalId === originalId).map((task: DocumentParseTask): string => task.id);
+        const assets: string[] = [original.assetId].concat(this.state.snapshot.results.filter((result: DocumentParseResultEnvelope): boolean => taskIds.indexOf(result.taskId) >= 0).map((result: DocumentParseResultEnvelope): string => result.assetId));
+        await protection.assertDeletable(originalId, assets); await this.deleteOriginalGuarded(originalId);
+      });
+      await this.retryCleanup();
+    } catch { this.state.message = '解析副本仍由知识库或检查点引用，或保护状态待核；未删除，请先在知识库处理引用'; this.emit(); }
+  }
+  private async deleteOriginalGuarded(originalId: string): Promise<void> {
     const original: DocumentOriginal | undefined = this.state.snapshot.originals.find((o: DocumentOriginal): boolean => o.id === originalId);
     if (original === undefined) { return; } this.pauseImmediate();
     const cleanup: DocumentParseCleanup = new DocumentParseCleanup(); cleanup.id = `cleanup-${original.id}-${Date.now()}`;
@@ -387,15 +409,20 @@ export class DocumentParseService {
       this.state.snapshot.cleanup = this.state.snapshot.cleanup.filter((c: DocumentParseCleanup): boolean => c.id !== cleanup.id);
       this.state.message = '本机逻辑删除失败，副本保留；本机动作已停止'; this.emit(); return;
     }
-    await this.retryCleanup(); this.state.message = '仅删除本机解析副本；远端数据可能保留，未决占用不解除'; this.emit();
+    this.state.message = '仅删除本机解析副本；远端数据可能保留，未决占用不解除'; this.emit();
   }
   async retryCleanup(): Promise<void> {
     if (this.assets === undefined) { return; }
     for (const cleanup of this.state.snapshot.cleanup.slice()) {
       try {
-        await this.assets.remove(cleanup.assets); await this.network?.removeLeases(cleanup.leases);
-        this.state.snapshot.cleanup = this.state.snapshot.cleanup.filter((c: DocumentParseCleanup): boolean => c.id !== cleanup.id);
-        await this.repository.save(this.state.snapshot);
+        const protection: KnowledgeSourceProtectionPort | undefined = this.sourceProtection;
+        if (protection === undefined) { throw new DocumentParseFailure('知识库引用保护不可用，清理暂停', '清理'); }
+        await protection.withSource<void>('', async (): Promise<void> => {
+          await protection.assertCleanup(cleanup.assets);
+          await this.assets?.remove(cleanup.assets); await this.network?.removeLeases(cleanup.leases);
+          this.state.snapshot.cleanup = this.state.snapshot.cleanup.filter((c: DocumentParseCleanup): boolean => c.id !== cleanup.id);
+          await this.repository.save(this.state.snapshot);
+        });
       } catch { cleanup.failure = '本轮资产清理未完成，仍计磁盘占用';
         if (this.state.snapshot.cleanup.indexOf(cleanup) < 0) { this.state.snapshot.cleanup.push(cleanup); }
         try { await this.repository.save(this.state.snapshot); } catch { this.state.message = '清理记录持久化失败，禁止新增处理'; }

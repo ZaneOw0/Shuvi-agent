@@ -11,6 +11,7 @@ import {
 } from '../main/ets/knowledge/domain/DocumentParsePorts';
 import { documentUnitOriginal, documentUnitGrant } from './DocumentParseCases';
 import { TextTestSession } from './TextServiceCases';
+import { KnowledgeSourceProtectionPort } from '../main/ets/knowledge/domain/KnowledgePorts';
 
 export interface DocumentServiceTestCase { name: string; run: () => Promise<void>; }
 export function documentServiceCheck(ok: boolean): void { if (!ok) { throw new Error('M2 frozen business expectation failed'); } }
@@ -48,6 +49,13 @@ export class DocumentTestSettingsSession {
   credential: DocumentTestCredential = new DocumentTestCredential();
   repository: DocumentTestRepository = new DocumentTestRepository();
   service: DocumentParseService = new DocumentParseService(this.credential, this.repository);
+  constructor() { this.service.attachSourceProtection(new DocumentTestUnreferencedSources()); }
+}
+// An explicit injected M2-only boundary; never used by production assembly.
+class DocumentTestUnreferencedSources implements KnowledgeSourceProtectionPort {
+  async withSource<T>(_source: string, action: () => Promise<T>): Promise<T> { return action(); }
+  async assertDeletable(_source: string, _assets: string[]): Promise<void> {}
+  async assertCleanup(_assets: string[]): Promise<void> {}
 }
 class DocumentTestStateObserver implements DocumentParseStateListener {
   service: DocumentParseService; views: DocumentParseViewState[] = [];

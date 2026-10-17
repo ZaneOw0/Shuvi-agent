@@ -1,5 +1,5 @@
 import { Theme } from '../../components/Theme';
-import { DocumentParseViewState, DocumentCredentialStatus, DocumentOriginal, DocumentTestAcknowledgement, DocumentParseTask, DocumentParseResultEnvelope, DocumentParseStage } from '../domain/DocumentParseModels';
+import { DocumentParseViewState, DocumentCredentialStatus, DocumentOriginal, DocumentTestAcknowledgement, DocumentParseTask, DocumentParseResultEnvelope, DocumentParseStage, DocumentParseFormat } from '../domain/DocumentParseModels';
 import { DocumentParseService } from '../application/DocumentParseService';
 
 @Component
@@ -8,6 +8,7 @@ export struct DocumentParseView {
   @Prop settingsMode: boolean = true;
   service: DocumentParseService | undefined = undefined;
   onClose: () => void = (): void => {};
+  onPreparePdf: (resultId: string) => void = (_resultId: string): void => {};
   @Prop @Watch('clearSecret') clearEpoch: number = 0;
   @State private tokenInput: string = '';
   @State private credentialFeedback: string = '';
@@ -44,6 +45,10 @@ export struct DocumentParseView {
       await service.saveToken(input, replace);
     } catch { this.credentialFeedback = '安全配置动作失败，未确认保存；请重新打开设置查看状态'; }
     finally { input = ''; this.clearSecret(); }
+  }
+  private isPdfResult(result: DocumentParseResultEnvelope): boolean {
+    const task: DocumentParseTask | undefined = this.parseState.snapshot.tasks.find((item: DocumentParseTask): boolean => item.id === result.taskId);
+    return this.parseState.snapshot.originals.some((original: DocumentOriginal): boolean => original.id === task?.originalId && original.format === DocumentParseFormat.Pdf);
   }
   build() {
     Column({ space: 14 }) {
@@ -114,6 +119,10 @@ export struct DocumentParseView {
           Text(`任务 ${result.taskId} · 原件 SHA256 ${result.originalHash}`).fontSize(11).width('100%').wordBreak(WordBreak.BREAK_ALL)
           Text(`SHA256 ${result.hash}`).fontSize(11).width('100%')
           Text(`接收时间 ${new Date(result.receivedAt).toLocaleString()} · 不可检索，未校验成员或CRC`).fontSize(12).fontColor(Theme.muted).width('100%')
+          if (this.isPdfResult(result)) {
+            Button('校验并准备入库').constraintSize({ minHeight: 44 }).enabled(!this.parseState.busy)
+              .onClick((): void => { this.onPreparePdf(result.assetId); })
+          }
         }.width('100%').alignItems(HorizontalAlign.Start)
       }, (result: DocumentParseResultEnvelope): string => result.assetId)
       Button('选择文件，仅保存原件').enabled(!this.parseState.busy).onClick((): void => { this.service?.prepare(); })

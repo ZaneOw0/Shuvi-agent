@@ -341,22 +341,30 @@ async function evidenceMeta(a) {
   const changes = readGit(root, ['status', '--porcelain']);
   const sha = readGit(root, ['rev-parse', '--short', 'HEAD']) || 'nogit';
   const hash = crypto.createHash('sha256');
+  const safeHost = process.env.CAPTURE_SAFE_HOST === '1' && process.env.CAPTURE_HOST_ONLY === '1';
+  const safePaths = ['--', 'entry/src', 'spec/knowledge-pdf-ingestion', 'specs', 'docs',
+    'scripts/capture-test-log.sh', 'scripts/dev-run-support.cjs'];
   // Hash Git deltas internally; never print their contents into logs (profile may be signed).
-  hash.update(readGit(root, ['diff', '--binary'])); hash.update(readGit(root, ['diff', '--cached', '--binary']));
+  hash.update(readGit(root, ['diff', '--binary', ...(safeHost ? safePaths : [])]));
+  hash.update(readGit(root, ['diff', '--cached', '--binary', ...(safeHost ? safePaths : [])]));
   const untracked = cp.spawnSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard', '-z'], { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
   if (untracked.status === 0) for (const file of untracked.stdout.split('\0').filter(Boolean).sort()) {
     if (/^(?:\.local|signing)\//.test(file)) continue;
+    if (safeHost && !/^(?:entry\/src\/|spec\/knowledge-pdf-ingestion\/|specs\/|docs\/)/.test(file)) continue;
     const full = path.join(root, file); if (!fs.lstatSync(full).isFile()) continue;
     hash.update(file + '\0' + digest(full));
   }
-  let state = 'signed-or-modified';
-  try { const p = profile(path.join(root, 'build-profile.json5')); if (Array.isArray(p.app.signingConfigs) && p.app.signingConfigs.length === 0 && !p.app.products.some(p => Object.hasOwn(p, 'signingConfig'))) state = 'template'; } catch {}
+  let state = safeHost ? 'not-inspected-host-only' : 'signed-or-modified';
+  if (!safeHost) {
+    try { const p = profile(path.join(root, 'build-profile.json5')); if (Array.isArray(p.app.signingConfigs) && p.app.signingConfigs.length === 0 && !p.app.products.some(p => Object.hasOwn(p, 'signingConfig'))) state = 'template'; } catch {}
+  }
   const rows = { run_at: new Date().toISOString(), scope, branch: readGit(root, ['rev-parse', '--abbrev-ref', 'HEAD']), commit: sha,
     dirty_files: changes ? changes.split('\n').length : 0, worktree_fingerprint: hash.digest('hex'), bundle, device: device || 'auto', log_window: window,
     keyword: keyword || '-', status, build_profile: state, run_cmd: process.env.RUN_CMD ? 'provided (content not recorded)' : '-',
     run_cmd_sha256: process.env.RUN_CMD ? crypto.createHash('sha256').update(process.env.RUN_CMD).digest('hex') : '-',
     run_cmd_status: cmdExit === 'not-run' ? 'not-run' : cmdExit === '0' ? 'ok' : 'failed', run_cmd_exit: cmdExit,
-    log_status: status, log_exit: logExit, platform: process.platform, bash: process.env.CAPTURE_BASH_VERSION || '-', node: process.version };
+     log_status: status, log_exit: logExit, platform: process.platform, bash: process.env.CAPTURE_BASH_VERSION || '-', node: process.version };
+  rows.fingerprint_scope = safeHost ? 'public-feature-host-only; excludes unrelated scripts, private paths and signing configuration' : 'default-worktree';
   for (const file of ['dev-run.sh', 'dev-run-mac.sh', 'dev-run.cmd', 'dev-run-support.cjs', 'capture-test-log.sh']) {
     const full = path.join(root, 'scripts', file); if (fs.existsSync(full)) rows[file + '_sha256'] = digest(full);
   }
@@ -467,7 +475,8 @@ async function main(a) {
   else if (op === 'evidence-dir') console.log(evidenceDir(a[0], a[1]));
   else if (op === 'evidence-meta') await evidenceMeta(a);
   else if (op === 'private-temp') {
-    const local = path.join(a[0], '.local'); safeDir(local);
+    const safeHost = process.env.CAPTURE_SAFE_HOST === '1' && process.env.CAPTURE_HOST_ONLY === '1';
+    const local = path.join(a[0], safeHost ? '.cache' : '.local'); safeDir(local);
     console.log(fs.mkdtempSync(path.join(local, 'capture-')));
   }
   else if (op === 'filter') {

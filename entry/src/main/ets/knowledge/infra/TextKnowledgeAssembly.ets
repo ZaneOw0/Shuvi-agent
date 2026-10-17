@@ -5,13 +5,15 @@ import { TextKnowledgeService } from '../application/TextKnowledgeService';
 import { TextFileAdapter } from './TextFileAdapter';
 import { TextProcessingAdapter } from './TextProcessingAdapter';
 import { TextRdbRepository } from './TextRdbRepository';
+import { KnowledgeStoreHost } from './KnowledgeStoreHost';
 
 export class TextKnowledgeAssembly implements TextStateListener {
   service: TextKnowledgeService;
+  repository: TextRdbRepository;
   private onChanged: () => void;
-  constructor(context: common.Context, onChanged: () => void) {
+  constructor(context: common.Context, onChanged: () => void, host: KnowledgeStoreHost = KnowledgeStoreHost.forContext(context)) {
     const assets: TextFileAdapter = new TextFileAdapter(context);
-    const repository: TextRdbRepository = new TextRdbRepository(context);
+    const repository: TextRdbRepository = new TextRdbRepository(context, host); this.repository = repository;
     this.service = new TextKnowledgeService(assets, assets, new TextProcessingAdapter(), repository);
     this.onChanged = onChanged; this.service.subscribe(this);
   }

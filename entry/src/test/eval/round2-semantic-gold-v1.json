@@ -1,0 +1,23 @@
+{
+  "version": "R2-SEMANTIC-MANUAL-1",
+  "fixture": "round2-semantic-manual-v1.md",
+  "goldSource": "人工先读 fixture 各段，独立确定；未使用召回结果",
+  "cases": [
+    { "id": "P01", "kind": "paraphrase", "question": "周一想在北馆看书，最早几点能进去？", "sources": ["F01"], "answer": "08:00" },
+    { "id": "P02", "kind": "paraphrase", "question": "周日去南馆，下午几点必须离开？", "sources": ["F02"], "answer": "16:00" },
+    { "id": "P03", "kind": "paraphrase", "question": "普通纸书续借一次后，总共能借多少天？", "sources": ["F03"], "answer": "35 天" },
+    { "id": "P04", "kind": "paraphrase", "question": "一本书晚还很久，罚款最多收多少？", "sources": ["F04"], "answer": "15 元" },
+    { "id": "P05", "kind": "paraphrase", "question": "明天同一时间用研讨室，现在预约来得及吗？", "sources": ["F05"], "answer": "至少提前 24 小时" },
+    { "id": "P06", "kind": "paraphrase", "question": "轮椅使用者应从哪个门坐电梯？", "sources": ["F06"], "answer": "东门" },
+    { "id": "P07", "kind": "paraphrase", "question": "宿舍出发去北馆该坐哪班车，几点开？", "sources": ["F07"], "answer": "蓝线 07:30" },
+    { "id": "P08", "kind": "paraphrase", "question": "借书证不见了，补办前先做什么？", "sources": ["F08"], "answer": "先挂失" },
+    { "id": "N01", "kind": "negation", "question": "北馆不是每天开放，哪两天不开？", "sources": ["F01"], "answer": "周末", "forbiddenSources": ["F02"] },
+    { "id": "N02", "kind": "negation", "question": "哪些印刷资料不能带走借回家？", "sources": ["F03"], "answer": "期刊" },
+    { "id": "N03", "kind": "negation", "question": "不要到北馆，只去南馆，该避开哪条班车？", "sources": ["F07"], "answer": "避开蓝线，乘绿线" },
+    { "id": "N04", "kind": "negation", "question": "同一天能否订两场研讨室？", "sources": ["F05"], "answer": "不能，每日每人一场" },
+    { "id": "A01", "kind": "no-answer", "question": "馆长的电话号码是什么？", "sources": [], "answer": "证据不足" },
+    { "id": "A02", "kind": "no-answer", "question": "阅览室空调固定设定多少度？", "sources": [], "answer": "证据不足" },
+    { "id": "A03", "kind": "no-answer", "question": "挂失可否通过手机 App 办理？", "sources": [], "answer": "证据不足" },
+    { "id": "A04", "kind": "no-answer", "question": "蓝线班车节假日的发车间隔是多少？", "sources": [], "answer": "证据不足" }
+  ]
+}

@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const cp = require('node:child_process');
 const { test } = require('node:test');
 
 const sdkHome = process.env.DEVECO_SDK_HOME;
@@ -25,6 +26,26 @@ const sources = [
   'entry/src/test/CorpusCases.ets'
 ];
 const optionalSources = [
+  'knowledge/pipeline/KnowledgeMatchPolicy','knowledge/application/PdfPageReferenceService',
+  'knowledge/application/QueryConsentSession','knowledge/application/KnowledgeOperationSession','knowledge/application/KnowledgeDeadline',
+  'knowledge/platformtests/SemanticQualityPolicy',
+  'knowledge/domain/PdfKnowledgeModels', 'knowledge/domain/EmbeddingModels',
+  'knowledge/domain/KnowledgeSearchModels', 'knowledge/domain/KnowledgePorts',
+  'knowledge/domain/KnowledgeStorageScope','knowledge/domain/PdfLocalModels','knowledge/pipeline/PdfEvidenceCodec',
+  'knowledge/domain/VectorWorkflowModels','knowledge/pipeline/EmbeddingSpacePolicy','knowledge/application/EmbeddingWorkflow','knowledge/infra/PdfVectorRepository',
+  'knowledge/infra/KnowledgeDerivedBudget',
+  'knowledge/domain/EmbeddingBasisModels','knowledge/pipeline/EmbeddingBasisPolicy',
+  'knowledge/pipeline/EmbeddingPolicy', 'knowledge/application/EmbeddingService',
+  'knowledge/pipeline/SafeZipPolicy',
+  'knowledge/pipeline/BoundedDocumentJson', 'knowledge/pipeline/PdfTableDecoder',
+  'knowledge/pipeline/MineruPdfNormalizer',
+  'knowledge/pipeline/PdfSnapshotCodec',
+  'knowledge/pipeline/PdfStructureChunker',
+  'knowledge/pipeline/PdfMappingPolicy',
+  'knowledge/pipeline/KnowledgeRetrievalPolicy', 'knowledge/application/KnowledgeSearchService',
+  'knowledge/application/KnowledgeLifecycleService',
+  'knowledge/infra/KnowledgeStoreHost', 'knowledge/infra/TextRdbRepository', 'knowledge/infra/PdfKnowledgeRepository',
+  'knowledge/infra/EmbeddingCredentialStore',
   'knowledge/pipeline/TextNormalizer', 'knowledge/pipeline/MarkdownStructure',
   'knowledge/pipeline/StructuredChunker', 'knowledge/pipeline/QueryPreparation',
   'knowledge/application/TextKnowledgeService',
@@ -35,14 +56,19 @@ const optionalSources = [
 ].map(s => `entry/src/main/ets/${s}.ets`).concat([
   'entry/src/test/TextPipelineCases.ets', 'entry/src/test/TextServiceCases.ets',
   'entry/src/test/DocumentParseCases.ets', 'entry/src/test/DocumentParseServiceCases.ets',
-  'entry/src/test/MineruCredentialStoreCases.ets'
+  'entry/src/test/MineruCredentialStoreCases.ets',
+  'entry/src/test/EmbeddingCases.ets', 'entry/src/test/PdfArchiveCases.ets',
+  'entry/src/test/PdfStructureCases.ets', 'entry/src/test/KnowledgeIntegrationCases.ets', 'entry/src/test/KnowledgeResultCases.ets'
 ]);
 for (const source of optionalSources) {
   if (fs.existsSync(path.join(project, source))) sources.push(source);
 }
 console.log(`[工具] Node=${process.version} SDK=${sdkHome} compiler=${ts.version} golden=text-m1-golden-v1`);
+console.log('[执行边界] host transpilation/injected ports only; NOT ArkTS checker, native zlib, ArkData, PDFKit, device, UI or provider verification');
 for (const source of sources.concat(['entry/src/main/ets/pages/Index.ets', 'entry/src/test/eval/text-m1-golden.json',
-  'entry/src/test/run-host-tests.cjs', 'entry/src/test/mineru-host-loader.cjs', 'entry/src/test/mineru-transfer-host-cases.cjs', 'entry/src/test/mineru-repository-host-cases.cjs'])) {
+  'entry/src/test/run-host-tests.cjs', 'entry/src/test/mineru-host-loader.cjs', 'entry/src/test/mineru-transfer-host-cases.cjs', 'entry/src/test/mineru-repository-host-cases.cjs',
+  'entry/src/test/pdf-offline-host-cases.cjs','entry/src/test/knowledge-store-host-cases.cjs','entry/src/test/embedding-credential-host-cases.cjs',
+  'entry/src/test/knowledge-scope-host-cases.cjs','entry/src/test/run-host-summary.cjs'])) {
   console.log(`[源与题集SHA256] ${source} ${crypto.createHash('sha256').update(fs.readFileSync(path.join(project, source))).digest('hex')}`);
 }
 const fingerprintRoot = path.join(project, 'entry/src/main/ets/knowledge');
@@ -63,6 +89,8 @@ for (const source of sources) {
 }
 
 const fixtureRoot = path.join(project, 'entry/src/test/fixtures');
+for (const item of require('./knowledge-result-host-cases.cjs')(outputRoot,project)) { test(`KnowledgeResult host · ${item.name}`,item.run); }
+for (const testCase of require('./vector-quality-host-cases.cjs')(project)) { test(testCase.name,testCase.run); }
 const golden = JSON.parse(fs.readFileSync(path.join(project, 'entry/src/test/eval/text-m1-golden.json'), 'utf8'));
 for (const item of golden.fixtures) {
   const bytes = fs.readFileSync(path.join(fixtureRoot, item.file));
@@ -146,12 +174,17 @@ for (const testCase of chunkerCases()) {
 for (const testCase of corpusCases(corpusDocs)) {
   test(`语料 · ${testCase.name}`, testCase.run);
 }
-for (const suite of ['TextPipeline', 'TextService', 'DocumentParse', 'DocumentParseService']) {
+const suiteEntrypoints = {
+  TextPipeline: 'textPipelineCases', TextService: 'textServiceCases',
+  DocumentParse: 'documentParseCases', DocumentParseService: 'documentParseServiceCases',
+  Embedding: 'embeddingCases', PdfArchive: 'pdfArchiveCases',
+  PdfStructure: 'pdfStructureCases', KnowledgeIntegration: 'knowledgeIntegrationCases', KnowledgeResult: 'knowledgeResultCases'
+};
+for (const suite of Object.keys(suiteEntrypoints)) {
   const source = path.join(project, `entry/src/test/${suite}Cases.ets`);
   if (fs.existsSync(source)) {
     const module = require(path.join(outputRoot, `entry/src/test/${suite}Cases.js`));
-    const entrypoint = { TextPipeline: 'textPipelineCases', TextService: 'textServiceCases',
-      DocumentParse: 'documentParseCases', DocumentParseService: 'documentParseServiceCases' }[suite];
+    const entrypoint = suiteEntrypoints[suite];
     for (const item of module[entrypoint]()) {
       test(`${suite} · ${item.name}`, item.run);
     }
@@ -159,7 +192,19 @@ for (const suite of ['TextPipeline', 'TextService', 'DocumentParse', 'DocumentPa
 }
 
 const credentialHost = require('./mineru-host-loader.cjs')(outputRoot, sdkHome, ts);
+for (const item of require('./pdf-offline-host-cases.cjs')(outputRoot,project)) {
+  test(`PDF authorized offline host boundary · ${item.name}`, item.run);
+}
+for (const item of require('./knowledge-store-host-cases.cjs')(outputRoot)) {
+  test(`Knowledge SQLite injected host boundary · ${item.name}`,item.run);
+}
+for (const item of require('./knowledge-scope-host-cases.cjs')(project)) {
+  test(`Knowledge source scope audit · ${item.name}`,item.run);
+}
 const { mineruCredentialStoreCases } = credentialHost;
+for (const item of require('./embedding-credential-host-cases.cjs')(outputRoot,credentialHost.hostAssetEnums)) {
+  test(`Embedding credential injected host boundary · ${item.name}`,item.run);
+}
 for (const item of mineruCredentialStoreCases()) {
   test(`MineruCredentialStore host boundary · ${item.name}`, item.run);
 }
@@ -209,11 +254,8 @@ test('转发视图源码契约 · V1可观察任务进度前置且前台导航�
 test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => {
   const protectedFiles = {
     'entry/src/main/ets/knowledge/domain/TextKnowledgeModels.ets': '530e82f28659c7febdfe74c9e7c7f265c0217ba9ed933fad5b168a0310c1be7f',
-    'entry/src/main/ets/knowledge/domain/TextKnowledgePorts.ets': 'a49b943f8e879ef9a7176f2779702a0e679de0851dd59169080b835c1c17f9a2',
     'entry/src/main/ets/knowledge/application/TextKnowledgeService.ets': '7bb0f0bd519fff14ea1ba869a4f0267a956ebffdd8123ab8553ddc8bd34da0b5',
-    'entry/src/main/ets/knowledge/infra/TextRdbRepository.ets': '7c19a1f442a0c5953e52591f565996066cc032a8befd696d7081938338d434bb',
     'entry/src/main/ets/knowledge/infra/TextFileAdapter.ets': 'c65bc087f958b28ad04dcf18bf3c43482defd98a3a8ff9b96cdfaa4fa4d7200a',
-    'entry/src/main/ets/knowledge/infra/TextKnowledgeAssembly.ets': 'bcb885a767a3679f1182bfe883630f8e9d3d2cfd50574371e09260082b763f3d',
     'entry/src/main/ets/knowledge/pipeline/TextNormalizer.ets': 'dc4e861e99dc69883350b4d23e9289e455e9a3e7bb8eb880a7e6dad8595a3760',
     'entry/src/test/eval/text-m1-golden.json': 'f060e0ed13451a56e89625b32946b906b718d9238996bc85d30e8edd7e1f9494',
     'scripts/dev-run-mac.sh': 'c8d74af19a7cf3fb702ee50770507394f03e0c6a2f15ad5fdb4f09720dd19216',
@@ -224,6 +266,18 @@ test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => 
     const hash = crypto.createHash('sha256').update(fs.readFileSync(path.join(project, file))).digest('hex');
     if (hash !== protectedFiles[file]) throw new Error('Protected baseline bytes changed');
   }
+  // Approved M2-B connection points are additive, not exempt from compatibility.
+  const baseline = file => cp.execFileSync('git', ['show', `9f5992c:${file}`], { cwd: project, encoding: 'utf8' });
+  const portsFile = 'entry/src/main/ets/knowledge/domain/TextKnowledgePorts.ets';
+  if (!fs.readFileSync(path.join(project, portsFile), 'utf8').startsWith(baseline(portsFile))) throw new Error('M1 original port contract changed');
+  const repoFile = 'entry/src/main/ets/knowledge/infra/TextRdbRepository.ets';
+  const repo = fs.readFileSync(path.join(project, repoFile), 'utf8');
+  const legacy = baseline(repoFile);
+  const frozenStatements = text => text.split('\n').filter(line => /const TEXT_LAYOUT|transaction.execute\('CREATE |TEXT_FTS_DDL/.test(line)).map(line => line.trim());
+  if (JSON.stringify(frozenStatements(repo)) !== JSON.stringify(frozenStatements(legacy))) throw new Error('M1 SQL layout/FTS statements changed');
+  if (!repo.includes('return this.recall(input, archived, cancel, 5)') || !repo.includes('return this.recall(input, archived, cancel, 20)') || !repo.includes('hits.length > limit')) throw new Error('M1 top5/candidate20 contract lost');
+  if (!repo.includes('await this.host.release()') || repo.includes('await this.store.close()')) throw new Error('M1 bypasses shared handle leases');
+  if (repo.slice(repo.indexOf('  async saveHistory(')) !== legacy.slice(legacy.indexOf('  async saveHistory('))) throw new Error('M1 history wire changed');
   for (const source of sources.filter(s => /knowledge\/(domain|pipeline|application)\/(Document|Mineru)/.test(s))) {
     const text = fs.readFileSync(path.join(project, source), 'utf8');
     if (/@kit\.|\b(any|unknown|as)\b|JSON\.parse|TextNormalizer|TextKnowledgeService/.test(text)) throw new Error('Pure M2 boundary violated');
@@ -231,5 +285,6 @@ test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => 
   const permissions = fs.readFileSync(path.join(project, 'entry/src/main/module.json5'), 'utf8').match(/ohos\.permission\.[A-Z_]+/g) || [];
   if (JSON.stringify(permissions) !== JSON.stringify(['ohos.permission.INTERNET'])) throw new Error('Permission scope changed');
   const backup = JSON.parse(fs.readFileSync(path.join(project, 'entry/src/main/resources/base/profile/backup_config.json'), 'utf8'));
-  if (backup.allowToBackupRestore !== true || backup.excludes.some(p => !p.includes('knowledge_parse_v1') && !p.includes('shuvi_parse_stage_v1.db'))) throw new Error('M1 backup isolation changed');
+  const oldBackup = JSON.parse(baseline('entry/src/main/resources/base/profile/backup_config.json'));
+  if (backup.allowToBackupRestore !== true || !oldBackup.excludes.every(p=>backup.excludes.includes(p)) || backup.excludes.some(p => !p.includes('knowledge_parse_v1') && !p.includes('shuvi_parse_stage_v1.db') && !p.includes('knowledge_pdf_v1') && !p.includes('shuvi_kb_vector_v1.db'))) throw new Error('M1 backup isolation changed');
 });
