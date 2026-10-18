@@ -306,6 +306,8 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
         try { if (!eligible.goToNextRow()) { throw new KnowledgeFailure('StaleJob', 'checkpoint'); } } finally { eligible.close(); }
         const checkpoint: relationalStore.ResultSet = await transaction.querySql('SELECT snapshot,snapshot_hash,report_hash,state FROM kb_content_generation WHERE id=?',[job.generation]);
         try { if (!checkpoint.goToNextRow() || (checkpoint.getString(0).length > 0 && (checkpoint.getString(0) !== job.snapshotId || checkpoint.getString(1) !== job.snapshotHash || checkpoint.getString(2) !== job.reportHash))) { throw new KnowledgeFailure('CheckpointReplacementForbidden','checkpoint'); } } finally { checkpoint.close(); }
+        if (['MINERU-HOSTED-PDF-3.4.4-OBSERVED-1','MINERU-HOSTED-PDF-3.4.4-OCR-FALSE-1'].indexOf(job.profile) < 0 || job.normalizeVersion !== 'PDF-NORMALIZE-1' || job.filterVersion !== 'PDF-FILTER-1' || job.chunkVersion !== 'PDF-CHUNK-1') { throw new KnowledgeFailure('JobPolicyInvalid','checkpoint'); }
+        await transaction.execute('UPDATE kb_local_job SET profile=? WHERE job=?',[job.profile,job.id]);
         await transaction.execute('UPDATE kb_job SET stage=?,checkpoint=?,snapshot=?,snapshot_hash=?,report_hash=?,failure=? WHERE id=?', [job.stage,job.checkpoint,job.snapshotId,job.snapshotHash,job.reportHash,job.failure,job.id]);
         await transaction.execute('UPDATE kb_content_generation SET snapshot=?,snapshot_hash=?,report_hash=? WHERE id=?', [job.snapshotId,job.snapshotHash,job.reportHash,job.generation]);
         await transaction.execute('UPDATE kb_candidate SET checkpoint=?,owner=? WHERE job=?',[job.checkpoint,job.ownerSession,job.id]);

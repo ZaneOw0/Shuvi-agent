@@ -3,8 +3,6 @@ import { KnowledgeAssembly, KnowledgePlatformIdentity } from './KnowledgeAssembl
 import { PdfProcessingAdapter } from './PdfProcessingAdapter';
 import { PdfChunk } from '../domain/PdfKnowledgeModels';
 import { pdfCodecUtf8 } from '../pipeline/PdfSnapshotCodec';
-import { taskpool } from '@kit.ArkTS';
-import { pdfVerifySnapshotWorker } from './PdfSnapshotWorker';
 import { PdfLocalMetadata } from '../domain/PdfLocalModels';
 import { PdfNormalizedDocument, PdfIngestionJob, PdfKnowledgeDocument, PdfNodeKind, KnowledgeCancellation, KnowledgeFailure, KnowledgeReadLease } from '../domain/PdfKnowledgeModels';
 
@@ -19,7 +17,7 @@ export async function pdfAuditPublishedSnapshot(context: common.Context): Promis
     if (job.reportHash !== '6b57aaa8827b25325bf41c1a2f82fb4c81fb3a95f6c0af1ee4d92d06a55ac864') { throw new KnowledgeFailure('ApprovedReportChanged','audit'); }
     lease = assembly.sourceReadLease(job.sourceId,job.generation); await assembly.repository.acquireRead(lease);
     const snapshot: PdfNormalizedDocument = await assembly.assets.read(job.snapshotId,new KnowledgeCancellation());
-    await taskpool.execute<[PdfNormalizedDocument,number],boolean>(pdfVerifySnapshotWorker,snapshot,Date.now()+120000);
+    await new PdfProcessingAdapter().verifySnapshot(snapshot,new KnowledgeCancellation());
     const chunks: PdfChunk[] = await new PdfProcessingAdapter().chunks(snapshot,job.generation,new KnowledgeCancellation());
     for (const chunk of chunks) { chunk.inputHash = await new KnowledgePlatformIdentity().hash(pdfCodecUtf8(chunk.embeddingText)); }
     await assembly.repository.bindExistingChunkSources(job.generation,chunks);

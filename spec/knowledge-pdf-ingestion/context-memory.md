@@ -1,5 +1,31 @@
 # 工作进度记忆：M1 → M2-A → M2-B
 
+## 当前补充部署：Studio 工具链（2026-10-18）
+
+用户在此前唯一Phase5 INCOMPLETE结案后明确要求使用当前Studio路径重新构建安装，随后由用户手动验收。已独立执行成功，不重委派spec-verify、不覆盖旧失败报告：StudioCLI1.3.5/Node24.14.1，部署子进程去Agent认证覆盖和大小写proxy变量，登录预检成功；正常脚本复用签名cache，实际build1/run--skip-build1均RC0，14ets再次checkerclean，无源修改/失败重试。唯一Mate90Pro127.0.0.1:5555已重核。
+
+signed HAP4234534B，SHA`6add1061167cb02e63ee172cc78af17f7c8f7f74b1a284c9a8bab22413456d2d`，部署前后对应；模板SHA36852083…a2fb7恢复/worktree+indexdiff0。证据`2026-10-18-ocr-fix-studio-{deploy-preflight-01,signed-deploy-01,deploy-audit-01}-a9092f0/`；部署指纹f5d6eaaff2024b28491cd3c42785a3f3edab7e8aac97d3085a2fb78384982bf2。新ignored专用限制器仅1build/1run、禁止签名生成，不复用旧guard。报告`ocr-profile-fix-studio-deployment.md`为当前补充安装记录，下面唯一Phase5失败为历史原时点。
+
+用户功能手动验收未执行：不点击恢复/发布/向量化，不做UI/设备库探针，不发MinerU/embedding，不读Key/.local/签名raw，不卸载/reset/Git写。建议先在PDF本机任务刷新并恢复当前33页文件现有失败job，不新上传或新attempt；预期Review后由用户审查33页脚排除/19空文本并决定发布。部署成功不能保证所有新协议/超预算/损坏包都通过，仍需实际验证。
+
+## 当前 OCR=false / worker 阶段5唯一结案（2026-10-18）
+
+最终authority `ocr-profile-fix-verification.md`，当前build-only **INCOMPLETE**。T007/T008均已处理勾选，但分别构建PASS/部署INCOMPLETE，绝非全部验收PASS；本轮已唯一执行，不再spawn/reinvoke。14ets checker一次clean紧接实际build1/10 RC0，无源码fix/失败build/retry；host299/counter32仅沿用阶段4，未本轮重测。两次readonly清单/view均唯一Mate90Pro/127.0.0.1:5555/API26；原macOS缓存签名脚本调用1次RC1停登录预检，实际内部build0/run0、无signed HAP，不能安全部署，未login/新签/force/uninstall绕过。未读认证/签名原始输出，不能据此推断凭据真实失效。
+
+unsigned HAP4174557B，SHA8e6443dcffc5dd14485145a0c5d1922c5aabfab2e96849e2bb803f1af0421000；模板SHA36852083144377348c92aafdf42381978ba9d46a4a2c811c0ad39582ff4a2fb7前后相同、worktree/indexdiff0，脚本未进入签名替换。14ets集合SHA66b1c2e209e66261428f102de8842358c1ddf91725f4865cba909f0a2db16b03；构建/部署尝试指纹9b6a57d9a7c78edf607f332c3dec9d3d14735aef34e680931a9da69c1c64a302。capture scopes前缀`.cache/test-logs/2026-10-18-ocr-fix-phase5-`，target-01/build-01/target-predeploy-02/signed-deploy-01/artifact-audit-01/closeout-audit-01，均后缀-a9092f0、safe-host、log_exit=not-run。
+
+无UI/截图/runtime/恢复/生产profile更新/发布/向量化/provider，不读Key/.local/签名/private/raw，不改ZIP/旧三候选/旧guard/journal/冻结gold/生产库/工具配置，不Git写。新33页包46图实际ImageKit、真实TaskPool去敏边界与Review仍未验，SC-011/013不得标PASS；旧SHA/343仅host及历史引用，没有本轮生产状态保持证明。下面阶段4是实施时点历史，不按其“待下一阶段”再次验证。
+
+## 当前 OCR=false / worker 最小修复阶段4交付（2026-10-18）
+
+当前权威 `ocr-profile-fix-implementation.md`；用户批准阶段1/2/3，本轮T001–T006完成，T007/T008未执行/未勾选，只交父agent下一阶段一次build-only。原result-pages/ROUND2结论与冻结gold保留，不重做旧任务。HEAD a9092f0，无Git写。
+
+明确3.4.4/hybrid/medium严格boolean两分支：true原profile不变，false独立MINERU-HOSTED-PDF-3.4.4-OCR-FALSE-1；未知/缺失/null/string/number仍拒绝。PDF-WORKER-RESULT-1七入口具名数据/白名单category/stage/可选安全整数code，主线程沿原codec显式校验再重建；未知及调度reject按操作去敏，取消/timeout/finally/readlease/releasing保留。未发布Staging/Publishable checkpoint更新实际profile，不改processingKey/Published/Retained/活动向量。
+
+最终host299/299（原278+21）73.859146541s，counter32/32。最终证据 `.cache/test-logs/2026-10-18-ocr-fix-host-closeout-03-a9092f0/` 指纹813430e646e0c456c59b85aeb90b8acf39588032938df3951f61b13fd4cbb10b；counter为ocr-fix-counter-01。所有实际host均safe-host/capture独占留档，红测试两轮保留。新ZIP6452636B/52CRC/展开8482133B/false规范化codec通过：342主项/346nodes/294validated/52excluded（33page_footer NodeTypeUnsupported+19EmptyText），46资产仅引用，**ImageKit/真实TaskPool/设备Review未验**。旧30页seal/verify仍snapshot7cc60225…e281/report6b57aaa8…c864精确SHA，343块及旧来源/高亮回归保持，不更新golden。
+
+本轮checker/build/run/deploy/UI/设备动作/生产读写/provider均0，不读Key/.local/签名/private/raw，不恢复或删除三Failed候选、不新增第四attempt、不清库/卸载/reset。三候选身份与旧343实际状态只引用既有诊断/历史，本轮未读设备不冒保持实测。14个精确ets（含直接verify调用方PdfLocalAudit与准备平台case）及复现/安全审查见实施报告；下一阶段仅T007/T008，无UI/恢复/平台probe/新RPC。SC-011真实Review与SC-013后台边界仍未验。
+
 ## 当前简化增量阶段5唯一结案（2026-10-17）
 
 最终authority `result-pages-verification.md`，本次build-only **PASS**；T010/T011已处理且构建/部署各PASS，不再spawn/reinvoke。当前tasks无currenttasks.md同名文件。17ets checker一次clean紧接首build；实际build2/10（直接1＋正常macOS缓存signed脚本内部1）均RC0，run --skip-build仅1次RC0，源码修复/重试0。Mate90Pro/127.0.0.1:5555唯一映射已readonlylist/view并部署前复核，未做任何runtime探针/UI/截图/生产页登记/查询/provider。全部旧请求授权仍耗尽，旧guard/journal未动。

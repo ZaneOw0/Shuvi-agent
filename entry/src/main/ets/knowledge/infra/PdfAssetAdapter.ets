@@ -2,6 +2,7 @@ import { fileIo, ReadOptions, WriteOptions } from '@kit.CoreFileKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util, taskpool } from '@kit.ArkTS';
 import { image } from '@kit.ImageKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { KnowledgeStorageScope } from '../domain/KnowledgeStorageScope';
 import { PdfAssetPort, PdfArchivePort } from '../domain/KnowledgePorts';
 import { PdfNormalizedDocument, PdfContentNode, PdfBudget, KnowledgeCancellation, KnowledgeCleanupIntent, KnowledgeFailure, PdfDerivedImage, PdfZipMember, PdfAssetWriteRecord, PdfAssetDescriptor } from '../domain/PdfKnowledgeModels';
@@ -10,6 +11,9 @@ import { pdfCodecUtf8, pdfDecodeSnapshotHeader, pdfDecodeSnapshotNode } from '..
 import { BoundedDocumentJson, PdfJsonNode } from '../pipeline/BoundedDocumentJson';
 import { KnowledgeDerivedCleanupPort } from '../application/KnowledgeLifecycleService';
 import { pdfEncodeNodeWorker, pdfHydrateHeaderWorker, pdfHydrateNodeWorker } from './PdfSnapshotWorker';
+import { PdfWorkerResult } from '../domain/PdfWorkerModels';
+import { pdfWorkerPayload, pdfWorkerReadNode, pdfWorkerReadSnapshot, pdfWorkerRejected } from '../pipeline/PdfWorkerPolicy';
+import { pdfWorkerAwait } from './PdfWorkerSupport';
 
 export interface PdfAssetLedgerPort {
   reserveAsset(id: string, generation: string, bytes: number): Promise<void>;
@@ -28,6 +32,26 @@ export interface PdfAssetLedgerPort {
 export class PdfAssetAdapter implements PdfAssetPort, KnowledgeDerivedCleanupPort {
   private filesRoot: string; private cacheRoot: string; private ledger: PdfAssetLedgerPort;
   private scope: KnowledgeStorageScope; private fault: string = '';
+  private async encodeNode(node: PdfContentNode, cancel: KnowledgeCancellation): Promise<Uint8Array> {
+    try {
+      const result: PdfWorkerResult = await pdfWorkerAwait(taskpool.execute<[PdfContentNode,number],PdfWorkerResult>(pdfEncodeNodeWorker,node,cancel.deadline),'encode-node',cancel);
+      const parts: Uint8Array[] = pdfWorkerPayload(result,'encode-node',cancel);
+      const restored: PdfContentNode = pdfWorkerReadNode(parts,cancel,'encode-node');
+      if (JSON.stringify(restored) !== JSON.stringify(node)) { throw new KnowledgeFailure('WorkerResultInvalid','pdf-encode-node'); } return parts[0];
+    } catch (error) { const system: BusinessError = error; throw error instanceof KnowledgeFailure ? error : pdfWorkerRejected('encode-node',cancel,system?.code); }
+  }
+  private async hydrateNode(bytes: Uint8Array, cancel: KnowledgeCancellation): Promise<PdfContentNode> {
+    try {
+      const result: PdfWorkerResult = await pdfWorkerAwait(taskpool.execute<[Uint8Array,number],PdfWorkerResult>(pdfHydrateNodeWorker,bytes,cancel.deadline),'hydrate-node',cancel);
+      return pdfWorkerReadNode(pdfWorkerPayload(result,'hydrate-node',cancel),cancel,'hydrate-node');
+    } catch (error) { const system: BusinessError = error; throw error instanceof KnowledgeFailure ? error : pdfWorkerRejected('hydrate-node',cancel,system?.code); }
+  }
+  private async hydrateHeader(bytes: Uint8Array, cancel: KnowledgeCancellation): Promise<PdfNormalizedDocument> {
+    try {
+      const result: PdfWorkerResult = await pdfWorkerAwait(taskpool.execute<[Uint8Array,number],PdfWorkerResult>(pdfHydrateHeaderWorker,bytes,cancel.deadline),'hydrate-header',cancel);
+      return pdfWorkerReadSnapshot(pdfWorkerPayload(result,'hydrate-header',cancel),cancel,'hydrate-header');
+    } catch (error) { const system: BusinessError = error; throw error instanceof KnowledgeFailure ? error : pdfWorkerRejected('hydrate-header',cancel,system?.code); }
+  }
   constructor(filesDir: string, cacheDir: string, ledger: PdfAssetLedgerPort, scope: KnowledgeStorageScope = KnowledgeStorageScope.production()) { this.filesRoot = `${filesDir}/${scope.derivedDirectory}`; this.cacheRoot = `${cacheDir}/${scope.derivedDirectory}`; this.ledger = ledger; this.scope = scope; }
   injectFault(owner: string, stage: string): void { this.scope.requireTestOwner(owner); if (['Reserved','Part','Manifest','Renamed','Committed'].indexOf(stage) < 0) { throw new KnowledgeFailure('FaultStageInvalid','test'); } this.fault = stage; }
   private boundary(stage: string): void { if (this.fault === stage) { this.fault = ''; throw new KnowledgeFailure(`Injected${stage}`,'test'); } }
@@ -165,7 +189,7 @@ export class PdfAssetAdapter implements PdfAssetPort, KnowledgeDerivedCleanupPor
     let bytesTotal: number = headerBytes.length; let partCount: number = Math.ceil(bytesTotal/65536);
     if (bytesTotal > PdfBudget.jsonBytes) { throw new KnowledgeFailure('SnapshotHeaderBudget','pdf-assets'); }
     for (const node of snapshot.nodes) {
-      cancel.check(); const raw: Uint8Array = await taskpool.execute<[PdfContentNode,number],Uint8Array>(pdfEncodeNodeWorker,node,cancel.deadline); cancel.check(); const length: number = raw.length;
+      cancel.check(); const raw: Uint8Array = await this.encodeNode(node,cancel); cancel.check(); const length: number = raw.length;
       if (length > PdfBudget.jsonBytes || length > PdfBudget.expandedBytes-bytesTotal) { throw new KnowledgeFailure('SnapshotNodeBudget','pdf-assets'); }
       bytesTotal += length; partCount += Math.ceil(length/65536);
     }
@@ -176,7 +200,7 @@ export class PdfAssetAdapter implements PdfAssetPort, KnowledgeDerivedCleanupPor
     this.boundary('Reserved');
     const directory: string = `${this.cacheRoot}/${snapshot.id}`; await fileIo.mkdir(directory);
     for (let i: number = 0; i <= snapshot.nodes.length; i++) {
-      cancel.check(); const bytes: Uint8Array = i === 0 ? headerBytes : await taskpool.execute<[PdfContentNode,number],Uint8Array>(pdfEncodeNodeWorker,snapshot.nodes[i-1],cancel.deadline); const names: string[] = [];
+      cancel.check(); const bytes: Uint8Array = i === 0 ? headerBytes : await this.encodeNode(snapshot.nodes[i-1],cancel); const names: string[] = [];
       for (let offset: number = 0; offset < bytes.length; offset += 65536) {
         const name: string = `part-${i}-${names.length}`; const block: Uint8Array = bytes.slice(offset,offset+65536);
         hashes.push(await this.writeFile(directory,name,block,cancel)); names.push(name);
@@ -243,8 +267,8 @@ export class PdfAssetAdapter implements PdfAssetPort, KnowledgeDerivedCleanupPor
       }
       if (total > PdfBudget.jsonBytes) { throw new KnowledgeFailure('SnapshotNodeBudget','pdf-assets'); }
       const bytes: Uint8Array = new Uint8Array(total); let offset: number = 0; for (const block of blocks) { bytes.set(block,offset); offset += block.length; }
-      if (group === 0) { snapshot = await taskpool.execute<[Uint8Array,number],PdfNormalizedDocument>(pdfHydrateHeaderWorker,bytes,cancel.deadline); }
-      else { if (snapshot === undefined) { throw new KnowledgeFailure('SnapshotHeaderMissing','pdf-assets'); } snapshot.nodes.push(await taskpool.execute<[Uint8Array,number],PdfContentNode>(pdfHydrateNodeWorker,bytes,cancel.deadline)); } cancel.check();
+      if (group === 0) { snapshot = await this.hydrateHeader(bytes,cancel); }
+      else { if (snapshot === undefined) { throw new KnowledgeFailure('SnapshotHeaderMissing','pdf-assets'); } snapshot.nodes.push(await this.hydrateNode(bytes,cancel)); } cancel.check();
     }
     if (snapshot === undefined || snapshot.id !== snapshotId || snapshot.nodes.length !== count || hashAt !== hashes.length) { throw new KnowledgeFailure('SnapshotCoverage','pdf-assets'); }
     for (const derived of snapshot.images) {

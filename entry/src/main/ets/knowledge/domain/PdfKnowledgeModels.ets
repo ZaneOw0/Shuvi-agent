@@ -18,7 +18,8 @@ export class PdfBudget {
 export class KnowledgeFailure extends Error {
   category: string;
   stage: string;
-  constructor(category: string, stage: string) { super(`${category} / ${stage}`); this.category = category; this.stage = stage; }
+  code?: number;
+  constructor(category: string, stage: string, code?: number) { super(`${category} / ${stage}${code === undefined ? '' : ' / code='+code}`); this.category = category; this.stage = stage; this.code = code; }
 }
 export class KnowledgeCancellation {
   now: () => number = (): number => Date.now();

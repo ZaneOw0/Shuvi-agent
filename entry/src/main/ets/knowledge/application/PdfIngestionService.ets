@@ -78,7 +78,7 @@ export class PdfIngestionService {
         const recovered: PdfNormalizedDocument | undefined = await this.assets.recoverSnapshot?.(job.generation,cancel);
         if (recovered !== undefined) {
           if (recovered.documentId !== document.id || recovered.generation !== job.generation || recovered.binding.zipHash !== job.binding.zipHash || recovered.binding.originalHash !== job.binding.originalHash) { throw new KnowledgeFailure('RecoveredSnapshotBindingMismatch','resume'); }
-          await this.normalizer.verifySnapshot?.(recovered,cancel); job.snapshotId = recovered.id; job.snapshotHash = recovered.hash; job.reportHash = recovered.coverage.hash; job.stage = PdfStage.Review; job.checkpoint = PdfStage.Review; await this.repository.checkpoint(job);
+          await this.normalizer.verifySnapshot?.(recovered,cancel); job.profile = recovered.profile; job.snapshotId = recovered.id; job.snapshotHash = recovered.hash; job.reportHash = recovered.coverage.hash; job.stage = PdfStage.Review; job.checkpoint = PdfStage.Review; await this.repository.checkpoint(job);
         } else { await this.process(job.binding,document,job,cancel); return; }
       }
       const snapshot: PdfNormalizedDocument = await this.assets.read(job.snapshotId,cancel);
@@ -87,7 +87,7 @@ export class PdfIngestionService {
       this.snapshot = snapshot; this.state.report = snapshot.coverage; this.state.snapshotId = snapshot.id; this.state.nativeMembers = snapshot.manifest.members.length; this.state.nativeExpanded = snapshot.manifest.expandedBytes; this.state.decodedImages = snapshot.images.length;
       this.state.stage = published ? PdfStage.Published : PdfStage.Review; this.state.message = published ? '已发布快照与全部图像重读完成，不重复入库；没有云请求' : '检查点已恢复，须重新确认当前覆盖报告；没有云请求';
     } catch (error) {
-      this.state.stage = cancel.invalid ? PdfStage.Paused : PdfStage.Failed; this.state.message = error instanceof KnowledgeFailure ? error.message : '恢复失败，原件和旧索引保留';
+      this.state.stage = cancel.invalid || (error instanceof KnowledgeFailure && error.category === 'Canceled') ? PdfStage.Paused : PdfStage.Failed; this.state.message = error instanceof KnowledgeFailure ? error.message : 'LocalOperationFailed / resume；原件和旧索引保留';
       if (currentJob !== undefined && currentJob.stage !== PdfStage.Published) { currentJob.stage = this.state.stage; currentJob.failure = this.state.message; try { await this.repository.checkpoint(currentJob); } catch { this.state.message += '；失败状态持久化待核，旧检查点保留'; } }
     }
     finally { await this.finish(readLeaseId); }
@@ -130,7 +130,7 @@ export class PdfIngestionService {
       await this.repository.acquireRead(lease); readLeaseId = lease.id;
       await this.process(binding,document,registered,cancel);
     } catch (error) {
-      this.state.stage = cancel.invalid ? PdfStage.Paused : PdfStage.Failed; this.state.message = error instanceof KnowledgeFailure ? error.message : '入库准备失败，原件、ZIP 和旧索引保留';
+      this.state.stage = cancel.invalid || (error instanceof KnowledgeFailure && error.category === 'Canceled') ? PdfStage.Paused : PdfStage.Failed; this.state.message = error instanceof KnowledgeFailure ? error.message : 'LocalOperationFailed / prepare；原件、ZIP 和旧索引保留';
       if (currentJob !== undefined && !currentJob.terminated && currentJob.stage !== PdfStage.Published) { currentJob.stage = this.state.stage; currentJob.failure = this.state.message; try { await this.repository.checkpoint(currentJob); } catch { this.state.message += '；检查点状态待核，pin 保留'; } }
     } finally { await this.finish(readLeaseId); }
   }
@@ -138,6 +138,7 @@ export class PdfIngestionService {
     const manifest: PdfZipManifest = await this.archive.inspect(binding,cancel); cancel.check();
     this.state.nativeMembers = manifest.members.length; this.state.nativeExpanded = manifest.expandedBytes; this.emit();
     let snapshot: PdfNormalizedDocument = await this.normalizer.normalize(binding,manifest,this.archive,cancel); snapshot.id = this.identity.id(); snapshot.documentId = document.id; snapshot.generation = job.generation;
+    job.profile = snapshot.profile;
     await this.assets.saveImages(snapshot,this.archive,cancel);
     this.state.decodedImages = snapshot.images.length; this.emit();
     if (this.normalizer.sealSnapshot !== undefined) { snapshot = await this.normalizer.sealSnapshot(snapshot,cancel); }
@@ -148,7 +149,7 @@ export class PdfIngestionService {
       snapshot.coverage.hash = await this.identity.hash(pdfCodecUtf8(JSON.stringify(snapshot.coverage)));
     }
     await this.assets.save(snapshot,cancel); cancel.check();
-    job.snapshotId = snapshot.id; job.snapshotHash = snapshot.hash; job.reportHash = snapshot.coverage.hash; job.stage = PdfStage.Review; job.checkpoint = PdfStage.Review;
+    job.profile = snapshot.profile; job.snapshotId = snapshot.id; job.snapshotHash = snapshot.hash; job.reportHash = snapshot.coverage.hash; job.stage = PdfStage.Review; job.checkpoint = PdfStage.Review;
     await this.repository.checkpoint(job); this.snapshot = snapshot; this.state.snapshotId = snapshot.id; this.state.report = snapshot.coverage; this.state.stage = PdfStage.Review; this.state.message = '结构已校验，待审查覆盖限制；尚未发布关键词或向量';
   }
   private async finish(readLeaseId: string): Promise<void> {

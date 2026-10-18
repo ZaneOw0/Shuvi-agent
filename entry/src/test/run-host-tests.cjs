@@ -26,6 +26,8 @@ const sources = [
   'entry/src/test/CorpusCases.ets'
 ];
 const optionalSources = [
+  'knowledge/domain/PdfWorkerModels','knowledge/pipeline/PdfWorkerPolicy',
+  'knowledge/infra/PdfWorkerSupport','knowledge/infra/PdfSnapshotWorker','knowledge/infra/PdfProcessingAdapter','knowledge/infra/PdfAssetAdapter','knowledge/application/PdfIngestionService',
   'knowledge/pipeline/KnowledgeMatchPolicy','knowledge/application/PdfPageReferenceService',
   'knowledge/application/QueryConsentSession','knowledge/application/KnowledgeOperationSession','knowledge/application/KnowledgeDeadline',
   'knowledge/platformtests/SemanticQualityPolicy',
@@ -58,7 +60,7 @@ const optionalSources = [
   'entry/src/test/DocumentParseCases.ets', 'entry/src/test/DocumentParseServiceCases.ets',
   'entry/src/test/MineruCredentialStoreCases.ets',
   'entry/src/test/EmbeddingCases.ets', 'entry/src/test/PdfArchiveCases.ets',
-  'entry/src/test/PdfStructureCases.ets', 'entry/src/test/KnowledgeIntegrationCases.ets', 'entry/src/test/KnowledgeResultCases.ets'
+  'entry/src/test/PdfStructureCases.ets', 'entry/src/test/PdfWorkerCases.ets', 'entry/src/test/KnowledgeIntegrationCases.ets', 'entry/src/test/KnowledgeResultCases.ets'
 ]);
 for (const source of optionalSources) {
   if (fs.existsSync(path.join(project, source))) sources.push(source);
@@ -67,7 +69,7 @@ console.log(`[工具] Node=${process.version} SDK=${sdkHome} compiler=${ts.versi
 console.log('[执行边界] host transpilation/injected ports only; NOT ArkTS checker, native zlib, ArkData, PDFKit, device, UI or provider verification');
 for (const source of sources.concat(['entry/src/main/ets/pages/Index.ets', 'entry/src/test/eval/text-m1-golden.json',
   'entry/src/test/run-host-tests.cjs', 'entry/src/test/mineru-host-loader.cjs', 'entry/src/test/mineru-transfer-host-cases.cjs', 'entry/src/test/mineru-repository-host-cases.cjs',
-  'entry/src/test/pdf-offline-host-cases.cjs','entry/src/test/knowledge-store-host-cases.cjs','entry/src/test/embedding-credential-host-cases.cjs',
+  'entry/src/test/pdf-offline-host-cases.cjs','entry/src/test/pdf-worker-host-cases.cjs','entry/src/test/pdf-ocr-profile-host-cases.cjs','entry/src/test/knowledge-store-host-cases.cjs','entry/src/test/embedding-credential-host-cases.cjs',
   'entry/src/test/knowledge-scope-host-cases.cjs','entry/src/test/run-host-summary.cjs'])) {
   console.log(`[源与题集SHA256] ${source} ${crypto.createHash('sha256').update(fs.readFileSync(path.join(project, source))).digest('hex')}`);
 }
@@ -89,6 +91,8 @@ for (const source of sources) {
 }
 
 const fixtureRoot = path.join(project, 'entry/src/test/fixtures');
+for (const item of require('./pdf-worker-host-cases.cjs')(outputRoot,project)) { test(`PDF worker injected host boundary · ${item.name}`,item.run); }
+for (const item of require('./pdf-ocr-profile-host-cases.cjs')(outputRoot,project)) { test(`PDF OCR profile offline host · ${item.name}`,item.run); }
 for (const item of require('./knowledge-result-host-cases.cjs')(outputRoot,project)) { test(`KnowledgeResult host · ${item.name}`,item.run); }
 for (const testCase of require('./vector-quality-host-cases.cjs')(project)) { test(testCase.name,testCase.run); }
 const golden = JSON.parse(fs.readFileSync(path.join(project, 'entry/src/test/eval/text-m1-golden.json'), 'utf8'));
@@ -178,7 +182,7 @@ const suiteEntrypoints = {
   TextPipeline: 'textPipelineCases', TextService: 'textServiceCases',
   DocumentParse: 'documentParseCases', DocumentParseService: 'documentParseServiceCases',
   Embedding: 'embeddingCases', PdfArchive: 'pdfArchiveCases',
-  PdfStructure: 'pdfStructureCases', KnowledgeIntegration: 'knowledgeIntegrationCases', KnowledgeResult: 'knowledgeResultCases'
+  PdfStructure: 'pdfStructureCases', PdfWorker: 'pdfWorkerCases', KnowledgeIntegration: 'knowledgeIntegrationCases', KnowledgeResult: 'knowledgeResultCases'
 };
 for (const suite of Object.keys(suiteEntrypoints)) {
   const source = path.join(project, `entry/src/test/${suite}Cases.ets`);

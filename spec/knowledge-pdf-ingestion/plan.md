@@ -1,18 +1,24 @@
 # Implementation Plan: PDF 最小闭环原页标注与片段高亮
 
-**更新时间**：2026-10-17。  
-**状态**：T001–T009阶段4源码/host完成；当前阶段5唯一build-only验证已结束，T010构建/T011部署各PASS，源码修复0；最终authority为result-pages-verification.md。页面/生产页登记/真实similar未验，不重委派，实施证据见result-pages-implementation.md。  
-**Input**：/Users/zane/DevecostudioProjects/Shuvi-agent/spec/knowledge-pdf-ingestion/spec.md，当前C1–C3、FR-033–FR-041、SC-007–SC-010。  
+**更新时间**：2026-10-18。
+**状态**：两项最小修复源码/host/构建完成。此前唯一阶段5部署受登录预检阻塞的报告保留；后续用户明确授权StudioCLI1.3.5/Node24.14.1隔离子进程环境补充构建部署，已成功安装，见ocr-profile-fix-studio-deployment.md。新PDFReview/发布/真实TaskPool由用户手动验收，未自动执行；旧报告不覆盖，不重委派旧验证。
+**Input**：/Users/zane/DevecostudioProjects/Shuvi-agent/spec/knowledge-pdf-ingestion/spec.md，当前B1–B2、FR-042–FR-048、SC-011–SC-014。
 **PROJECT_ROOT**：/Users/zane/DevecostudioProjects/Shuvi-agent。  
 **CONFIG_ROOT**：/Users/zane/.local/share/deveco。
 
 ## Summary
+
+当前修复只处理已确定的两项：规范化显式支持 `3.4.4 / hybrid / medium` 的OCR boolean false变体；后台失败通过具名、可序列化且运行时校验的信封保留安全类别/阶段。页脚维持明确排除，不更改ZIP、结构/CRC/预算限制，不重发任何服务请求。
+
+复用新33页PDF现存的一个Failed候选及原ZIP，只恢复到AwaitingCoverageReview，不批准/发布/向量化。旧true快照/343块/向量和原页展示源保留；本节及下列“当前修复”条目为本次设计，旧原页/高亮设计继续作为既有职责，不重做。
 
 复用ROUND2已实施的单entry、V1及knowledge五层、普通库＋派生向量库架构，保留当前343块/向量/快照/原件身份，只补原页证据、片段命中分类/高亮、直接优先与相似明确标注。本次不做生成回答、不要求原PDF区域叠加、不跑完整16题质量、不重发MinerU或文档embedding。
 
 历史完整设计的已实施职责仍适用：安全ZIP/typed JSON/结构表格与公式/TaskPool、严格快照读回、Asset Store隔离凭据、独立外发授权、普通库活动指针/向量空间/资格镜像、pin/读租约/持久cleanup、统一历史/截止与失败恢复。实现演进及历史取舍保存在本目录ROUND2各报告和round2-plan.md，不将早期“未实现/只差Key”状态作为当前事实。
 
 ## Technical Context
+
+当前修复沿用下表技术基线；不新依赖/权限/SDK、数据库引擎或架构层。错误信封是线程内外的数据合同，不把普通对象原型保留当先决条件；所有7个PDF后台入口（normalize、chunks、seal、verify、encode node、hydrate node、hydrate header）采用一致失败合同，范围限这些现有入口。
 
 | 项目 | 当前增量 |
 |---|---|
@@ -30,12 +36,29 @@
 
 ### 文档
 
+- 当前修复独立记录为 /Users/zane/DevecostudioProjects/Shuvi-agent/spec/knowledge-pdf-ingestion/ocr-profile-fix-implementation.md、ocr-profile-fix-verification.md；旧result-pages/ROUND2/冻结题集不覆盖。当前tasks生成前将旧已完成任务保留为独立历史文件。
 - 当前spec/plan/tasks路径固定为 /Users/zane/DevecostudioProjects/Shuvi-agent/spec/knowledge-pdf-ingestion/ 下同名文件；本次tasks后续生成。
 - 当前增量报告拟存 /Users/zane/DevecostudioProjects/Shuvi-agent/spec/knowledge-pdf-ingestion/result-pages-implementation.md、result-pages-verification.md、pdf-page-alignment.md。
 - 冻结V1：/Users/zane/DevecostudioProjects/Shuvi-agent/spec/knowledge-pdf-ingestion/round2-pdf-gold-candidate.md、.json、round2-pdf-gold-freeze.md，均不改；本次只将其中原件参照用于独立页身份核对，不要求整套题评分。
 - ROUND2历史与总spec保留：/Users/zane/DevecostudioProjects/Shuvi-agent/specs/02-个人知识库问答.md 只增量当前范围/证据。
 
 ### 最小源码落点
+
+当前修复只在以下现有边界及一个纯错误合同模块实施；下表原页/高亮文件为已有基线，不在此次重构。
+
+| 绝对路径 | 当前修复职责 |
+|---|---|
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/main/ets/knowledge/pipeline/MineruPdfNormalizer.ets | 严格boolean OCR变体选择、false profile身份；true输出不变，页脚仍排除 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/main/ets/knowledge/domain/PdfWorkerModels.ets | 新增具名版本化成功/失败数据与操作/类别/阶段合同 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/main/ets/knowledge/pipeline/PdfWorkerPolicy.ets | 新增纯错误数据生成/校验、白名单与安全重建 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/main/ets/knowledge/infra/PdfProcessingAdapter.ets | normalize/chunks/seal/verify的主线程校验和TaskPool系统拒绝分支 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/main/ets/knowledge/infra/PdfSnapshotWorker.ets | encode/hydrate/seal/verify入口捕获为数据，不直接跨线程丢领域原因 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/main/ets/knowledge/infra/PdfWorkerSupport.ets | 复用线程取消与受限数据传递，保留已有边界 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/main/ets/knowledge/infra/PdfAssetAdapter.ets | 消费encode/hydrate后台结果时统一校验；图像验证与存储规则不放宽 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/main/ets/knowledge/application/PdfIngestionService.ets | 具体安全错误呈现/失败记录；成功false结果的job profile与当前检查点一致 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/main/ets/knowledge/infra/PdfKnowledgeRepository.ets | 仅对允许的未发布检查点同步实际profile；不改旧活动世代或旧处理键 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/test/PdfStructureCases.ets | boolean true/false及非法profile负例、页脚明确排除 |
+| /Users/zane/DevecostudioProjects/Shuvi-agent/entry/src/test/PdfWorkerCases.ets | 新增失败信封的版本/非法类型/未知异常/去敏/取消与超时用例 |
 
 | 绝对路径 | 职责 |
 |---|---|
@@ -59,6 +82,8 @@
 
 ## Complexity Tracking
 
+当前修复新增两个纯职责文件（线程模型、校验策略），目的是避免各后台入口独立解释失败；不新增通用全应用错误框架。原快照wire和数据库表布局不更改，不增加新的profile迁移表；仅复用已有job policy字段在未发布检查点事务记录当前实际profile。
+
 无新增依赖、权限或架构违例。两个必要取舍：
 
 | 取舍 | 必要性 | 不采用 |
@@ -67,6 +92,30 @@
 | 页级与区域级证据分开 | 当前只要真实物理页，不需要未取证的坐标变换 | 将region验证的geometry条件当页身份必要条件，或provider idx直接+1 |
 
 ## Research & Decisions
+
+### F1 明确false变体而非删校验
+
+- **Decision**：版本/后端/effort仍精确校验，OCR必须为JSON boolean；true继续原profile `MINERU-HOSTED-PDF-3.4.4-OBSERVED-1`，false使用独立 `MINERU-HOSTED-PDF-3.4.4-OCR-FALSE-1`。false快照通过既有profile字符串承载实际标志，不向旧快照增加影响JSON序列化/hash的默认字段。
+- **Rationale**：新包其余profile及v1/v2/audit全匹配，原版明确在OCR条件拒绝；true原hash/codec已经部署，不能为支持false重写旧快照。两者不是“取消OCR要求”或“接受任何schema”。
+- **Alternatives considered**：不篡改包内false为true、不用truthy/字符串兼容、不删除profile校验、不改上游请求is_ocr来重新消耗解析额度。
+
+### F2 跨线程只传失败数据
+
+- **Decision**：PDF后台入口返回PDF-WORKER-RESULT-1信封，主线程验证版本/操作/成功分支及payload，失败只含白名单category/stage、可选安全整数SDK code及有限非敏感定位。业务错误在worker内部转数据，主线程重建KnowledgeFailure；TaskPool自身reject按安全操作阶段归类，不解析任意raw message或靠未知对象强制断言。
+- **Rationale**：官方documentId `开发指南/ArkTS_方舟编程语言/ArkTS并发/并发线程间通信/线程间通信对象/普通对象/normal-object`明确普通类实例跨线程只传数据，原型/方法不保留。该资料不证明本件实际rejected Error已丢原型，所以修复处理的是已存在的不可靠契约，而非伪称实测丢失。
+- **Alternatives considered**：不从raw error.message猜category、不将任意字符串显示到页面、不用as/any绕校验、不因更好提示自动重试或放松真正失败。
+
+### F3 恢复身份与持久字段
+
+- **Decision**：验证选择一个已存在Failed且无snapshot的候选，经现有resume路径更新epoch/租约并消费原ZIP。既有processingKey保持作为已登记尝试的幂等身份；得到完整规范化profile后，只有当前未发布Staging/Publishable检查点可将已有job profile字段同步为false变体，snapshot与job最终一致。其余Failed候选保留，不新增第四attempt。
+- **Rationale**：三个尝试当前无asset/snapshot/chunk，可复用失败任务，无需清理或重解析。processingKey生成时尚未读结果profile，不能为纠正profile而找不到旧候选或创建重复任务。旧Published/Retained禁止回写。
+- **Alternatives considered**：不批量迁移旧profile、不开新空库、不中途改ZIP hash、也不重封存旧true活动快照；新产生任务的旧legacy key解释与实际profile分开记录。
+
+### F4 页脚保留明确排除
+
+- **Decision**：33个page_footer保持Unsupported/NodeTypeUnsupported覆盖记录，不新增类型、不算正文。验证到达Review后检查这些排除仍真实可见；不能把“normalize成功”解释为全文识别完整。
+- **Rationale**：页脚不是当前硬失败根因，用户选择两项最小修复。
+- **Alternatives considered**：不顺带扩展metadata/图像格式/任意profile，也不静默删除页脚。
 
 ### D1 直接匹配针对展示正文
 
@@ -100,6 +149,15 @@
 
 ## Data Model
 
+### 当前修复数据合同
+
+| 模型 | 内容 | 约束 |
+|---|---|---|
+| 既有snapshot.profile | 原true标识/独立false标识 | 不新增影响旧JSON/hash的字段，true字节回归不变；false实际身份可读 |
+| PdfWorkerResult | wire、operation、status、payload或failure | 有且仅有合法成功/失败分支，缺/超长/未知版本拒绝；不依赖原型 |
+| PdfWorkerFailure | category、stage、code（可缺）、有限定位元数据 | category/stage/操作白名单；数值必须有限安全整数；无正文/URL/认证或raw message |
+| 既有job policy | profile与已有normalize/filter/chunk策略 | 未发布且身份/epoch有效检查点同步；旧Published/Retained及既有processingKey不改 |
+
 | 实体 | 字段/关系 | 必须校验 |
 |---|---|---|
 | ResultMatch | policyVersion、kind=Direct/Similar、actualInput/terms身份、textHash、matchedTerms、ranges | Direct至少一非空合法range；Similar有实际vector来源且ranges空；仅前缀keyword不展示为二者 |
@@ -111,6 +169,26 @@
 页证据与展示记录通过可识别的附加迁移登记；现EXT-2/其他ROUND2子迁移、M1布局和解析v3不重置。保留所有原content/node/chunk/generation/snapshot/inputHash/space/vectorGeneration。
 
 ## Contracts & Interfaces
+
+### F-K1 Profile与旧快照兼容
+
+两个已观察OCR布尔分支继续同一结构reader、v1/v2页号/bbox/数量/顺序校验与全部预算；未知profile或非法字段明确拒绝。false用独立profile贯穿worker、seal、codec roundtrip及当前job检查点。旧true节点/coverage/快照封存hash以现30页包和冻结SHA回归，不能“更新golden”来适应不必要改变。
+
+### F-K2 Worker边界校验
+
+先在worker同线程捕获领域异常为合法失败数据；未知异常映射WorkerOperationFailed及明确操作阶段，只有可通过已核具名SDK接口安全取到的数字码才保留，无法取到则不杜撰。主线程在各operation适配入口校验信封后重建本线程领域失败，页面/任务仍保存受控格式 `category / stage`，可增加经校验数字码但不拼raw message。
+
+取消/timeout仍遵守原invalid/deadline/资源finally，不能因为信封结果就当成功；TaskPool自身调度/序列化reject也必须有操作名的安全错误，不被重包成成功。各payload沿现有严格模型/codec验证，不引入unknown/as探测任意字段。测试必须包含非法信封和真实后台领域拒绝；host只能证明纯策略，不能代真实TaskPool。
+
+### F-K3 恢复与验证停止点
+
+获准设备验证时只对新来源选择一个候选（优先当前attempt3 job `kb-4dd55b5a630d1479a70ec5a5a5db913f`，实际选择前重新核绑定和未终止/无快照），正常保数据增量安装后点击现有恢复入口。原件/ZIP身份与52CRC/展开8482133B核对，46图必须实际ImageKit解码/落盘读回成功才能称此阶段通过；随后保存新快照/report并到Review。发现后续不同真实错误应记录并在已批范围内修复，不能偷偷放松规则或自动发布。
+
+不勾partial、不点击发布/向量化，不再申请MinerU、不发任何embedding。旧30页343active/Synced与原件ZIP/历史/凭据状态只做安全元数据读回，不读Key；新report/排除/原页未核保持真实。若用户仅选择build-only，则不点击恢复/做运行时探针，报告仅build/deploy通过，SC-011/013真实平台仍未验。
+
+### 当前修复覆盖
+
+FR-042/043→F1/F-K1；FR-044→F1/F3/F-K1；FR-045/046→F2/F-K2；FR-047→F4/F-K3；FR-048→原安全保护/F-K3。SC-011至014分别以真实新包Review、旧true与负例、真实后台错误边界、零网络及身份保护留证。实际验证范围在阶段3选择并记tasks，不在Phase5再询问UI授权。
 
 ### K1 原页对齐与登记
 
@@ -150,6 +228,9 @@ PDF与M1统一direct端口先依据evidence正文、当前可见性和词条取�
 
 ## Changelog
 
+- 2026-10-18阶段5：14ets checker一次clean、实际default/entry/debug build1/10 RC0，无源码修复；只读复核唯一Mate90Pro/127.0.0.1:5555。原脚本一次RC1停在登录预检，未签名合成/内部build/run，无safe signed产物，不以login/新签/卸载绕过；模板前后SHA不变/diff0。T007构建PASS，T008已处理但部署INCOMPLETE，最终build-only INCOMPLETE；host沿用实施，零UI/runtime/恢复/生产profile更新/provider，新Review及真实线程未验。权威ocr-profile-fix-verification.md，不改F-K3范围、不reinvoke。
+- 2026-10-18阶段4：按F1–F4/F-K1–3完成当前两项修复；成功payload以原codec字节分片及显式chunk reader细化，KnowledgeFailure仅加可选安全数字码，额外PdfLocalAudit直接verify调用方同步合同。14ets/299host/32counter/精确旧SHA/新包覆盖及零设备外发边界见ocr-profile-fix-implementation.md。无新依赖/权限/SDK或表迁移，T007/T008尚未执行。
+- 2026-10-18：阶段1确认两项最小修复；新增明确false profile/true快照字节兼容、版本化worker失败数据、当前同任务未发布检查点profile同步与页脚明确排除。旧原页高亮设计及报告保留；本次无源码实现。
 - 2026-10-17阶段5：按本轮build-only只执行17ets checker、2次实际build（含缓存signed脚本内部1次）和1次skip-build部署，全部成功；无源码修复，无UI/runtime/新provider/生产页登记或查询，模板字节恢复。记录当前最终制品/指纹/证据，不改变K4以后真实similar须独立授权与SC页面未验状态，不重新调用验证。
 - 2026-10-16历史设计：已批准的M2-B安全解析、普通库＋派生向量、独立授权与生命周期架构；ROUND2演进和实际失败/修复结果见round2-plan/implementation/verification/closeout报告，未删除原报告或冻结题集。
 - 2026-10-17当前增量：用户收紧为真实原页标注、结果内词条高亮、直接优先与相似明确标签；保持已实现架构/数据，新增匹配策略、页级证据/解析和复用卡片职责。实际原页对齐/代码/新验证仍未执行。

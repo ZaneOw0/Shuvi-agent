@@ -33,11 +33,13 @@ function pdfAuditProjection(bytes: Uint8Array, cancel: KnowledgeCancellation): P
   for (const node of audit) { cancel.check(); result.boxes.push(pdfSourceBox(node.required('bbox'))); result.pages.push(node.required('page_idx').integer()); }
   return result;
 }
-class PdfLayoutProjection { pages: number[] = []; cross: number = 0; deleted: number = 0; }
+class PdfLayoutProjection { pages: number[] = []; cross: number = 0; deleted: number = 0; profile: string = 'MINERU-HOSTED-PDF-3.4.4-OBSERVED-1'; }
 function pdfLayoutProjection(bytes: Uint8Array, cancel: KnowledgeCancellation): PdfLayoutProjection {
   const layout: PdfJsonNode = new BoundedDocumentJson(bytes,cancel).read();
-  if (layout.required('_version_name').string() !== '3.4.4' || layout.required('_backend').string() !== 'hybrid' || layout.required('_effort').string() !== 'medium' || layout.required('_ocr_enable').kind !== 'true') { throw new KnowledgeFailure('ProtocolProfileUnrecognized','normalize'); }
+  const ocr: PdfJsonNode | undefined = layout.optional('_ocr_enable');
+  if (layout.required('_version_name').string() !== '3.4.4' || layout.required('_backend').string() !== 'hybrid' || layout.required('_effort').string() !== 'medium' || ocr === undefined || (ocr.kind !== 'true' && ocr.kind !== 'false')) { throw new KnowledgeFailure('ProtocolProfileUnrecognized','normalize'); }
   const result: PdfLayoutProjection = new PdfLayoutProjection(); result.pages = layout.required('pdf_info').array().map((node: PdfJsonNode): number => node.required('page_idx').integer());
+  if (ocr.kind === 'false') { result.profile = 'MINERU-HOSTED-PDF-3.4.4-OCR-FALSE-1'; }
   result.cross = pdfAuxFlags(layout,'cross_page'); result.deleted = pdfAuxFlags(layout,'lines_deleted'); return result;
 }
 function pdfIssue(document: PdfNormalizedDocument, code: string, nodeId: string = '', page: number = -1): void {
@@ -66,7 +68,7 @@ export class MineruPdfNormalizer implements PdfNormalizationPort {
     const layout: PdfLayoutProjection = pdfLayoutProjection(await archive.readMember(manifest,layoutMember,cancel),cancel);
     const pages: PdfJsonNode[] = new BoundedDocumentJson(await archive.readMember(manifest,v2Member,cancel),cancel).read().array();
     if (pages.length !== binding.originalPages || pages.length !== layout.pages.length || pages.length > PdfBudget.pages) { throw new KnowledgeFailure('PageAuditMismatch','normalize'); }
-    const document: PdfNormalizedDocument = new PdfNormalizedDocument(); document.binding = binding; document.manifest = manifest;
+    const document: PdfNormalizedDocument = new PdfNormalizedDocument(); document.binding = binding; document.manifest = manifest; document.profile = layout.profile;
     document.coverage.hardPassed = true; let order: number = 0; let sourceCells: number = 0; let occupancy: number = 0;
     for (let page: number = 0; page < pages.length; page++) {
       cancel.check(); if (layout.pages[page] !== page) { throw new KnowledgeFailure('LayoutPageOrder','normalize'); }

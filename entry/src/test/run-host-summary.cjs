@@ -16,6 +16,9 @@ for (const line of output.split('\n')) {
   if (line.includes('[离线ZIP/host zlib替身]')) console.log('offline_zip bytes=8461084 members=70 CRC=70 expanded=11926995; host-only');
   if (/^# result_pages_offline nodes=[0-9]+ chunks=[0-9]+ cross_chunks=[0-9]+ unknown_empty_nodes=5 original_last_page_unbound=1 new_rpc=0$/.test(line)) console.log(line.slice(2));
   if (/^# result_pages_review_sha256=[a-f0-9]{64}$/.test(line)) console.log(line.slice(2));
+  if (/^# ocr_fix_old_(snapshot|report)_sha256=[a-f0-9]{64}$/.test(line)) console.log(line.slice(2));
+  if (/^# ocr_false_offline members=52 crc=52 expanded=8482133 primary=342 nodes=[0-9]+ validated=[0-9]+ excluded=[0-9]+ footer=33 assets=46 codec=1 imagekit=0 taskpool=0 new_rpc=0$/.test(line)) console.log(line.slice(2));
+  if (/^# ocr_false_exclusion_counts NodeTypeUnsupported=[0-9]+ EmptyText=[0-9]+ JsonFieldMissing=[0-9]+ NodeInvalid=[0-9]+$/.test(line)) console.log(line.slice(2));
   if (/^# result_literal_counts overfit=[0-9]+ upper=[0-9]+ lower=[0-9]+ multi=[0-9]+$/.test(line)) console.log(line.slice(2));
   if (line.includes('[离线规范化计数]')) {
     try {
