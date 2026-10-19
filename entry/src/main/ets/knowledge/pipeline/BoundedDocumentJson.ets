@@ -32,9 +32,10 @@ class PdfJsonCursor {
 }
 export class BoundedDocumentJson {
   private raw: PdfJsonCursor; private tokens: number = 0; private cancel: KnowledgeCancellation;
-  constructor(bytes: Uint8Array, cancel: KnowledgeCancellation) {
+  private stringLimit: number;
+  constructor(bytes: Uint8Array, cancel: KnowledgeCancellation, stringLimit: number = 262144) {
     if (bytes.length > PdfBudget.jsonBytes) { throw new KnowledgeFailure('JsonBytes','pdf-json'); }
-    this.raw = new PdfJsonCursor(bytes,cancel); this.cancel = cancel;
+    this.raw = new PdfJsonCursor(bytes,cancel); this.cancel = cancel; this.stringLimit = stringLimit;
   }
   private fail(): KnowledgeFailure { return new KnowledgeFailure('JsonGrammarOrBudget','pdf-json'); }
   private token(): void { this.cancel.check(); if (++this.tokens > 1000000) { throw this.fail(); } }
@@ -62,7 +63,7 @@ export class BoundedDocumentJson {
         else if (escape === 'n') { part = '\n'; } else if (escape === 'r') { part = '\r'; } else if (escape === 't') { part = '\t'; }
         else if (escape === 'b') { part = '\b'; } else if (escape === 'f') { part = '\f'; } else { throw this.fail(); }
       } else if (part.charCodeAt(0) >= 0xd800 && part.charCodeAt(0) <= 0xdbff) { part += this.raw.take(); }
-      const extra: number = documentUtf8Bytes(part); if (extra > 262144-bytes) { throw this.fail(); } bytes += extra; output += part;
+      const extra: number = documentUtf8Bytes(part); if (extra > this.stringLimit-bytes) { throw this.fail(); } bytes += extra; output += part;
       if (bytes%4096 < 4) { this.cancel.check(); }
     } throw this.fail();
   }

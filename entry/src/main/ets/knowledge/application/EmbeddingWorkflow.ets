@@ -47,7 +47,7 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
     if (this.running || this.releasing) { throw new KnowledgeFailure('VectorJobBusyOrReleasing','review'); } this.running = true;
     const cancel: KnowledgeCancellation = new KnowledgeCancellation(); this.active = cancel; const epoch: number = this.epoch; let lease: KnowledgeReadLease | undefined;
     try {
-      const document = await this.repository.document(documentId); const candidate: KnowledgeReadLease = new KnowledgeReadLease(); candidate.id = this.identity.id(); candidate.generation = document.activeContentGeneration; candidate.sourceId = document.binding.originalId; candidate.sessionId = this.session; await this.readers.acquireRead(candidate); lease = candidate;
+      const document = await this.repository.document(documentId); const candidate: KnowledgeReadLease = new KnowledgeReadLease(); candidate.id = this.identity.id(); candidate.generation = document.activeContentGeneration; candidate.sourceId = document.sourceId; candidate.sessionId = this.session; await this.readers.acquireRead(candidate); lease = candidate;
       const plan = await this.repository.corpus(documentId); const review: EmbeddingDryReview = new EmbeddingDryReview(); review.documentId = documentId; review.generation = document.activeContentGeneration; review.snapshotHash = plan.snapshotHash; review.configFingerprint = embeddingFingerprint(this.config); review.model = this.config.modelId; review.baseline = await this.baseline(); this.expected = plan.inputs.length; this.completed = 0;
       const latestJobs = (await this.jobs()).filter((job: EmbeddingJob): boolean => job.documentId === documentId && job.contentGeneration === review.generation); const latest = latestJobs[latestJobs.length-1]; const attempts = latest === undefined ? [] : await this.repository.inputs(latest);
       for (const input of plan.inputs) { cancel.check(); if (epoch !== this.epoch) { throw new KnowledgeFailure('ReviewCanceled','review'); } const proof = await this.evidence(input.chunk.embeddingText,'document',input.chunk.inputHash); const row: EmbeddingInputReview = new EmbeddingInputReview(); row.chunkId = input.chunk.id; row.ordinal = input.chunk.ordinal; row.hash = proof.textHash; row.bindingHash = proof.bindingHash; row.state = proof.localState; row.bound = proof.upperBound; row.eligible = embeddingLocalEligible(proof,this.config); if (row.state === 'SafeUnderPinnedProfile') { review.safe++; } else if (row.state === 'BoundUnproven') { review.unproven++; } else { review.invalid++; } if (row.eligible) { review.eligible++; } review.totalBound += Math.max(0,row.bound); review.maxBound = Math.max(review.maxBound,row.bound); review.rows.push(row); this.completed++; this.progress('CountingLocal'); }
@@ -76,9 +76,10 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
   private invalidateResponse(error: Error): void {
     if (error instanceof KnowledgeFailure && ['VectorModelMismatch','VectorResponseIdentity','QueryResponseIdentity','HttpRejected:400','HttpRejected:413','HttpRejected:422'].includes(error.category)) { this.detection.status = EmbeddingDetectionStatus.Failed; this.detection.failure = 'TokenOrModelContractRejected'; this.pause(); this.progress('ContractRejectedPaused'); }
   }
-  private async space(): Promise<EmbeddingSpace> {
+  private async space(sourceKind: string = 'Pdf'): Promise<EmbeddingSpace> {
     this.requireDetection(); const basis = await this.baseline(); if (!embeddingBaselineMatches(basis,this.config)) { throw new KnowledgeFailure('EngineeringBaselineNotAccepted','space'); }
     const space: EmbeddingSpace = new EmbeddingSpace(); space.id = this.identity.id(); space.provider = this.config.provider; space.region = this.config.region; space.access = this.config.access; space.workspaceId = this.config.workspaceId; space.configFingerprint = embeddingFingerprint(this.config); space.requestedModel = this.config.modelId; space.returnedModel = this.detection.returnedModel; space.dimension = this.detection.dimension; space.profileId = basis.profile; space.profileRevision = basis.revision; space.tokenizerSha256 = basis.tokenizer; space.profileParameters = basis.parameters; space.rolePair = 'SingleStringNoInventedPrefix'; space.detectionFingerprint = `${this.detection.probeHash}|${this.detection.dimension}`;
+    if (sourceKind === 'Image') { space.preprocessing = 'IMAGE-EMBED-TEXT-1'; }
     space.fingerprint = await this.identity.hash(pdfCodecUtf8(JSON.stringify([space.provider,space.region,space.access,space.workspaceId,space.requestedModel,space.returnedModel,space.providerRevision,space.dimension,space.profileId,space.profileRevision,space.tokenizerSha256,space.profileParameters,space.preprocessing,space.rolePair,space.normalization,space.metric])));
     const existing = (await this.spaces()).find((item: EmbeddingSpace): boolean => item.fingerprint === space.fingerprint); return existing ?? space;
   }
@@ -91,14 +92,15 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
     let lease: KnowledgeReadLease | undefined;
     try {
       this.requireDetection(); const document = await this.repository.document(documentId); cancel.check();
-      const candidate: KnowledgeReadLease = new KnowledgeReadLease(); candidate.id = this.identity.id(); candidate.generation = document.activeContentGeneration; candidate.sourceId = document.binding.originalId; candidate.sessionId = this.session;
+      const candidate: KnowledgeReadLease = new KnowledgeReadLease(); candidate.id = this.identity.id(); candidate.generation = document.activeContentGeneration; candidate.sourceId = document.sourceId; candidate.sessionId = this.session;
       await this.readers.acquireRead(candidate); lease = candidate; cancel.check(); if (epoch !== this.epoch) { throw new KnowledgeFailure('StaleVectorPreparation','embedding-workflow'); }
       await this.vectorizeLeased(documentId,free,resumeId,resendUnknown,fullScope,epoch,cancel);
     } finally { try { if (lease !== undefined) { await this.releaseLease(lease); } } finally { this.active = undefined; this.running = false; } }
   }
   private async vectorizeLeased(documentId: string, free: boolean, resumeId: string, resendUnknown: boolean, fullScope: boolean, epoch: number, cancel: KnowledgeCancellation): Promise<void> {
-    this.requireDetection(); const plan: VectorCorpusPlan = await this.repository.corpus(documentId); if (plan.document.archived) { throw new KnowledgeFailure('ArchivedCorpusNotWritable','embedding-workflow'); } const space: EmbeddingSpace = await this.space();
-    const grant: EmbeddingGrant = this.grant(EmbeddingPurpose.Corpus,space,free); grant.documentId = documentId; grant.generation = plan.document.activeContentGeneration; grant.snapshotHash = plan.snapshotHash;
+    this.requireDetection(); const plan: VectorCorpusPlan = await this.repository.corpus(documentId); if (plan.document.archived) { throw new KnowledgeFailure('ArchivedCorpusNotWritable','embedding-workflow'); } const space: EmbeddingSpace = await this.space(plan.document.sourceKind);
+    const corpusPurpose: EmbeddingPurpose = plan.document.sourceKind === 'Image' ? EmbeddingPurpose.ImageCorpus : EmbeddingPurpose.Corpus;
+    const grant: EmbeddingGrant = this.grant(corpusPurpose,space,free); grant.documentId = documentId; grant.generation = plan.document.activeContentGeneration; grant.snapshotHash = plan.snapshotHash;
     grant.expiresAt = Math.min(grant.expiresAt,cancel.deadline);
     for (const input of plan.inputs) { cancel.check(); const hash: string = await this.identity.hash(pdfCodecUtf8(input.chunk.embeddingText)); if (hash !== input.chunk.inputHash) { throw new KnowledgeFailure('CorpusInputHashMismatch','embedding-workflow'); } grant.inputHashes.push(hash); grant.inputEvidence.push(await this.evidence(input.chunk.embeddingText,'document',hash)); }
     const allHashes: string[] = grant.inputHashes.slice();
@@ -110,7 +112,7 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
     if (selected.length > 0) { const proofs = grant.inputEvidence; grant.inputEvidence = selected.map((at: number): TokenEligibilityEvidence => proofs[at]); grant.inputHashes = selected.map((at: number): string => allHashes[at]); }
     const selectedChunks: Set<string> = new Set<string>(selected.map((at: number): string => plan.inputs[at].chunk.id));
     grant.inputChunkIds = selected.map((at: number): string => plan.inputs[at].chunk.id);
-    cancel.check(); if (epoch !== this.epoch) { throw new KnowledgeFailure('StaleVectorPreparation','embedding-workflow'); } embeddingAuthorize(this.config,grant,EmbeddingPurpose.Corpus);
+    cancel.check(); if (epoch !== this.epoch) { throw new KnowledgeFailure('StaleVectorPreparation','embedding-workflow'); } embeddingAuthorize(this.config,grant,corpusPurpose);
     let job: EmbeddingJob | undefined;
     try {
       await this.grants.saveGrant(grant); cancel.check(); await this.vectors.open(); await this.vectors.register(space); await this.repository.saveSpace(space);
@@ -126,24 +128,24 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
         cancel.check(); if (epoch !== this.epoch) { throw new KnowledgeFailure('StaleVectorWindow','embedding-workflow'); }
         if (input.state !== VectorInputState.NotSent) {
           const read = await this.vectors.read(space.id,input.chunk.id,job.vectorGeneration);
-          if (read !== undefined) { await this.verify(job,input,read); continue; }
+          if (read !== undefined) { await this.verify(job,input,read); this.completed = (await this.repository.inputs(job)).filter((row: VectorInputRecord): boolean => row.state === VectorInputState.Verified).length; this.progress('ReadbackVerified'); continue; }
           if (input.state === VectorInputState.Verified) { throw new KnowledgeFailure('VerifiedVectorMissing','embedding-workflow'); }
           if (!resendUnknown || resumeId.length === 0) { throw new KnowledgeFailure('UnknownSubmissionRequiresExplicitCostConfirmation','embedding-workflow'); }
           await this.repository.authorizeResend(job,input.chunk.id,grant); input.state = VectorInputState.NotSent;
         }
         if (!selectedChunks.has(input.chunk.id)) { await this.repository.pauseJob(job,'SmallScopeAwaitingNextExplicitGrant'); this.progress('SmallScopePaused'); return; }
-        await this.repository.checkBudget(); await this.repository.inputState(job,input.chunk.id,VectorInputState.InFlight,''); cancel.check(); embeddingAuthorize(this.config,grant,EmbeddingPurpose.Corpus);
+        await this.repository.checkBudget(); await this.repository.inputState(job,input.chunk.id,VectorInputState.InFlight,''); cancel.check(); embeddingAuthorize(this.config,grant,corpusPurpose);
         this.progress('RequestInFlight');
         const started: number = Date.now();
         const requestCancel: KnowledgeCancellation = new KnowledgeCancellation(); requestCancel.deadline = Math.min(cancel.deadline,Date.now()+EmbeddingBudget.requestMs); this.active = requestCancel;
-        const response: EmbeddingVectorResponse = await this.transport.embed(this.config,grant,EmbeddingPurpose.Corpus,input.chunk.embeddingText,requestCancel); this.active = cancel; requestCancel.check(); cancel.check();
+        const response: EmbeddingVectorResponse = await this.transport.embed(this.config,grant,corpusPurpose,input.chunk.embeddingText,requestCancel); this.active = cancel; requestCancel.check(); cancel.check();
         if (epoch !== this.epoch || response.model !== space.returnedModel || response.index !== 0 || response.vector.length !== space.dimension) { throw new KnowledgeFailure('VectorResponseIdentity','embedding-workflow'); }
         await this.repository.recordUsage(job,input.chunk.id,response.usage.totalTokens,response.usage.promptTokens);
         const numbers: number[] = []; for (const value of response.vector) { numbers.push(value); } const values: Float32Array = embeddingValidateVector(numbers,space.dimension);
         await this.repository.inputState(job,input.chunk.id,VectorInputState.Received,''); const row: KnowledgeVectorRow = new KnowledgeVectorRow(); row.chunkId = input.chunk.id; row.documentId = documentId; row.contentGeneration = job.contentGeneration; row.vectorGeneration = job.vectorGeneration; row.spaceId = space.id; row.inputHash = input.chunk.inputHash; row.epoch = job.epoch; row.values = values;
         await this.vectors.put(row); await this.repository.checkBudget(); const read = await this.vectors.read(space.id,row.chunkId,row.vectorGeneration); if (read === undefined) { throw new KnowledgeFailure('VectorReadbackMissing','embedding-workflow'); } await this.verify(job,input,read); response.vector.fill(0); if (response.usage.totalTokens !== undefined) { this.totalTokens += response.usage.totalTokens; }
         const receipt = new EmbeddingCorpusReceipt(); receipt.jobId = job.id; receipt.vectorGeneration = job.vectorGeneration; receipt.spaceId = space.id; receipt.chunkId = input.chunk.id; receipt.inputHash = input.chunk.inputHash; receipt.readbackHash = await this.identity.hash(vectorReadbackProjection(read)); receipt.bound = grant.inputEvidence.find((proof: TokenEligibilityEvidence): boolean => proof.textHash === receipt.inputHash)?.upperBound ?? -1; receipt.dimension = space.dimension; receipt.elapsed = Date.now()-started; receipt.total = response.usage.totalTokens ?? -1; receipt.prompt = response.usage.promptTokens ?? -1; receipt.grantId = grant.id; await this.repository.recordCorpusReceipt(receipt);
-        this.completed++; this.progress('ReadbackVerified');
+         this.completed = (await this.repository.inputs(job)).filter((row: VectorInputRecord): boolean => row.state === VectorInputState.Verified).length; this.progress('ReadbackVerified');
       }
       cancel.check(); if (epoch !== this.epoch) { throw new KnowledgeFailure('StaleVectorWindow','embedding-workflow'); }
       for (const input of await this.repository.inputs(job)) { const read = await this.vectors.read(space.id,input.chunk.id,job.vectorGeneration); if (read === undefined || await this.identity.hash(vectorReadbackProjection(read)) !== input.readbackHash) { throw new KnowledgeFailure('CoverageReadbackChanged','embedding-workflow'); } }
@@ -176,7 +178,7 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
     const result = new EmbeddingTrialResult(); const started: number = Date.now();
     try {
       const initial = (await this.jobs()).find((job: EmbeddingJob): boolean => job.id === jobId); if (initial === undefined) { throw new KnowledgeFailure('TrialJobMissing','trial-query'); }
-      const document = await this.repository.document(initial.documentId); const reading = new KnowledgeReadLease(); reading.id = this.identity.id(); reading.sourceId = document.binding.originalId; reading.generation = initial.contentGeneration; reading.sessionId = this.session; await this.readers.acquireRead(reading); lease = reading;
+      const document = await this.repository.document(initial.documentId); const reading = new KnowledgeReadLease(); reading.id = this.identity.id(); reading.sourceId = document.sourceId; reading.generation = initial.contentGeneration; reading.sessionId = this.session; await this.readers.acquireRead(reading); lease = reading;
       scope = await this.trialScope(jobId); cancel.check(); const actual = prepareTextQuery(question); if (actual.actualInput !== question) { throw new KnowledgeFailure('TrialQueryMustUseExactReviewedInput','trial-query'); }
       result.trialId = scope.id; result.scopeHash = scope.setHash; result.expectedFull = scope.job.expectedHashes.length; result.queryHash = await this.identity.hash(pdfCodecUtf8(question));
       const proof = await this.evidence(question,'query',result.queryHash); result.bound = proof.upperBound;
@@ -207,7 +209,7 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
   }
   async restoreActive(documentId: string): Promise<void> {
     const document = await this.repository.document(documentId); if (document.activeVectorGeneration.length === 0) { return; }
-    const lease = new KnowledgeReadLease(); lease.id = this.identity.id(); lease.sourceId = document.binding.originalId; lease.generation = document.activeContentGeneration; lease.sessionId = this.session;
+    const lease = new KnowledgeReadLease(); lease.id = this.identity.id(); lease.sourceId = document.sourceId; lease.generation = document.activeContentGeneration; lease.sessionId = this.session;
     await this.readers.acquireRead(lease); try { await this.sync(documentId); } finally { await this.releaseLease(lease); }
   }
   async search(input: string, spaceId: string, consent: boolean, free: boolean, archived: boolean, extras: boolean, cancel: KnowledgeCancellation): Promise<KnowledgeHit[]> {
@@ -223,7 +225,7 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
   async searchReviewed(approval: QueryConsentSnapshot,archived: boolean,extras: boolean,cancel: KnowledgeCancellation): Promise<KnowledgeHit[]> {
     if (this.running || this.releasing) { throw new KnowledgeFailure('VectorJobBusy','query'); } this.running = true; this.active = cancel;
     try { const hits = await this.searchWindow(approval.actual,approval.space,approval.approved,approval.free,archived,extras,cancel,approval); cancel.check(); return hits; }
-    catch (error) { if (error instanceof Error) { this.invalidateResponse(error); if (this.detection.status === EmbeddingDetectionStatus.Failed) { approval.approved = false; approval.free = false; } throw error; } throw new KnowledgeFailure('QueryContractFailed','query'); }
+    catch (error) { this.queryEgress = this.transport.queryEgress ?? false; if (error instanceof Error) { this.invalidateResponse(error); if (this.detection.status === EmbeddingDetectionStatus.Failed) { approval.approved = false; approval.free = false; } throw error; } throw new KnowledgeFailure('QueryContractFailed','query'); }
     finally { this.active = undefined; this.running = false; }
   }
   private async searchWindow(input: string, spaceId: string, consent: boolean, free: boolean, archived: boolean, extras: boolean, cancel: KnowledgeCancellation, approval?: QueryConsentSnapshot): Promise<KnowledgeHit[]> {
@@ -231,15 +233,16 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
     const epoch: number = this.epoch;
     const started: number = Date.now();
     if (!consent || !free) { throw new KnowledgeFailure('QueryConsentOff','query'); } this.requireDetection();
-    const space = (await this.spaces()).find((item: EmbeddingSpace): boolean => item.id === spaceId); const current = await this.space(); if (space === undefined || current.fingerprint !== space.fingerprint || current.id !== spaceId) { throw new KnowledgeFailure('QuerySpaceMismatch','query'); }
+    const space = (await this.spaces()).find((item: EmbeddingSpace): boolean => item.id === spaceId); const current = await this.space(space?.preprocessing === 'IMAGE-EMBED-TEXT-1' ? 'Image' : 'Pdf'); if (space === undefined || current.fingerprint !== space.fingerprint || current.id !== spaceId) { throw new KnowledgeFailure('QuerySpaceMismatch','query'); }
     const grant: EmbeddingGrant = this.grant(EmbeddingPurpose.Query,space,free); grant.expiresAt = Math.min(grant.expiresAt,cancel.deadline); const hash: string = await this.identity.hash(pdfCodecUtf8(input)); grant.inputHashes = [hash]; grant.inputEvidence = [await this.evidence(input,'query',hash)]; embeddingAuthorize(this.config,grant,EmbeddingPurpose.Query); cancel.check();
     const targets: VectorEligibility[] = await this.repository.targets(spaceId,archived,extras); if (targets.length === 0) { throw new KnowledgeFailure('NoSyncedVectorAuthority','query'); }
     cancel.check(); if (epoch !== this.epoch) { throw new KnowledgeFailure('StaleQueryPreparation','query'); }
     const leases: KnowledgeReadLease[] = [];
     try {
-      for (const target of targets) { cancel.check(); if (leases.some((lease: KnowledgeReadLease): boolean => lease.generation === target.contentGeneration)) { continue; } const document = await this.repository.document(target.documentId); const lease: KnowledgeReadLease = new KnowledgeReadLease(); lease.id = this.identity.id(); lease.sourceId = document.binding.originalId; lease.generation = target.contentGeneration; lease.sessionId = this.session; await this.readers.acquireRead(lease); leases.push(lease); }
-      if (approval !== undefined) { this.assertQueryApproval(approval,input,grant.inputEvidence[0],spaceId,'query'); }
-      await this.grants.saveGrant(grant); cancel.check(); this.active = cancel; this.queryEgress = true; const response = await this.transport.embed(this.config,grant,EmbeddingPurpose.Query,input,cancel); cancel.check(); if (epoch !== this.epoch || response.model !== space.returnedModel || response.index !== 0 || response.vector.length !== space.dimension) { throw new KnowledgeFailure('QueryResponseIdentity','query'); }
+      for (const target of targets) { cancel.check(); if (leases.some((lease: KnowledgeReadLease): boolean => lease.generation === target.contentGeneration)) { continue; } const document = await this.repository.document(target.documentId); const lease: KnowledgeReadLease = new KnowledgeReadLease(); lease.id = this.identity.id(); lease.sourceId = document.sourceId; lease.generation = target.contentGeneration; lease.sessionId = this.session; await this.readers.acquireRead(lease); leases.push(lease); }
+      if (approval === undefined || approval.scopeHash.length !== 64) { throw new KnowledgeFailure('NoRequestScopeBoundApprovalRequired','query'); }
+      this.assertQueryApproval(approval,input,grant.inputEvidence[0],spaceId,'query','',approval.scopeHash); grant.queryApproval = approval;
+      await this.grants.saveGrant(grant); cancel.check(); this.active = cancel; const response = await this.transport.embed(this.config,grant,EmbeddingPurpose.Query,input,cancel); this.queryEgress = this.transport.queryEgress ?? false; cancel.check(); if (epoch !== this.epoch || response.model !== space.returnedModel || response.index !== 0 || response.vector.length !== space.dimension) { throw new KnowledgeFailure('QueryResponseIdentity','query'); }
       await this.vectors.open(); const candidates: KnowledgeVectorCandidate[] = await this.vectors.filteredKnn(space,response.vector,targets,cancel); response.vector.fill(0); const hits: KnowledgeHit[] = [];
       for (const candidate of candidates) { cancel.check(); const target = targets.find((item: VectorEligibility): boolean => item.chunkIds[0] === candidate.row.chunkId && item.vectorGeneration === candidate.row.vectorGeneration && item.documentId === candidate.row.documentId && item.contentGeneration === candidate.row.contentGeneration && item.epoch === candidate.row.epoch && item.inputHash === candidate.row.inputHash); if (target === undefined) { continue; } if (await this.identity.hash(vectorReadbackProjection(candidate.row)) !== target.readbackHash) { throw new KnowledgeFailure('QueryVectorReadbackCorrupted','query'); } const hit = await this.repository.hit(candidate.row.chunkId,target,archived,extras); cancel.check(); if (hit !== undefined) { hit.vectorDistance = candidate.distance; hits.push(hit); } }
       const receipt = new EmbeddingQueryReceipt(); receipt.hash = hash; receipt.grant = grant.id; receipt.space = space.id; receipt.bound = grant.inputEvidence[0].upperBound; receipt.dimension = space.dimension; receipt.elapsed = Date.now()-started; receipt.total = response.usage.totalTokens ?? -1; receipt.prompt = response.usage.promptTokens ?? -1; receipt.targets = targets.length; receipt.candidates = hits.length; this.queryReceipt = receipt; return hits;

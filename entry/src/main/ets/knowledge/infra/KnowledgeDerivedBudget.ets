@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { KnowledgeStorageScope } from '../domain/KnowledgeStorageScope';
 import { KnowledgeFailure, PdfBudget } from '../domain/PdfKnowledgeModels';
+import { KnowledgeStoreHost } from './KnowledgeStoreHost';
 
 export class KnowledgeDerivedUsage {
   assetsPhysical: number = 0; vectorPhysical: number = 0; sharedNonReclaimable: number = 0; metadataReserved: number = 0; pendingReserved: number = 0;
@@ -23,6 +24,11 @@ export class KnowledgeDerivedBudget implements KnowledgePhysicalBudgetPort {
   async usage(): Promise<KnowledgeDerivedUsage> {
     const usage: KnowledgeDerivedUsage = new KnowledgeDerivedUsage();
     usage.assetsPhysical = await this.tree(`${this.context.filesDir}/${this.scope.derivedDirectory}`)+await this.tree(`${this.context.cacheDir}/${this.scope.derivedDirectory}`);
+    // The recursive derived root includes Image's /image subtree exactly once.
+    if (!this.scope.testing) {
+      // Conservative shared accounting includes parse staging and M1 snapshot roots.
+      usage.assetsPhysical += await this.tree(`${this.context.filesDir}/knowledge_parse_v1`)+await this.tree(`${this.context.cacheDir}/knowledge_parse_v1`)+await this.tree(`${this.context.filesDir}/knowledge_user_v1`);
+    }
     const root: string = `${this.context.databaseDir}/rdb`;
     if (await fileIo.access(root)) {
       for (const name of await fileIo.listFile(root)) {
@@ -30,7 +36,15 @@ export class KnowledgeDerivedBudget implements KnowledgePhysicalBudgetPort {
         // WAL and directories. Never attribute the shared M1 database to PDF.
         if (name === this.scope.vectorDatabaseName || name.startsWith(this.scope.vectorDatabaseName+'.') || name.startsWith(this.scope.vectorDatabaseName+'-')) { usage.vectorPhysical += await this.tree(`${root}/${name}`); }
         if (name === this.scope.databaseName || name.startsWith(this.scope.databaseName+'.') || name.startsWith(this.scope.databaseName+'-')) { usage.sharedNonReclaimable += await this.tree(`${root}/${name}`); }
+        const parseName: string = this.scope.testing ? `shuvi_r2_parse_${this.scope.key}.db` : 'shuvi_parse_stage_v1.db';
+        if (name === parseName || name.startsWith(parseName+'.') || name.startsWith(parseName+'-')) { usage.sharedNonReclaimable += await this.tree(`${root}/${name}`); }
       }
-    } return usage;
+    }
+    const host: KnowledgeStoreHost = KnowledgeStoreHost.forContext(this.context,this.scope);
+    if (host.imageReady) {
+      const rows = await host.requireStore().querySql("SELECT COALESCE(SUM(bytes),0) FROM kb_image_reservation WHERE state='Reserved'");
+      try { if (!rows.goToNextRow() || rows.getLong(0) < 0) { throw new KnowledgeFailure('ImageReservationReadFailed','budget'); } usage.pendingReserved = rows.getLong(0); } finally { rows.close(); }
+    }
+    return usage;
   }
 }

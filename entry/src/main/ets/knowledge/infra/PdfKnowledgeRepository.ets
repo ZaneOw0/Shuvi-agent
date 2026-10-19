@@ -1,5 +1,7 @@
 import { relationalStore } from '@kit.ArkData';
 import { KnowledgeStoreHost } from './KnowledgeStoreHost';
+import { imageVerifyExisting, imageTableNames } from './ImageStoreLayout';
+import { imageReadLocator, imageExactFields } from '../pipeline/ImageSnapshotCodec';
 import { EmbeddingConfig, EmbeddingProvider, EmbeddingRegion, EmbeddingAccess, EmbeddingModelSource, EmbeddingDetection, EmbeddingGrant, EmbeddingModelInfo } from '../domain/EmbeddingModels';
 import { EmbeddingSpace, EmbeddingJob, EmbeddingDetectionStatus } from '../domain/EmbeddingModels';
 import { embeddingValidateConfig, embeddingFingerprint } from '../pipeline/EmbeddingPolicy';
@@ -14,7 +16,7 @@ import { PdfEvidenceContext } from '../domain/PdfLocalModels';
 import { PdfPageIdentityEvidence, PdfPageReferenceState, ResultPageReference } from '../domain/PdfLocalModels';
 import { pdfDecodePageIdentity, pdfDecodePageContext, pdfCopyPageContext } from '../application/PdfPageReferenceService';
 import { knowledgeLiteralScore, knowledgeLegacyMatch, knowledgeMatch } from '../pipeline/KnowledgeMatchPolicy';
-import { KnowledgeResultPresentation, KnowledgeResultRange } from '../domain/KnowledgeSearchModels';
+import { KnowledgeResultPresentation, KnowledgeResultRange, KnowledgeResultMatch } from '../domain/KnowledgeSearchModels';
 import { PdfMappingEvidence } from '../domain/PdfKnowledgeModels';
 import { pdfEvidenceValid } from '../pipeline/PdfMappingPolicy';
 import { pdfDecodeEvidence } from '../pipeline/PdfEvidenceCodec';
@@ -32,6 +34,10 @@ import {
 } from '../domain/PdfKnowledgeModels';
 
 const PDF_EXTENSION_LAYOUT: string = 'KB-PDF-EXT-2';
+class ImageResultPresentation {
+  wire: string = 'KNOWLEDGE-RESULT-2'; citationId: string = ''; match: KnowledgeResultMatch = new KnowledgeResultMatch();
+  sourceKind: string = 'Image'; actualFormat: string = ''; originalHash: string = ''; originalVersion: number = 0;
+}
 class PdfRelationLayout {
   name: string;
   columns: string;
@@ -173,6 +179,8 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
           const tables: relationalStore.ResultSet = await transaction.querySql("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'kb_*'");
           const existing: string[] = [];
           try { while (tables.goToNextRow()) { existing.push(tables.getString(0)); if (existing.length > 64) { throw new KnowledgeFailure('ExtensionResidual', 'open'); } } } finally { tables.close(); }
+          const imagePresent: boolean = await imageVerifyExisting(transaction);
+          if (imagePresent) { const imageNames: string[] = imageTableNames(); for (let at: number = existing.length-1; at >= 0; at--) { if (imageNames.indexOf(existing[at]) >= 0) { existing.splice(at,1); } } }
           if (existing.length === 0) {
             for (const relation of PDF_RELATIONS) { await transaction.execute(`CREATE TABLE ${relation.name} (${relation.columns})`); }
             await transaction.execute('CREATE INDEX kb_chunk_generation ON kb_chunk(doc,generation)');
@@ -416,6 +424,7 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
         const owner: relationalStore.ResultSet = await transaction.querySql('SELECT g.id FROM kb_content_generation g JOIN kb_job j ON j.id=g.job JOIN kb_document d ON d.id=g.doc WHERE g.id=? AND g.cleanup_claim=? AND j.terminated=0 AND d.tombstone=0',[generation,'']);
         try { if (!owner.goToNextRow()) { throw new KnowledgeFailure('AssetOwnerUnavailable','reserve'); } } finally { owner.close(); }
         const usage = this.physicalBudget === undefined ? undefined : await this.physicalBudget.usage();
+        if (usage !== undefined && bytes+usage.total() > PdfBudget.derivedBytes) { throw new KnowledgeFailure('SharedImageDerivedBudget','reserve'); }
         const rows: relationalStore.ResultSet = await transaction.querySql('SELECT (SELECT coalesce(sum(bytes),0) FROM kb_asset),(SELECT coalesce(sum(reserved),0) FROM kb_derived_reservation WHERE state=?),(SELECT coalesce(min(actual),0) FROM kb_derived_reservation WHERE state=?)',['Reserved','Reserved']);
         try { if (!rows.goToNextRow()) { throw new KnowledgeFailure('BudgetLedgerMissing','reserve'); } const vectorPhysical: number = usage?.vectorPhysical ?? 0; const unused: number = Math.max(0,rows.getLong(1)-Math.max(0,vectorPhysical-rows.getLong(2))); const metadata: number = this.physicalBudget === undefined ? 0 : Math.max(usage?.sharedNonReclaimable ?? 0,await new PdfVectorRepository(this.host,this).metadataBytes()); const total: number = Math.max(rows.getLong(0),usage?.assetsPhysical ?? 0)+vectorPhysical+unused+metadata; if (bytes > PdfBudget.derivedBytes-total) { throw new KnowledgeFailure('DerivedBudget','reserve'); } } finally { rows.close(); }
         await transaction.execute('INSERT INTO kb_asset VALUES(?,?,?,?,?,?)',[id,generation,'',bytes,'Reserved','']);
@@ -639,12 +648,15 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
         const full: string = history.result.input.fullQuestion; let ordinal: number = 0;
         for (let start: number = 0; start < full.length;) { const end: number = safeTextBoundary(full,Math.min(full.length,start+16384)); await transaction.execute('INSERT INTO kb_question_part VALUES(?,?,?)',[history.id,ordinal++,full.slice(start,end)]); start = end; }
         for (let index: number = 0; index < history.result.hits.length; index++) {
-          const hit: KnowledgeHit = history.result.hits[index]; const locator: string = hit.sourceKind === KnowledgeSourceKind.Text ? encodeRanges(hit.locator.textRanges) : JSON.stringify(hit.locator.pdfRegions);
+          const hit: KnowledgeHit = history.result.hits[index];
+          if ([KnowledgeSourceKind.Text,KnowledgeSourceKind.Pdf,KnowledgeSourceKind.Image].indexOf(hit.sourceKind) < 0 || hit.sourceKind === KnowledgeSourceKind.Image && hit.locator.image === undefined) { throw new KnowledgeFailure('UnknownCitationSource','history'); }
+          const locator: string = hit.sourceKind === KnowledgeSourceKind.Text ? encodeRanges(hit.locator.textRanges) : hit.sourceKind === KnowledgeSourceKind.Image ? JSON.stringify(hit.locator.image) : JSON.stringify(hit.locator.pdfRegions);
           if (pdfCodecUtf8(locator).length > PdfBudget.rowBytes || pdfCodecUtf8(hit.text).length > 2048 || pdfCodecUtf8(hit.retrievalText).length > 2048 || pdfCodecUtf8(hit.title).length > 4096) { throw new KnowledgeFailure('CitationBudget','save'); }
           await transaction.execute('INSERT INTO kb_citation VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[history.id,index,hit.id,hit.documentId,hit.sourceKind,hit.chunkId,hit.generation,hit.snapshotId,hit.snapshotHash,hit.originalHash,hit.originalVersion,hit.title,hit.text,hit.retrievalText,locator,pdfStoreFields(hit.channels),hit.keywordScore,hit.vectorDistance ?? null,hit.rrfScore,hit.spaceId,hit.epoch]);
           await transaction.execute('INSERT INTO r2v_citation VALUES(?,?,?,?,?)',[history.id,index,hit.vectorGeneration,hit.keywordRank,hit.vectorRank]);
           const presentation = new KnowledgeResultPresentation(); presentation.citationId = hit.id; presentation.match = hit.match.actualInput.length === 0 ? knowledgeLegacyMatch(hit,history.result.input.actualInput) : hit.match; presentation.pages = hit.pages;
-          const wire: string = JSON.stringify(presentation); if (pdfCodecUtf8(wire).length > PdfBudget.rowBytes) { throw new KnowledgeFailure('PresentationBudget','history'); } await transaction.execute('INSERT INTO kb_result_presentation VALUES(?,?,?)',[history.id,index,wire]);
+          const imagePresentation: ImageResultPresentation = new ImageResultPresentation(); imagePresentation.citationId = hit.id; imagePresentation.match = presentation.match; imagePresentation.actualFormat = hit.actualFormat; imagePresentation.originalHash = hit.originalHash; imagePresentation.originalVersion = hit.originalVersion;
+          const wire: string = hit.sourceKind === KnowledgeSourceKind.Image ? JSON.stringify(imagePresentation) : JSON.stringify(presentation); if (pdfCodecUtf8(wire).length > PdfBudget.rowBytes) { throw new KnowledgeFailure('PresentationBudget','history'); } await transaction.execute('INSERT INTO kb_result_presentation VALUES(?,?,?)',[history.id,index,wire]);
         }
       });
     });
@@ -672,11 +684,14 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
       try {
         while (cites.goToNextRow()) {
           if (history.result.hits.length >= 5) { throw new KnowledgeFailure('CitationCount','read'); }
-          const hit: KnowledgeHit = new KnowledgeHit(); hit.id = cites.getString(2); hit.documentId = cites.getString(3); hit.sourceKind = cites.getString(4) === KnowledgeSourceKind.Pdf ? KnowledgeSourceKind.Pdf : KnowledgeSourceKind.Text;
+          const hit: KnowledgeHit = new KnowledgeHit(); hit.id = cites.getString(2); hit.documentId = cites.getString(3);
+          const sourceKind: string = cites.getString(4); const knownSource = [KnowledgeSourceKind.Text,KnowledgeSourceKind.Pdf,KnowledgeSourceKind.Image].find((kind: KnowledgeSourceKind): boolean => kind === sourceKind);
+          if (knownSource === undefined) { throw new KnowledgeFailure('UnknownHistorySource','history'); } hit.sourceKind = knownSource;
           hit.chunkId = cites.getString(5); hit.generation = cites.getString(6); hit.snapshotId = cites.getString(7); hit.snapshotHash = cites.getString(8); hit.originalHash = cites.getString(9); hit.originalVersion = cites.getLong(10);
           hit.title = cites.getString(11); hit.text = cites.getString(12); hit.retrievalText = cites.getString(13); hit.locator.kind = hit.sourceKind;
           if (hit.sourceKind === KnowledgeSourceKind.Text) { hit.locator.textRanges = decodeRanges(cites.getString(14)); }
-          else { hit.locator.pdfRegions = pdfDecodeLocators(new BoundedDocumentJson(pdfCodecUtf8(cites.getString(14)),new KnowledgeCancellation()).read()); }
+          else if (hit.sourceKind === KnowledgeSourceKind.Pdf) { hit.locator.pdfRegions = pdfDecodeLocators(new BoundedDocumentJson(pdfCodecUtf8(cites.getString(14)),new KnowledgeCancellation()).read()); }
+          else { hit.locator.image = imageReadLocator(new BoundedDocumentJson(pdfCodecUtf8(cites.getString(14)),new KnowledgeCancellation()).read()); if (hit.locator.image.originalHash !== hit.originalHash || hit.locator.image.originalVersion !== hit.originalVersion || hit.locator.image.end-hit.locator.image.start !== hit.text.length) { throw new KnowledgeFailure('ImageCitationSourceMismatch','history'); } }
           hit.channels = pdfReadFields(cites.getString(15),2).map((channel: string): KnowledgeChannel => channel === KnowledgeChannel.Vector ? KnowledgeChannel.Vector : KnowledgeChannel.Keyword);
           hit.keywordScore = cites.getDouble(16); hit.vectorDistance = cites.isColumnNull(17) ? undefined : cites.getDouble(17); hit.rrfScore = cites.getDouble(18); hit.spaceId = cites.getString(19); hit.epoch = cites.getLong(20); history.result.hits.push(hit);
         }
@@ -684,11 +699,14 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
       for (let at: number = 0; at < history.result.hits.length; at++) { const extra = await this.requireStore().querySql('SELECT vector_generation,keyword_rank,vector_rank FROM r2v_citation WHERE query_id=? AND ordinal=?',[history.id,at]); try { if (extra.goToNextRow()) { const hit = history.result.hits[at]; hit.vectorGeneration = extra.getString(0); hit.keywordRank = extra.getLong(1); hit.vectorRank = extra.getLong(2); } } finally { extra.close(); } }
       for (let at: number = 0; at < history.result.hits.length; at++) {
         const hit = history.result.hits[at]; const saved = await this.requireStore().querySql('SELECT wire FROM kb_result_presentation WHERE query_id=? AND ordinal=?',[history.id,at]);
-        try { if (saved.goToNextRow()) { this.restorePresentation(hit,history.result.input,saved.getString(0)); } else { hit.match = knowledgeLegacyMatch(hit,history.result.input.actualInput); } } finally { saved.close(); }
+        try { if (saved.goToNextRow()) { this.restorePresentation(hit,history.result.input,saved.getString(0)); } else { if (hit.sourceKind === KnowledgeSourceKind.Image) { throw new KnowledgeFailure('ImagePresentationMissing','history'); } hit.match = knowledgeLegacyMatch(hit,history.result.input.actualInput); } } finally { saved.close(); }
       }
       for (const hit of history.result.hits) {
         if (hit.sourceKind === KnowledgeSourceKind.Pdf) { const doc: PdfKnowledgeDocument | undefined = await this.get(hit.documentId); hit.referenceState = doc === undefined || doc.tombstone ? KnowledgeReferenceState.Invalid : doc.activeContentGeneration !== hit.generation || doc.binding.originalHash !== hit.originalHash ? KnowledgeReferenceState.Old : KnowledgeReferenceState.Current; }
-        else {
+        else if (hit.sourceKind === KnowledgeSourceKind.Image) {
+          const image = await this.requireStore().querySql('SELECT d.active_generation,o.hash,o.version,d.tombstone FROM kb_image_document d JOIN kb_image_original o ON o.asset=d.active_original WHERE d.id=?',[hit.documentId]);
+          try { hit.referenceState = !image.goToNextRow() || image.getLong(3) !== 0 ? KnowledgeReferenceState.Invalid : image.getString(0) !== hit.generation || image.getString(1) !== hit.originalHash || image.getLong(2) !== hit.originalVersion ? KnowledgeReferenceState.Old : KnowledgeReferenceState.Current; } finally { image.close(); }
+        } else {
           const text: relationalStore.ResultSet = await this.requireStore().querySql('SELECT active,hash FROM text_doc WHERE id=?',[hit.documentId]);
           try { hit.referenceState = !text.goToNextRow() ? KnowledgeReferenceState.Invalid : text.getString(0) !== hit.generation || text.getString(1) !== hit.originalHash ? KnowledgeReferenceState.Old : KnowledgeReferenceState.Current; } finally { text.close(); }
         }
@@ -697,7 +715,13 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
   }
   private restorePresentation(hit: KnowledgeHit, input: TextQueryInput, wire: string): void {
     const raw = new BoundedDocumentJson(pdfCodecUtf8(wire),new KnowledgeCancellation()).read();
-    if (raw.required('wire').string() !== 'KNOWLEDGE-RESULT-1' || raw.required('citationId').string() !== hit.id) { throw new KnowledgeFailure('PresentationIdentity','history'); }
+    const wireVersion: string = raw.required('wire').string();
+    if (wireVersion !== (hit.sourceKind === KnowledgeSourceKind.Image ? 'KNOWLEDGE-RESULT-2' : 'KNOWLEDGE-RESULT-1') || raw.required('citationId').string() !== hit.id) { throw new KnowledgeFailure('PresentationIdentity','history'); }
+    if (hit.sourceKind === KnowledgeSourceKind.Image) {
+      imageExactFields(raw,['wire','citationId','match','sourceKind','actualFormat','originalHash','originalVersion']);
+      hit.actualFormat = raw.required('actualFormat').string();
+      if (raw.required('sourceKind').string() !== 'Image' || ['JPEG','PNG','WEBP'].indexOf(hit.actualFormat) < 0 || raw.required('originalHash').string() !== hit.originalHash || raw.required('originalVersion').integer() !== hit.originalVersion) { throw new KnowledgeFailure('ImagePresentationBinding','history'); }
+    }
     const match = raw.required('match'); input.terms = prepareTextQuery(input.actualInput).terms;
     if (JSON.stringify(input.terms) !== JSON.stringify(match.required('terms').array().map((term: PdfJsonNode): string => term.string()))) { throw new KnowledgeFailure('PresentationTermsMismatch','history'); }
     if (match.required('actualInput').string() !== input.actualInput || match.required('policyVersion').string() !== 'LITERAL-ASCII-FOLD-1' || input.terms.length > 64) { throw new KnowledgeFailure('PresentationInput','history'); }
@@ -705,6 +729,7 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
     const ranges: string = JSON.stringify(match.required('ranges').array().map((range: PdfJsonNode): number[] => [range.required('start').integer(),range.required('end').integer()]));
     if (rebuilt.kind !== match.required('kind').string() || ranges !== JSON.stringify(rebuilt.ranges.map((range: KnowledgeResultRange): number[] => [range.start,range.end])) || match.required('matchedTerms').array().map((term: PdfJsonNode): string => term.string()).join('\t') !== rebuilt.matchedTerms.join('\t')) { throw new KnowledgeFailure('PresentationRangeMismatch','history'); }
     rebuilt.textHash = match.required('textHash').string(); rebuilt.compatibility = match.required('compatibility').kind === 'true'; hit.match = rebuilt;
+    if (hit.sourceKind === KnowledgeSourceKind.Image) { return; }
     const pages = raw.required('pages'); const state: string = pages.required('state').string(); const restored = new ResultPageReference();
     // Text citations have no PDF context. PDF context is independently revalidated before navigation.
     if (hit.sourceKind === KnowledgeSourceKind.Pdf && pages.required('originalHash').string().length > 0) { pdfCopyPageContext(pdfDecodePageContext(pages),restored); }

@@ -1,6 +1,7 @@
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
-import { EmbeddingTransportPort, KnowledgeIdentityPort } from '../domain/KnowledgePorts';
+import { EmbeddingTransportPort, KnowledgeIdentityPort, KnowledgeQueryAdmissionPort } from '../domain/KnowledgePorts';
+import { QueryConsentSnapshot } from '../domain/EmbeddingModels';
 import { pdfCodecUtf8 } from '../pipeline/PdfSnapshotCodec';
 import { EmbeddingConfig, EmbeddingPurpose, EmbeddingGrant, EmbeddingModelInfo, EmbeddingVectorResponse, EmbeddingBudget } from '../domain/EmbeddingModels';
 import { KnowledgeCancellation, KnowledgeFailure } from '../domain/PdfKnowledgeModels';
@@ -14,13 +15,16 @@ import { BusinessError } from '@kit.BasicServicesKit';
 
 
 export class EmbeddingTransportAdapter implements EmbeddingTransportPort {
+  queryEgress: boolean = false;
   private credential: EmbeddingCredentialStore; private sessions: rcp.Session[] = [];
   private identity: KnowledgeIdentityPort | undefined;
   private counter: EmbeddingTokenCounterPort | undefined; private baselines: EmbeddingBaselinePort | undefined;
+  private admission: KnowledgeQueryAdmissionPort | undefined = undefined;
+  attachQueryAdmission(port: KnowledgeQueryAdmissionPort): void { this.admission = port; }
   attachInputPolicy(counter: EmbeddingTokenCounterPort, baselines: EmbeddingBaselinePort): void { this.counter = counter; this.baselines = baselines; }
   constructor(credential: EmbeddingCredentialStore, identity?: KnowledgeIdentityPort) { this.credential = credential; this.identity = identity; }
   cancel(): void { for (const session of this.sessions) { session.cancel(); } this.credential.clearTransient(); }
-  private async fetch(config: EmbeddingConfig, purpose: EmbeddingPurpose, content: string, cancel: KnowledgeCancellation): Promise<string> {
+  private async fetch(config: EmbeddingConfig, purpose: EmbeddingPurpose, content: string, cancel: KnowledgeCancellation, grant?: EmbeddingGrant, input: string = ''): Promise<string> {
     cancel.check(); let end: boolean = false; let active: boolean = true; let total: number = 0; const chunks: Uint8Array[] = [];
     const attempt: string = Date.now().toString(16); let status: number = 0;
     const timeout: rcp.Timeout = { connectMs: Math.min(30000, Math.max(1,cancel.deadline-Date.now())), transferMs: Math.min(EmbeddingBudget.requestMs,Math.max(1,cancel.deadline-Date.now())), inactivityMs: 30000 };
@@ -44,7 +48,16 @@ export class EmbeddingTransportAdapter implements EmbeddingTransportPort {
         timer = setTimeout((): void => { active = false; cancel.invalid = true; session.cancel(request); reject(new KnowledgeFailure('Timeout', 'embedding')); }, Math.max(1,Math.min(EmbeddingBudget.requestMs,cancel.deadline-Date.now())));
       });
       hilog.info(0x0001,'SHUVI_R2','R2_EMBED_REQUEST attempt=%{public}s purpose=%{public}s stage=Start http=0 sdk=0 category=None',attempt,purpose);
-      const response: rcp.Response = await Promise.race<rcp.Response>([this.credential.fetch(config,purpose,request,session,(): void => { cancel.check(); if (!active) { throw new KnowledgeFailure('Canceled','embedding'); } }),deadline]);
+      const guard = async (launch: () => void): Promise<void> => {
+        if (grant === undefined) { throw new KnowledgeFailure('NoRequestGrantMissing','query'); }
+        embeddingAuthorize(config,grant,purpose); cancel.check();
+        const approval: QueryConsentSnapshot | undefined = grant.queryApproval;
+        if (purpose === EmbeddingPurpose.Query && grant.trialId.length === 0) {
+          if (approval === undefined || this.admission === undefined) { throw new KnowledgeFailure('NoRequestCurrentScopeAdmissionRequired','query'); }
+          await this.admission.admit(approval,input,cancel,(): void => { embeddingAuthorize(config,grant,purpose); this.queryEgress = true; launch(); });
+        } else { if (purpose === EmbeddingPurpose.Query) { this.queryEgress = true; } launch(); }
+      };
+      const response: rcp.Response = await Promise.race<rcp.Response>([this.credential.fetch(config,purpose,request,session,(): void => { cancel.check(); if (!active) { throw new KnowledgeFailure('Canceled','embedding'); } }, purpose === EmbeddingPurpose.Query ? guard : undefined),deadline]);
       status = response.statusCode;
       hilog.info(0x0001,'SHUVI_R2','R2_EMBED_REQUEST attempt=%{public}s purpose=%{public}s stage=Http http=%{public}d sdk=0 category=None',attempt,purpose,status);
       cancel.check(); if (response.statusCode !== 200) { throw new KnowledgeFailure(`HttpRejected:${response.statusCode}`, 'embedding'); }
@@ -63,15 +76,16 @@ export class EmbeddingTransportAdapter implements EmbeddingTransportPort {
     embeddingAuthorize(config,grant,EmbeddingPurpose.Models); return embeddingDecodeModels(await this.fetch(config,EmbeddingPurpose.Models,'',cancel),config);
   }
   async embed(config: EmbeddingConfig, grant: EmbeddingGrant, purpose: EmbeddingPurpose, input: string, cancel: KnowledgeCancellation): Promise<EmbeddingVectorResponse> {
+    if (purpose === EmbeddingPurpose.Query) { this.queryEgress = false; }
     embeddingAuthorize(config,grant,purpose);
     if (purpose === EmbeddingPurpose.Probe) { if (input !== EmbeddingBudget.probe) { throw new KnowledgeFailure('ProbeInputMismatch','embedding'); } }
     else {
-      if ((purpose !== EmbeddingPurpose.Corpus && purpose !== EmbeddingPurpose.Query) || this.identity === undefined) { throw new KnowledgeFailure('InputEvidenceUnavailable','embedding'); }
+      if ((purpose !== EmbeddingPurpose.Corpus && purpose !== EmbeddingPurpose.ImageCorpus && purpose !== EmbeddingPurpose.Query) || this.identity === undefined) { throw new KnowledgeFailure('InputEvidenceUnavailable','embedding'); }
       const hash: string = await this.identity.hash(pdfCodecUtf8(input));
       if (this.counter === undefined || this.baselines === undefined) { throw new KnowledgeFailure('InputPolicyUnavailable','embedding'); }
-      const proof: TokenEligibilityEvidence = await this.counter.evidence(config.modelId,purpose === EmbeddingPurpose.Corpus ? 'document' : 'query',input,hash); proof.baseline = await this.baselines.baseline(config);
+      const proof: TokenEligibilityEvidence = await this.counter.evidence(config.modelId,purpose === EmbeddingPurpose.Query ? 'query' : 'document',input,hash); proof.baseline = await this.baselines.baseline(config);
       if (!embeddingLocalEligible(proof,config) || !grant.inputHashes.includes(hash) || !grant.inputEvidence.some((evidence): boolean => evidence.textHash === hash && evidence.bindingHash === proof.bindingHash && evidence.upperBound === proof.upperBound && embeddingLocalEligible(evidence,config))) { throw new KnowledgeFailure('InputOutsideGrant','embedding'); }
     }
-    return embeddingDecodeVector(await this.fetch(config,purpose,embeddingPayload(config,input),cancel),config);
+    return embeddingDecodeVector(await this.fetch(config,purpose,embeddingPayload(config,input),cancel,grant,input),config);
   }
 }

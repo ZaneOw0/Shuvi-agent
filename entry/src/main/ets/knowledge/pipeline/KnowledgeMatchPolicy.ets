@@ -15,7 +15,7 @@ export function knowledgeMatch(hit: KnowledgeHit, input: TextQueryInput, allowSi
   }
   ranges.sort((a: KnowledgeResultRange,b: KnowledgeResultRange): number => a.start-b.start || a.end-b.end);
   for (const range of ranges) { const last = match.ranges[match.ranges.length-1]; if (last !== undefined && range.start <= last.end) { last.end = Math.max(last.end,range.end); } else { match.ranges.push(range); } }
-  match.kind = match.ranges.length > 0 ? KnowledgeMatchKind.Direct : allowSimilar && hit.sourceKind === KnowledgeSourceKind.Pdf && hit.channels.indexOf(KnowledgeChannel.Vector) >= 0 && hit.spaceId.length > 0 && hit.vectorGeneration.length > 0 && hit.vectorDistance !== undefined && Number.isFinite(hit.vectorDistance) ? KnowledgeMatchKind.Similar : KnowledgeMatchKind.Unclassified; return match;
+  match.kind = match.ranges.length > 0 ? KnowledgeMatchKind.Direct : allowSimilar && (hit.sourceKind === KnowledgeSourceKind.Pdf || hit.sourceKind === KnowledgeSourceKind.Image) && hit.channels.indexOf(KnowledgeChannel.Vector) >= 0 && hit.spaceId.length > 0 && hit.vectorGeneration.length > 0 && hit.vectorDistance !== undefined && Number.isFinite(hit.vectorDistance) ? KnowledgeMatchKind.Similar : KnowledgeMatchKind.Unclassified; return match;
 }
 export function knowledgeLiteralScore(text: string, input: TextQueryInput): number {
   const hit = new KnowledgeHit(); hit.text = text; const match = knowledgeMatch(hit,input,false); return match.matchedTerms.length*100+match.ranges.length;

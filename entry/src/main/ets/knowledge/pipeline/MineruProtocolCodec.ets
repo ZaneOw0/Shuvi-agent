@@ -1,5 +1,6 @@
-import { DocumentRemoteState, DocumentParseFailure, DocumentParseBudget, documentUtf8Bytes, DocumentParseFormat } from '../domain/DocumentParseModels';
+import { DocumentRemoteState, DocumentParseFailure, DocumentParseBudget, documentUtf8Bytes, DocumentParseFormat, ParseFailureDetail } from '../domain/DocumentParseModels';
 import { documentSafeId } from './DocumentParsePolicy';
+import { parseHttpFailure, parseProviderFailure } from './ParseFailurePolicy';
 
 // Exact endpoints and role hosts transcribed from the user-provided official API document.
 export const MINERU_ALLOCATION_ENDPOINT: string = 'https://mineru.net/api/v4/file-urls/batch';
@@ -10,6 +11,7 @@ export class MineruAllocationDTO { batchId: string = ''; uploadAddress: string =
 export class MineruInspectionDTO {
   batchId: string = ''; dataId: string = ''; state: DocumentRemoteState = DocumentRemoteState.Unobserved;
   resultAddress: string = ''; extractedPages: number = 0; totalPages: number = 0;
+  failureDetail: ParseFailureDetail = new ParseFailureDetail();
 }
 class MineruJsonField { key: string = ''; node: MineruJsonNode = new MineruJsonNode(); }
 class MineruJsonNode {
@@ -97,25 +99,17 @@ class MineruJsonReader {
 }
 function mineruRoot(raw: string): MineruJsonNode {
   const root: MineruJsonNode = new MineruJsonReader(raw).read(); const code: MineruJsonNode = root.required('code');
-  root.required('msg').stringValue();
+  const reason: string = root.required('msg').stringValue();
   if (code.kind === 'STRING') {
     const text: string = code.stringValue();
-    if (text === 'A0202' || text === 'A0211') { throw new DocumentParseFailure('鉴权失败', '控制响应', text); }
-    throw new DocumentParseFailure('未知服务码类型', '控制响应');
+    throw parseProviderFailure(text,reason,'控制响应');
   }
   const numberCode: number = code.integer();
-  if (numberCode !== 0) { throw new DocumentParseFailure(numberCode === -60018 || numberCode === -60019 ? '额度未知或不足，停止' : '服务拒绝', '控制响应', `${numberCode}`); }
+  if (numberCode !== 0) { throw parseProviderFailure(`${numberCode}`,reason,'控制响应'); }
   return root.required('data');
 }
 export function mineruHttpStatus(code: number, retryAfter: string | undefined): void {
-  if (code >= 300 && code < 400) { throw new DocumentParseFailure('拒绝重定向', 'HTTP'); }
-  if (code === 401 || code === 403) { throw new DocumentParseFailure('鉴权或任务访问失败', 'HTTP', `${code}`); }
-  if (code === 429) {
-    let bounded: string = '';
-    if (retryAfter !== undefined && new RegExp('^[0-9]{1,6}$').test(retryAfter)) { bounded = `${Math.min(900, Math.max(5, Number(retryAfter)))}`; }
-    throw new DocumentParseFailure('限频暂停，不自动重试', 'HTTP', bounded);
-  }
-  if (code !== 200) { throw new DocumentParseFailure('HTTP失败', '传输', `${code}`); }
+  if (code !== 200) { throw parseHttpFailure(code,retryAfter); }
 }
 export function mineruDecodeAllocation(raw: string): MineruAllocationDTO {
   const data: MineruJsonNode = mineruRoot(raw); const dto: MineruAllocationDTO = new MineruAllocationDTO();
@@ -132,6 +126,10 @@ export function mineruDecodeInspection(raw: string, batch: string, dataId: strin
   const states: DocumentRemoteState[] = [DocumentRemoteState.Waiting, DocumentRemoteState.Pending, DocumentRemoteState.Converting, DocumentRemoteState.Running, DocumentRemoteState.Done, DocumentRemoteState.Failed];
   const state: DocumentRemoteState | undefined = states.find((s: DocumentRemoteState): boolean => s === stateText);
   if (state === undefined) { throw new DocumentParseFailure('服务状态不兼容', '查询'); } dto.state = state;
+  if (state === DocumentRemoteState.Failed) {
+    // Top-level msg is established by the existing control contract. Unknown per-item fields are not guessed.
+    const top: MineruJsonNode = new MineruJsonReader(raw).read(); dto.failureDetail = parseProviderFailure('',top.required('msg').stringValue() === 'ok' ? '' : top.required('msg').stringValue(),'云解析').detail;
+  }
   const progress: MineruJsonNode | undefined = item.optional('extract_progress');
   if (progress !== undefined) {
     dto.extractedPages = progress.required('extracted_pages').integer(); dto.totalPages = progress.required('total_pages').integer();
@@ -156,7 +154,8 @@ export function mineruValidateDestination(address: string, role: string): void {
 }
 export function mineruAllocationPayload(dataId: string, format: DocumentParseFormat): string {
   if (!documentSafeId(dataId)) { throw new DocumentParseFailure('业务身份非法', '申请'); }
-  const suffix: string = format.toLowerCase();
+  if ([DocumentParseFormat.Pdf,DocumentParseFormat.Docx,DocumentParseFormat.Pptx,DocumentParseFormat.Xlsx,DocumentParseFormat.Jpeg,DocumentParseFormat.Png,DocumentParseFormat.Webp].indexOf(format) < 0) { throw new DocumentParseFailure('未知请求格式','申请'); }
+  const suffix: string = format === DocumentParseFormat.Jpeg ? 'jpg' : format.toLowerCase();
   return '{"files":[{"name":' + JSON.stringify(dataId + '.' + suffix) + ',"data_id":' + JSON.stringify(dataId) + ',"is_ocr":false}],"model_version":"vlm","enable_table":true,"enable_formula":true,"language":"ch"}';
 }
 export class MineruBoundedBytes {

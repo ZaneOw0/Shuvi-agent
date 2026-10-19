@@ -13,7 +13,8 @@ export async function embeddingFullAudit(assembly: KnowledgeAssembly, context: c
   const id: string = 'kb-a559722e0fceb2006b145f2ad9e6c656'; const identity = new KnowledgePlatformIdentity();
   const job = (await assembly.vectorMetadata.jobs()).find((item: EmbeddingJob): boolean => item.id === id);
   if (job === undefined || job.vectorGeneration !== 'kb-9e20e7c45dff0f7ba8eede3e9f8db9a7' || job.spaceId !== 'kb-5f85a339550011dce2c68243d97e2b1f' || job.contentGeneration !== 'kb-e144c7dff2b309d638cfa10b14604e3b') { throw new KnowledgeFailure('AuthorizedFullJobIdentityChanged','full-audit'); }
-  const document = await assembly.vectorMetadata.document(job.documentId); const source = await assembly.repository.generationJob(job.contentGeneration);
+  const document = await assembly.repository.get(job.documentId); const source = await assembly.repository.generationJob(job.contentGeneration);
+  if (document === undefined) { throw new KnowledgeFailure('AuthorizedFullDocumentUnavailable','full-audit'); }
   if (source.snapshotId !== 'kb-68c7504281b1a324817d2390b5c021e6' || source.reportHash !== '6b57aaa8827b25325bf41c1a2f82fb4c81fb3a95f6c0af1ee4d92d06a55ac864' || document.activeContentGeneration !== job.contentGeneration || document.epoch !== job.epoch) { throw new KnowledgeFailure('AuthorizedFullSourceChanged','full-audit'); }
   const inputs = await assembly.vectorMetadata.inputs(job); const lease = assembly.sourceReadLease(source.sourceId,job.contentGeneration); await assembly.repository.acquireRead(lease);
   let read: number = 0; let visible: number = 0; const hashes: string[] = []; let dimension: number = 0;

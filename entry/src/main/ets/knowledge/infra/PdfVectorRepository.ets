@@ -4,7 +4,7 @@ import { EmbeddingSpace, EmbeddingJob, EmbeddingJobStage, EmbeddingGrant, Embedd
 import { EmbeddingBaselineAcceptance, EmbeddingDryReview } from '../domain/EmbeddingBasisModels';
 import { embeddingConfigBinding, embeddingBaselineMatches } from '../pipeline/EmbeddingBasisPolicy';
 import { KnowledgeFailure, KnowledgeCancellation, PdfChunk, PdfBudget, PdfKnowledgeDocument, KnowledgeReadLease } from '../domain/PdfKnowledgeModels';
-import { VectorWorkflowRepository, VectorCorpusPlan, VectorInputRecord, VectorInputState, VectorEligibility, VectorUsageSummary } from '../domain/VectorWorkflowModels';
+import { VectorWorkflowRepository, VectorCorpusPlan, VectorInputRecord, VectorInputState, VectorEligibility, VectorUsageSummary, VectorSourceDocument, VectorSourceChunk, vectorPdfDocument } from '../domain/VectorWorkflowModels';
 import { KnowledgeHit, KnowledgeSourceKind, KnowledgeChannel } from '../domain/KnowledgeSearchModels';
 import { embeddingSpaceDecode } from '../pipeline/EmbeddingSpacePolicy';
 import { BoundedDocumentJson } from '../pipeline/BoundedDocumentJson';
@@ -14,7 +14,7 @@ import { KnowledgePhysicalBudgetPort } from './KnowledgeDerivedBudget';
 import { EmbeddingTrialMetadataPort, EmbeddingTrialScope, EmbeddingTrialResult, EmbeddingCorpusReceipt } from '../domain/VectorWorkflowModels';
 
 export class PdfVectorRepository implements VectorWorkflowRepository, EmbeddingTrialMetadataPort {
-  private host: KnowledgeStoreHost; private documents: PdfRepositoryPort;
+  protected host: KnowledgeStoreHost; private documents: PdfRepositoryPort;
   constructor(host: KnowledgeStoreHost, documents: PdfRepositoryPort) { this.host = host; this.documents = documents; }
   private physical: KnowledgePhysicalBudgetPort | undefined;
   private budgetLimit: number = PdfBudget.derivedBytes;
@@ -26,7 +26,7 @@ export class PdfVectorRepository implements VectorWorkflowRepository, EmbeddingT
   async bootstrap(): Promise<void> {
     const rows = await this.store().querySql('SELECT state FROM kb_migration WHERE id=?',['KB-PDF-VECTOR-1']); try { if (!rows.goToNextRow() || rows.getString(0) !== 'Committed') { throw new KnowledgeFailure('VectorMetadataMigrationRequired','vector-open'); } } finally { rows.close(); }
   }
-  private store(): relationalStore.RdbStore { if (!this.documents.ready()) { throw new KnowledgeFailure('VectorMetadataUnavailable','vector-job'); } return this.host.requireStore(); }
+  protected store(): relationalStore.RdbStore { if (!this.documents.ready()) { throw new KnowledgeFailure('VectorMetadataUnavailable','vector-job'); } return this.host.requireStore(); }
   async saveBaseline(basis: EmbeddingBaselineAcceptance): Promise<void> {
     await this.host.enqueue<void>(async (): Promise<void> => { await this.store().executeSql('INSERT OR REPLACE INTO r2v_baseline VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',[basis.configFingerprint,basis.model,basis.profile,basis.revision,basis.tokenizer,basis.weights,basis.metadata,basis.parameters,basis.policy,basis.configRevision,basis.acceptedAt,basis.providerRevision,basis.providerConsistency]); });
   }
@@ -44,7 +44,7 @@ export class PdfVectorRepository implements VectorWorkflowRepository, EmbeddingT
     }); });
   }
   async pendingReleases(session: string): Promise<KnowledgeReadLease[]> { const rows = await this.store().querySql('SELECT id,generation,session FROM r2v_release WHERE session=?',[session]); const result: KnowledgeReadLease[] = []; try { while (rows.goToNextRow()) { const lease: KnowledgeReadLease = new KnowledgeReadLease(); lease.id = rows.getString(0); lease.generation = rows.getString(1); lease.sessionId = rows.getString(2); result.push(lease); } } finally { rows.close(); } return result; }
-  async document(documentId: string): Promise<PdfKnowledgeDocument> { const document = await this.documents.get(documentId); if (document === undefined || document.tombstone || document.activeContentGeneration.length === 0) { throw new KnowledgeFailure('CorpusUnavailable','vector-job'); } return document; }
+  async document(documentId: string): Promise<VectorSourceDocument> { const document = await this.documents.get(documentId); if (document === undefined || document.tombstone || document.activeContentGeneration.length === 0) { throw new KnowledgeFailure('CorpusUnavailable','vector-job'); } return vectorPdfDocument(document); }
   async assertTrial(job: EmbeddingJob): Promise<void> {
     const rows = await this.store().querySql('SELECT v.expected,v.state FROM kb_vector_generation v JOIN kb_document d ON d.id=v.doc JOIN kb_content_generation g ON g.id=v.content_generation WHERE v.job=? AND v.id=? AND v.space=? AND v.content_generation=? AND v.epoch=? AND v.cleanup_claim=? AND d.id=? AND d.active_content=v.content_generation AND d.epoch=v.epoch AND d.tombstone=0 AND d.archived=0 AND d.active_vector=? AND g.state=? AND g.cleanup_claim=?',[job.id,job.vectorGeneration,job.spaceId,job.contentGeneration,job.epoch,'',job.documentId,'','Active','']);
     try { if (!rows.goToNextRow() || rows.getLong(0) <= 3 || !['Paused','Preparing','PartialStaged'].includes(rows.getString(1))) { throw new KnowledgeFailure('TrialSourceEpochOrStateChanged','trial-query'); } } finally { rows.close(); }
@@ -68,7 +68,7 @@ export class PdfVectorRepository implements VectorWorkflowRepository, EmbeddingT
   async recordCorpusReceipt(item: EmbeddingCorpusReceipt): Promise<void> {
     await this.host.enqueue<void>(async (): Promise<void> => { await this.store().executeSql('INSERT INTO r2v_rpc_receipt VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',[item.jobId,item.vectorGeneration,item.spaceId,item.chunkId,item.inputHash,item.readbackHash,item.bound,item.dimension,item.elapsed,item.total,item.prompt,item.grantId]); });
   }
-  private async assertJob(tx: relationalStore.Transaction, job: EmbeddingJob): Promise<void> {
+  protected async assertJob(tx: relationalStore.Transaction, job: EmbeddingJob): Promise<void> {
     const rows = await tx.querySql('SELECT v.id FROM kb_vector_generation v JOIN kb_document d ON d.id=v.doc JOIN kb_content_generation g ON g.id=v.content_generation WHERE v.id=? AND v.job=? AND v.doc=? AND v.content_generation=? AND v.space=? AND v.epoch=? AND v.cleanup_claim=? AND v.state IN (?,?,?,?,?) AND d.epoch=? AND d.tombstone=0 AND d.archived=0 AND d.active_content=v.content_generation AND g.state=? AND g.cleanup_claim=?',[job.vectorGeneration,job.id,job.documentId,job.contentGeneration,job.spaceId,job.epoch,'','Preparing','Paused','PartialStaged','ValidatingReadback','SemanticReady',job.epoch,'Active','']);
     try { if (!rows.goToNextRow()) { throw new KnowledgeFailure('VectorJobStaleOrClaimed','vector-job'); } } finally { rows.close(); }
     const grant = await tx.querySql('SELECT g.id FROM kb_embedding_grant g JOIN r2v_job j ON j.grant_id=g.id WHERE j.id=? AND g.purpose=? AND g.fingerprint=? AND g.doc=? AND g.generation=? AND g.snapshot_hash=? AND g.space=? AND g.session=? AND g.free=? AND g.revoked=0 AND g.expires>?',[job.id,EmbeddingPurpose.Corpus,job.configFingerprint,job.documentId,job.contentGeneration,job.snapshotHash,job.spaceId,job.sessionId,EmbeddingFreeEligibility.Confirmed,Date.now()]);
@@ -98,7 +98,7 @@ export class PdfVectorRepository implements VectorWorkflowRepository, EmbeddingT
   async corpus(documentId: string): Promise<VectorCorpusPlan> {
     const document = await this.documents.get(documentId);
     if (document === undefined || document.tombstone || document.activeContentGeneration.length === 0) { throw new KnowledgeFailure('CorpusUnavailable','vector-job'); }
-    const plan: VectorCorpusPlan = new VectorCorpusPlan(); plan.document = document;
+    const plan: VectorCorpusPlan = new VectorCorpusPlan(); plan.document = vectorPdfDocument(document);
     const rows = await this.store().querySql('SELECT * FROM kb_chunk WHERE doc=? AND generation=? ORDER BY ordinal,id',[documentId,document.activeContentGeneration]);
     try { while (rows.goToNextRow()) { const input: VectorInputRecord = new VectorInputRecord(); const chunk = input.chunk; chunk.id = rows.getString(0); chunk.documentId = rows.getString(1); chunk.generation = rows.getString(2); chunk.snapshotId = rows.getString(3); chunk.snapshotHash = rows.getString(4); chunk.originalHash = rows.getString(5); chunk.originalVersion = rows.getLong(6); chunk.ordinal = rows.getLong(7); chunk.retrievalText = rows.getString(9); chunk.embeddingText = chunk.retrievalText; chunk.text = rows.getString(10); chunk.inputHash = rows.getString(11); chunk.defaultIncluded = rows.getLong(13) === 1;
       if (plan.inputs.length >= PdfBudget.documentChunks || (plan.inputs.length > 0 && plan.snapshotHash !== chunk.snapshotHash)) { throw new KnowledgeFailure('CorpusSetInvalid','vector-job'); } plan.snapshotHash = chunk.snapshotHash; plan.inputs.push(input);
@@ -125,7 +125,7 @@ export class PdfVectorRepository implements VectorWorkflowRepository, EmbeddingT
       await tx.execute('INSERT INTO kb_vector_generation VALUES(?,?,?,?,?,?,?,?,?,?,?)',[job.vectorGeneration,job.documentId,job.contentGeneration,job.spaceId,job.id,job.epoch,'Preparing',plan.inputs.length,0,0,'']);
       await tx.execute('INSERT INTO r2v_job VALUES(?,?,?,?,?,?,?,?,?)',[job.id,job.vectorGeneration,job.snapshotHash,job.oldVectorGeneration,job.grantId,job.configFingerprint,job.sessionId,job.windowStart,'']);
       for (let at: number = 0; at < plan.inputs.length; at++) {
-        const chunk: PdfChunk = plan.inputs[at].chunk; if (job.expectedHashes[at] !== chunk.inputHash || !new RegExp('^[a-f0-9]{64}$').test(chunk.inputHash)) { throw new KnowledgeFailure('VectorInputIdentity','vector-job'); }
+        const chunk: VectorSourceChunk = plan.inputs[at].chunk; if (job.expectedHashes[at] !== chunk.inputHash || !new RegExp('^[a-f0-9]{64}$').test(chunk.inputHash)) { throw new KnowledgeFailure('VectorInputIdentity','vector-job'); }
         const source = await tx.querySql('SELECT id FROM kb_chunk WHERE id=? AND generation=? AND doc=? AND input_hash=? AND snapshot_hash=? AND text=?',[chunk.id,job.contentGeneration,job.documentId,chunk.inputHash,job.snapshotHash,chunk.embeddingText]);
         try { if (!source.goToNextRow()) { throw new KnowledgeFailure('VectorSourceInputChanged','vector-job'); } } finally { source.close(); }
         await tx.execute('INSERT INTO kb_vector_input VALUES(?,?,?,?)',[job.vectorGeneration,chunk.id,chunk.inputHash,'']);
@@ -199,7 +199,7 @@ export class PdfVectorRepository implements VectorWorkflowRepository, EmbeddingT
       const rows = await tx.querySql('SELECT (SELECT coalesce(sum(bytes),0) FROM kb_asset),(SELECT coalesce(sum(reserved),0) FROM kb_derived_reservation WHERE state=?),(SELECT coalesce(min(actual),0) FROM kb_derived_reservation WHERE state=?)',['Reserved','Reserved']); let reserved: number = 0;
       try { if (!rows.goToNextRow()) { throw new KnowledgeFailure('BudgetLedgerMissing','budget'); } const vectorPhysical: number = usage?.vectorPhysical ?? 0; const unused: number = Math.max(0,rows.getLong(1)-Math.max(0,vectorPhysical-rows.getLong(2))); reserved = Math.max(usage?.assetsPhysical ?? 0,rows.getLong(0))+vectorPhysical+unused; } finally { rows.close(); }
       const metadata: number = Math.max(usage?.sharedNonReclaimable ?? 0,await this.metadataBytes());
-      if (bytes > this.budgetLimit-reserved-metadata) { throw new KnowledgeFailure('DerivedBudget','vector-job'); }
+      if (bytes > this.budgetLimit-reserved-metadata-(usage?.pendingReserved ?? 0)) { throw new KnowledgeFailure('DerivedBudget','vector-job'); }
       await tx.execute('INSERT INTO kb_derived_reservation VALUES(?,?,?,?,?,?)',[id,id,'VectorAndMetadata',bytes,usage?.vectorPhysical ?? 0,'Reserved']);
     }); });
   }

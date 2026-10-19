@@ -5,8 +5,20 @@ import { EmbeddingBaselineAcceptance, EmbeddingDryReview } from './EmbeddingBasi
 import { QueryConsentSnapshot } from './EmbeddingModels';
 
 export enum VectorInputState { NotSent = 'NotSent', InFlight = 'InFlight', Received = 'Received', Verified = 'ReadbackVerified', Unknown = 'Unknown' }
-export class VectorInputRecord { chunk: PdfChunk = new PdfChunk(); state: VectorInputState = VectorInputState.NotSent; readbackHash: string = ''; }
-export class VectorCorpusPlan { document: PdfKnowledgeDocument = new PdfKnowledgeDocument(); snapshotHash: string = ''; inputs: VectorInputRecord[] = []; }
+export class VectorSourceDocument {
+  id: string = ''; sourceKind: string = ''; sourceId: string = ''; epoch: number = 0; archived: boolean = false;
+  activeContentGeneration: string = ''; activeVectorGeneration: string = ''; snapshotHash: string = '';
+}
+export class VectorSourceChunk {
+  id: string = ''; documentId: string = ''; generation: string = ''; snapshotId: string = ''; snapshotHash: string = '';
+  originalHash: string = ''; originalVersion: number = 0; ordinal: number = 0; text: string = ''; retrievalText: string = ''; embeddingText: string = ''; inputHash: string = ''; defaultIncluded: boolean = true;
+}
+export function vectorPdfDocument(source: PdfKnowledgeDocument): VectorSourceDocument {
+  const doc: VectorSourceDocument = new VectorSourceDocument(); doc.id = source.id; doc.sourceKind = 'Pdf'; doc.sourceId = source.binding.originalId; doc.epoch = source.epoch;
+  doc.archived = source.archived; doc.activeContentGeneration = source.activeContentGeneration; doc.activeVectorGeneration = source.activeVectorGeneration; return doc;
+}
+export class VectorInputRecord { chunk: VectorSourceChunk = new VectorSourceChunk(); state: VectorInputState = VectorInputState.NotSent; readbackHash: string = ''; }
+export class VectorCorpusPlan { document: VectorSourceDocument = new VectorSourceDocument(); snapshotHash: string = ''; inputs: VectorInputRecord[] = []; }
 export class VectorUsageSummary { received: number = 0; reportedTotal: number = 0; missingUsage: number = 0; unknown: number = 0; }
 export class VectorEligibility {
   documentId: string = ''; contentGeneration: string = ''; vectorGeneration: string = ''; spaceId: string = ''; epoch: number = 0; revision: number = 0;
@@ -45,7 +57,7 @@ export interface EmbeddingBaselinePort { baseline(config: EmbeddingConfig): Prom
 export interface VectorWorkflowRepository extends EmbeddingBaselinePort, EmbeddingTrialMetadataPort {
   saveBaseline(basis: EmbeddingBaselineAcceptance): Promise<void>;
   baseline(config: EmbeddingConfig): Promise<EmbeddingBaselineAcceptance>;
-  document(documentId: string): Promise<PdfKnowledgeDocument>;
+  document(documentId: string): Promise<VectorSourceDocument>;
   corpus(documentId: string): Promise<VectorCorpusPlan>;
   spaces(): Promise<EmbeddingSpace[]>;
   saveSpace(space: EmbeddingSpace): Promise<void>;

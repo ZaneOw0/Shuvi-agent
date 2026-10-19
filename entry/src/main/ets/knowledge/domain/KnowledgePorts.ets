@@ -10,6 +10,24 @@ import {
 import { KnowledgeHit, KnowledgeHistory, KnowledgeHistoryCursor, KnowledgeHistoryPage } from './KnowledgeSearchModels';
 import { TextQueryInput } from './TextKnowledgeModels';
 import { PdfPageIdentityEvidence, ResultPageReference } from './PdfLocalModels';
+import { KnowledgeScopeReceipt } from './ImageKnowledgeModels';
+import { QueryConsentSnapshot } from './EmbeddingModels';
+
+export class KnowledgeSourceScan { kind: string = ''; revision: string = ''; count: number = 0; complete: boolean = false; hits: KnowledgeHit[] = []; }
+export interface KnowledgeSearchSourcePort {
+  kind: string;
+  scan(input: TextQueryInput, archived: boolean, extras: boolean, cancel: KnowledgeCancellation): Promise<KnowledgeSourceScan>;
+  visible(hit: KnowledgeHit, archived: boolean): Promise<boolean>;
+}
+export interface KnowledgeQueryAdmissionPort {
+  admit(approval: QueryConsentSnapshot, input: string, cancel: KnowledgeCancellation, launch: () => void): Promise<void>;
+}
+export interface KnowledgeScopePort {
+  scan(input: TextQueryInput, archived: boolean, extras: boolean, cancel: KnowledgeCancellation): Promise<KnowledgeScopeReceipt>;
+  hits(receiptId: string): KnowledgeHit[];
+  visible(hit: KnowledgeHit, archived: boolean): Promise<boolean>;
+  admit(approval: QueryConsentSnapshot, input: string, cancel: KnowledgeCancellation, launch: () => void): Promise<void>;
+}
 
 export interface KnowledgePageReferencePort { resolve(hit: KnowledgeHit, cancel: KnowledgeCancellation): Promise<ResultPageReference>; }
 export interface PdfPageIdentityRepositoryPort extends KnowledgeSourceReadPort {
@@ -88,6 +106,7 @@ export interface EmbeddingCredentialPort {
   remove(config: EmbeddingConfig): Promise<EmbeddingCredentialStatus>; clearTransient(): void;
 }
 export interface EmbeddingTransportPort {
+  queryEgress?: boolean;
   models(config: EmbeddingConfig, grant: EmbeddingGrant, cancel: KnowledgeCancellation): Promise<EmbeddingModelInfo[]>;
   embed(config: EmbeddingConfig, grant: EmbeddingGrant, purpose: EmbeddingPurpose, input: string, cancel: KnowledgeCancellation): Promise<EmbeddingVectorResponse>;
   cancel(): void;

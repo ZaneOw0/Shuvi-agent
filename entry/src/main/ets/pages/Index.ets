@@ -44,6 +44,16 @@ import { MockAssistantService } from '../mock/MockAssistantService';
 import { KnowledgePlatformDiagnostics } from '../knowledge/ui/KnowledgePlatformDiagnostics';
 import { PdfPageReferenceState, ResultPageReference } from '../knowledge/domain/PdfLocalModels';
 import { KnowledgeCancellation } from '../knowledge/domain/PdfKnowledgeModels';
+import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
+import { ImageIngestionView } from '../knowledge/ui/ImageIngestionView';
+import { ImageSourceView } from '../knowledge/ui/ImageSourceView';
+import { ImageOriginalAdapter } from '../knowledge/infra/ImageOriginalAdapter';
+import { ImageProcessingAdapter } from '../knowledge/infra/ImageProcessingAdapter';
+import { ImageResultReader } from '../knowledge/infra/ImageResultReader';
+import { KnowledgePlatformIdentity } from '../knowledge/infra/KnowledgeAssembly';
+import { KnowledgeStorageScope } from '../knowledge/domain/KnowledgeStorageScope';
+import { ImageDocument } from '../knowledge/domain/ImageKnowledgeModels';
+import { ImageVectorRepository } from '../knowledge/infra/ImageVectorRepository';
 
 @Entry
 @Component
@@ -82,6 +92,9 @@ struct Index {
   @State embeddingService: EmbeddingService | undefined = undefined;
   @State embeddingClearEpoch: number = 0;
   @State platformDiagnosticsOpen: boolean = false;
+  @State imageIngestionOpen: boolean = false;
+  @State imageSourceOpen: boolean = false;
+  @State imageIngestionService: ImageIngestionService | undefined = undefined;
   private sharedKnowledge: KnowledgeAssembly | undefined = undefined;
   private parseAssembly: DocumentParseAssembly | undefined = undefined;
   private service: AssistantService = new MockAssistantService();
@@ -107,6 +120,8 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (this.imageSourceOpen) { this.imageSourceOpen = false; this.sharedKnowledge?.imageSources.close().catch((): void => {}); return true; }
+    if (this.imageIngestionOpen) { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); return true; }
     if (this.platformDiagnosticsOpen) { this.platformDiagnosticsOpen = false; return true; }
     if (this.pdfSourceOpen) { this.pdfSourceOpen = false; return true; }
     if (this.pdfIngestionOpen) { this.pdfIngestionOpen = false; return true; }
@@ -140,6 +155,7 @@ struct Index {
   }
 
   private changeTab(index: number): void {
+    if (index !== this.tab) { this.imageIngestionOpen = false; this.imageSourceOpen = false; this.imageIngestionService?.pause(); this.sharedKnowledge?.imageSources.close().catch((): void => {}); }
     if (index !== this.tab) { this.pdfIngestionOpen = false; }
     if (index !== this.tab && this.embeddingOpen) { this.closeEmbedding(); }
     if (index !== this.tab && this.parseOpen) { this.closeParse(); }
@@ -176,11 +192,16 @@ struct Index {
     }
   }
   private async openKnowledgeHit(hit: KnowledgeHit): Promise<void> {
+    if (hit.sourceKind === KnowledgeSourceKind.Image) {
+      const doc = await this.sharedKnowledge?.images.get(hit.documentId); if (doc === undefined || this.sharedKnowledge === undefined) { return; }
+      this.imageSourceOpen = true; try { await this.sharedKnowledge.imageSources.open(doc,hit); } catch { this.knowledgeState.message = '图片来源核验或释放未完成'; } return;
+    }
     if (hit.sourceKind === KnowledgeSourceKind.Text) {
       const text: TextHit = new TextHit(); text.documentId = hit.documentId; text.documentVersion = hit.originalVersion; text.originalHash = hit.originalHash;
       text.generation = hit.generation; text.snapshotId = hit.snapshotId; text.chunkId = hit.chunkId; text.text = hit.text; text.ranges = hit.locator.textRanges;
       await this.knowledgeService?.openHit(text); return;
     }
+    if (hit.sourceKind !== KnowledgeSourceKind.Pdf) { return; }
     const doc: PdfKnowledgeDocument | undefined = await this.sharedKnowledge?.repository.get(hit.documentId); const context = this.getUIContext().getHostContext();
     if (doc === undefined || doc.tombstone || context === undefined) { return; }
     if (this.sharedKnowledge === undefined) { return; }
@@ -200,6 +221,24 @@ struct Index {
   }
   private closeParse(): void {
     this.parseService?.clearInput(); this.parseOpen = false;
+  }
+  private async openImages(): Promise<void> {
+    await this.openKnowledge(); if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+    const context = this.getUIContext().getHostContext(); const shared = this.sharedKnowledge;
+    if (context === undefined || shared === undefined || this.parseService === undefined || !shared.images.ready()) { this.knowledgeState.message = '图片准备区不可用，原件未修改'; return; }
+    if (this.imageIngestionService === undefined) { this.imageIngestionService = new ImageIngestionService(this.parseService,shared.images,new ImageOriginalAdapter(context.filesDir),new ImageProcessingAdapter(),new KnowledgePlatformIdentity(),KnowledgeStorageScope.production()); const metadata = shared.vectorMetadata; if (metadata instanceof ImageVectorRepository) { this.imageIngestionService.attachVectorCleanup(async (id: string): Promise<void> => { await metadata.cleanupDeleted(id,shared.vectors); }); } await this.imageIngestionService.initialize(); }
+    this.imageIngestionService.attachResults(new ImageResultReader(context.filesDir,this.parseService));
+    this.imageIngestionService.attachVectorSync(async (id: string): Promise<void> => { await shared.workflow.sync(id); });
+    await this.imageIngestionService.adoptPrepared();
+    this.imageIngestionOpen = true;
+  }
+  private async openImageOriginal(document: ImageDocument): Promise<void> {
+    if (this.sharedKnowledge === undefined) { return; } this.imageSourceOpen = true;
+    try { await this.sharedKnowledge.imageSources.open(document); } catch { this.knowledgeState.message = '图片来源核验或释放未完成'; }
+  }
+  private async prepareImage(resultId: string): Promise<void> {
+    this.closeParse(); await this.openImages();
+    if (this.imageIngestionOpen) { await this.imageIngestionService?.prepareResult(resultId); }
   }
   private closeEmbedding(): void { this.embeddingClearEpoch++; this.embeddingService?.clearInput(); this.embeddingOpen = false; }
   private async openEmbedding(): Promise<void> {
@@ -595,8 +634,13 @@ struct Index {
       }.padding({ left: 20, right: 12 }).width('100%')
       Scroll(this.scroller) {
         Column() {
-           if (this.platformDiagnosticsOpen) {
-             KnowledgePlatformDiagnostics({ onBack: (): void => { this.platformDiagnosticsOpen = false; } })
+           if (this.imageSourceOpen) {
+             ImageSourceView({ session: this.sharedKnowledge?.imageSources, onBack: (): void => { this.imageSourceOpen = false; this.sharedKnowledge?.imageSources.close().catch((): void => {}); } })
+           } else if (this.imageIngestionOpen) {
+              ImageIngestionView({ service: this.imageIngestionService, embedding: this.embeddingService, onBack: (): void => { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); }, onOriginal: (document: ImageDocument): void => { this.openImageOriginal(document); },
+                onParseSettings: (): void => { this.imageIngestionOpen = false; this.openParse(true); }, onEmbeddingSettings: (): void => { this.imageIngestionOpen = false; this.openEmbedding(); } })
+           } else if (this.platformDiagnosticsOpen) {
+              KnowledgePlatformDiagnostics({ onBack: (): void => { this.platformDiagnosticsOpen = false; }, onImageHappyPath: (): void => { this.platformDiagnosticsOpen = false; this.openImages(); } })
            } else if (this.noticeTitle.length > 0) {
             Column({ space: 16 }) {
               Text(this.noticeTitle).fontSize(24).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
@@ -624,7 +668,8 @@ struct Index {
              if (this.parseService !== undefined) {
                DocumentParseView({ parseState: this.parseState, service: this.parseService,
                  settingsMode: this.parseSettings, clearEpoch: this.parseState.inputEpoch,
-                  onClose: (): void => { this.closeParse(); }, onPreparePdf: (resultId: string): void => { this.preparePdf(resultId); } })
+                   onClose: (): void => { this.closeParse(); }, onPreparePdf: (resultId: string): void => { this.preparePdf(resultId); },
+                   onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenImages: (): void => { this.closeParse(); this.openImages(); } })
              } else {
                Column({ space: 12 }) {
                  Text(this.parseState.message || '正在打开独立解析准备区…').fontSize(14).width('100%')
@@ -644,7 +689,8 @@ struct Index {
             }
            } else if (this.tab === 2) {
              if (this.knowledgeService !== undefined) {
-                 Button('PDF 本机任务').id('r2-pdf-jobs').onClick((): void => { this.openPdfJobs(); })
+                  Button('PDF 本机任务').id('r2-pdf-jobs').onClick((): void => { this.openPdfJobs(); })
+                   Button('图片解析与入库').id('m3-image-entry').onClick((): void => { this.openImages(); })
                  KnowledgeView({ textState: this.knowledgeState, textService: this.knowledgeService, service: this.unifiedSearchService, embedding: this.embeddingService, semantic: this.sharedKnowledge?.workflow,
                   documentsPort: this.pdfDocumentsPort, lifecycle: this.derivedLifecycle,
                   onRetryOpen: (): void => { this.openKnowledge(); },

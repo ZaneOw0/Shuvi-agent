@@ -6,6 +6,7 @@ import { rcp } from '@kit.RemoteCommunicationKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { MineruCredentialPort } from '../domain/DocumentParsePorts';
 import { DocumentCredentialStatus, DocumentLeaseBinding, DocumentParseFailure, documentValidateToken } from '../domain/DocumentParseModels';
+import { parseSdkFailure } from '../pipeline/ParseFailurePolicy';
 
 const MINERU_TOKEN_ALIAS: string = 'shuvi.m2.mineru.precision.token.v1';
 const MINERU_KEY_ALIAS: string = 'shuvi.m2.parse.lease.aes256.v1';
@@ -139,10 +140,9 @@ export class MineruCredentialStore implements MineruCredentialPort {
       check(); const token: string = util.TextDecoder.create('utf-8', { fatal: true }).decodeToString(bytes);
       documentValidateToken(token);
       const headers: rcp.RequestHeaders = { 'authorization': `Bearer ${token}`, 'content-type': 'application/json', 'accept': 'application/json' };
-      request.headers = headers; check(); return await Promise.resolve().then((): Promise<rcp.Response> => session.fetch(request)).catch((error: BusinessError): rcp.Response => {
-        if (error instanceof DocumentParseFailure) { throw new DocumentParseFailure(error.category, error.stage, error.serviceCode); }
-        const code: string = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? `${error.code}` : '';
-        throw new DocumentParseFailure('控制请求网络或TLS失败', '控制请求', code);
+      request.headers = headers; check(); return await Promise.resolve().then((): Promise<rcp.Response> => session.fetch(request)).catch((error: BusinessError | DocumentParseFailure): rcp.Response => {
+        if (error instanceof DocumentParseFailure) { throw error; }
+        throw parseSdkFailure(typeof error?.code === 'number' ? error.code : undefined,'控制请求',request.method === 'POST');
       });
     } catch (error) { if (error instanceof DocumentParseFailure) { throw error; } throw new DocumentParseFailure('控制请求失败、鉴权或网络不可用', '控制请求'); }
     finally {

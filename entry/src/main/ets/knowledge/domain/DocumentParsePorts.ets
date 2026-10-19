@@ -1,10 +1,10 @@
 import {
   DocumentFileSelection, DocumentSelectedFile, DocumentOriginal, DocumentParseCancellation,
   DocumentCredentialStatus, DocumentParseSnapshot, DocumentParseAction, DocumentAllocationReceipt,
-  DocumentInspection, DocumentParseResultEnvelope, DocumentParseUsage
+  DocumentInspection, DocumentParseResultEnvelope, DocumentParseUsage, DocumentParseViewState
 } from './DocumentParseModels';
 
-export interface DocumentSelectionPort { select(): Promise<DocumentFileSelection>; }
+export interface DocumentSelectionPort { select(): Promise<DocumentFileSelection>; selectImages?(): Promise<DocumentFileSelection>; }
 export interface DocumentAssetPort {
   save(file: DocumentSelectedFile, id: string, cancel: DocumentParseCancellation): Promise<DocumentOriginal>;
   verify(original: DocumentOriginal, cancel: DocumentParseCancellation): Promise<void>;
@@ -32,3 +32,5 @@ export interface MineruTaskPort {
   pause(): void;
 }
 export interface DocumentParseClockPort { now(): number; id(): string; sleep(ms: number): Promise<void>; }
+// Image results reuse archive mechanics, never a fabricated PDF source/page binding.
+export interface DocumentImageResultSourcePort { viewState(): DocumentParseViewState; }

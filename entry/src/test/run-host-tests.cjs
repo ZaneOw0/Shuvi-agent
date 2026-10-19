@@ -1,5 +1,9 @@
 // Supplemental host checks of pure logic, NOT ArkUI/Hypium/device execution.
 // Reuses the installed SDK compiler; adds no dependency and never ships in the HAP.
+if (process.argv.includes('--image-only') || process.argv.includes('--image-happy-path')) {
+  require('./image-host-entry.cjs');
+  return;
+}
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');

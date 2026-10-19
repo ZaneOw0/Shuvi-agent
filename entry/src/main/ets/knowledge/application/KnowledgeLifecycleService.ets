@@ -12,6 +12,8 @@ export interface KnowledgePinRepository {
 }
 export class KnowledgeLifecycleService implements KnowledgeSourceProtectionPort {
   private repository: KnowledgePinRepository;
+  private imageProtection: ((assets: string[]) => Promise<void>) | undefined = undefined;
+  attachImageProtection(check: (assets: string[]) => Promise<void>): void { this.imageProtection = check; }
   // A single queue is deliberately stronger than per-source locking. Cleanup records
   // may contain several sources; keeping them together prevents lock-order races.
   private tail: Promise<void> = Promise.resolve();
@@ -23,6 +25,7 @@ export class KnowledgeLifecycleService implements KnowledgeSourceProtectionPort 
   private requireReady(): void { if (!this.repository.ready()) { throw new KnowledgeFailure('ProtectionUnavailable', 'source-lifecycle'); } }
   async assertDeletable(sourceId: string, assetIds: string[]): Promise<void> {
     this.requireReady();
+    if (this.imageProtection !== undefined) { await this.imageProtection(assetIds); }
     if ((await this.repository.pins(sourceId, assetIds)).length > 0) { throw new KnowledgeFailure('KnowledgeSourcePinned', 'source-delete'); }
     if (assetIds.length > 0) { await this.repository.assertNoReaders(assetIds); }
   }

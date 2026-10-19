@@ -2,7 +2,7 @@ import { fileIo, ReadOptions } from '@kit.CoreFileKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { taskpool } from '@kit.ArkTS';
 import { DocumentOriginal, DocumentParseCancellation, DocumentParseBudget, DocumentParseFailure, DocumentParseFormat, DocumentPreflightStatus } from '../domain/DocumentParseModels';
-import { documentSafeId, documentZipBoundary, documentOfficeIdentity, DocumentZipBoundary } from '../pipeline/DocumentParsePolicy';
+import { documentSafeId, documentZipBoundary, documentOfficeIdentity, DocumentZipBoundary, documentIsImage } from '../pipeline/DocumentParsePolicy';
 
 export async function documentEnsureDirectory(root: string): Promise<void> {
   if (!(await fileIo.access(root))) { await fileIo.mkdir(root); }
@@ -56,6 +56,8 @@ export async function documentContainerPreflight(path: string, original: Documen
       }
       return;
     }
+    if (documentIsImage(original.format)) { original.preflightReason = '图片原件已保存，待基本编码/尺寸核验；预览可选'; return; }
+    if ([DocumentParseFormat.Docx,DocumentParseFormat.Pptx,DocumentParseFormat.Xlsx].indexOf(original.format) < 0) { throw new DocumentParseFailure('原件格式未知','身份预检'); }
     const size: number = Math.min(65557, original.bytes);
     const tail: Uint8Array = await documentReadRange(file.fd, original.bytes - size, size);
     const boundary: DocumentZipBoundary = documentZipBoundary(head, tail, original.bytes);

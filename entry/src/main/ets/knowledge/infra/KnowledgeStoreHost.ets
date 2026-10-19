@@ -18,6 +18,7 @@ export class KnowledgeStoreHost {
   injectCloseFault(owner: string): void { this.storageScope.requireTestOwner(owner); this.closeFault = true; }
   m1Ready: boolean = false;
   extensionReady: boolean = false;
+  imageReady: boolean = false;
   extensionFailure: string = '';
   sessionId: string = '';
   textChannel: TextChannel = TextChannel.Unavailable;
@@ -74,7 +75,7 @@ export class KnowledgeStoreHost {
       if (this.leases <= 0) { throw new KnowledgeFailure('LeaseUnderflow', 'ordinary-store'); }
       if (this.leases === 1 && this.store !== undefined) {
         if (this.closeFault) { this.closeFault = false; throw new KnowledgeFailure('InjectedCloseFailure','ordinary-store'); }
-        await this.store.close(); this.store = undefined; this.m1Ready = false; this.extensionReady = false;
+        await this.store.close(); this.store = undefined; this.m1Ready = false; this.extensionReady = false; this.imageReady = false;
         this.textChannel = TextChannel.Unavailable;
       }
       this.leases--;

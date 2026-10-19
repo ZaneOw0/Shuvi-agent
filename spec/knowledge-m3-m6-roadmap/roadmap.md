@@ -1,5 +1,7 @@
 # M3–M6 多格式解析入库路线与规格
 
+**2026-10-19 M3 实施增量**：用户已批准独立 JPEG(.jpg/.jpeg)/PNG/静态 WebP 的 spec v0.2、plan v0.1 与40任务。阶段4已有源码与80项合成/公开host通过，状态 **PARTIAL，未验收**；完整逐项状态、真实编码拒绝、56ets待checker清单见 `spec/knowledge-m3-image-ingestion/implementation-report.md`。Docvortex块来源/真实包恢复、JPEG变体、部分向量/删除矩阵仍代码缺口，不能称只差外发许可；生产换版选择和独立快照文件已接。业务请求0；checker/build/deploy/UI未执行。M4/M5/M6仅登记原生part/slide/sheet-cell/XML/公式缓存风险，无Office算法。下文为原规划时点记录，保持不覆盖。
+
 > 状态：待确认；版本：v0.2；日期：2026-10-18。
 > 本轮交付仅为规划文档。用户已批准完善文档，不代表批准代码实施、测试、部署或真实服务请求。
 > M3–M6 的 44 项执行任务全部未启动。M2 按用户多次人工入库、检索可用的反馈作为已完成基线，不因历史报告的旧状态重新开启。

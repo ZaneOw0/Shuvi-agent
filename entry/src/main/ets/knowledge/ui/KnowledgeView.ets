@@ -38,6 +38,7 @@ export struct KnowledgeView {
   embedding: EmbeddingService | undefined = undefined;
   semantic: KnowledgeSemanticSearchPort | undefined = undefined;
   initialTrialJob: string = ''; initialSpace: string = '';
+  isolated: boolean = false;
   @State corpusConsent: boolean = false;
   @State corpusFree: boolean = false;
   @State queryConsent: boolean = false;
@@ -97,18 +98,19 @@ export struct KnowledgeView {
     try { if (this.embedding === undefined) { return; } const actual = prepareTextQuery(this.question).actualInput; const config = embeddingFingerprint(this.embedding.state.config); const scope = trial ? await this.embedding.prepareTrial(this.trialJobId) : undefined; const proof = await this.embedding.reviewQuery(actual);
       if (epoch !== this.queryApproval.epoch || actual !== this.queryPreview() || config !== embeddingFingerprint(this.embedding.state.config)) { return; }
       if (scope !== undefined) { this.trial = scope; this.trialApproval.review(actual,proof,this.embedding.state.config,'trial',scope.space.id,scope.id,scope.setHash); }
-      else { this.queryApproval.review(actual,proof,this.embedding.state.config,'query',this.selectedSpace); }
+      else { if (this.service === undefined) { throw new Error('NoSearchScope'); } const scopeHash: string = await this.service.reviewScope(actual,this.includeArchived,this.includeReferenceAside); this.queryApproval.review(actual,proof,this.embedding.state.config,'query',this.selectedSpace,'',scopeHash); }
       this.queryBound = `${proof.localState} / bound ${proof.upperBound}/8192 / hash ${proof.textHash} / ${proof.baseline.state}`; this.countedQuery = actual; this.queryEligible = true;
     } catch { this.queryBound = '计数或范围未核验，外发关闭'; }
   }
   private async refreshVectors(): Promise<void> { try { this.spaces = (await this.semantic?.spaces() ?? []).slice(0,20); this.vectorJobs = await this.embedding?.vectorJobsPage(this.taskOffset,12) ?? []; const usage: VectorUsageSummary | undefined = await this.embedding?.vectorUsage(); if (usage !== undefined) { this.usageLabel = `文档响应 ${usage.received} 次 / 已报告 Token ${usage.reportedTotal} / 未报用量 ${usage.missingUsage} / Unknown ${usage.unknown}；不等于免费余额`; } } catch { this.message = '向量任务或空间读取未确认，关键词可用'; } }
   private async vectorize(documentId: string, resumeId: string = ''): Promise<void> { const consent: boolean = this.corpusConsent; const free: boolean = this.corpusFree; const resend: boolean = this.resendUnknown; const full: boolean = this.fullScope; this.corpusConsent = false; this.corpusFree = false; this.resendUnknown = false; this.fullScope = false; await this.embedding?.vectorizePdf(documentId,consent,free,resumeId,resend,full); this.message = this.embedding?.state.message ?? '向量服务不可用'; await this.refreshVectors(); await this.refreshDocuments(); }
   private async retireVector(generation: string): Promise<void> { try { await this.lifecycle?.retireVector(generation); await this.refreshVectors(); this.message = '非活动向量退役完成；关键词和原件保留'; } catch { this.message = '向量世代仍活动、租用或待清理；未删除关键词'; } }
-  private async retryReleases(): Promise<void> { try { const context = this.getUIContext().getHostContext(); if (context !== undefined) { await KnowledgeAssembly.forContext(context).retrySourceReleases(); } await this.embedding?.retryReleases(); this.message = '读租约释放已确认'; } catch { this.message = '释放仍未确认，保持保护性暂停'; } }
-  private async auditEmbedding(): Promise<void> { const context = this.getUIContext().getHostContext(); if (context !== undefined) { await embeddingPublicAudit(context); } }
-  private async auditTrial(): Promise<void> { const context = this.getUIContext().getHostContext(); if (context !== undefined) { await embeddingTrialAudit(KnowledgeAssembly.forContext(context)); } }
-  private async auditFull(): Promise<void> { const context = this.getUIContext().getHostContext(); if (context !== undefined) { await embeddingFullAudit(KnowledgeAssembly.forContext(context),context); } }
+  private async retryReleases(): Promise<void> { try { const context = this.getUIContext().getHostContext(); if (!this.isolated && context !== undefined) { await KnowledgeAssembly.forContext(context).retrySourceReleases(); } await this.embedding?.retryReleases(); this.message = '读租约释放已确认'; } catch { this.message = '释放仍未确认，保持保护性暂停'; } }
+  private async auditEmbedding(): Promise<void> { if (this.isolated) { return; } const context = this.getUIContext().getHostContext(); if (context !== undefined) { await embeddingPublicAudit(context); } }
+  private async auditTrial(): Promise<void> { if (this.isolated) { return; } const context = this.getUIContext().getHostContext(); if (context !== undefined) { await embeddingTrialAudit(KnowledgeAssembly.forContext(context)); } }
+  private async auditFull(): Promise<void> { if (this.isolated) { return; } const context = this.getUIContext().getHostContext(); if (context !== undefined) { await embeddingFullAudit(KnowledgeAssembly.forContext(context),context); } }
   private async registerPages(document: PdfKnowledgeDocument): Promise<void> {
+    if (this.isolated) { return; }
     if (this.busy) { return; } this.busy = true; const cancel = new KnowledgeCancellation(); this.registerCancel = cancel;
     try { const context = this.getUIContext().getHostContext(); if (context === undefined) { throw new Error('ContextUnavailable'); } const assembly = KnowledgeAssembly.forContext(context); const job = await assembly.repository.generationJob(document.activeContentGeneration); const hit = new KnowledgeHit(); hit.documentId = document.id; hit.generation = document.activeContentGeneration; hit.snapshotId = job.snapshotId; hit.snapshotHash = job.snapshotHash; hit.originalHash = document.binding.originalHash; hit.originalVersion = document.binding.originalVersion;
       const bytes = await context.resourceManager.getRawFileContent('pdf-page-review-v1.json'); const count = await assembly.pages.registerReview(bytes,'d99055bb5e8005a73d2c085870cc4f5a405ef8ee59768d3354e8844e72faee39',hit,cancel); this.message = `已登记 ${count} 个受审节点的原页依据；内容与向量未改，请重新本机检索`; }
@@ -123,13 +125,13 @@ export struct KnowledgeView {
     if (this.service === undefined) { return; }
     this.service.state.queryConsent = false; this.service.state.queryFree = false; this.service.state.queryApproval = undefined;
     if (this.queryConsent || this.queryFree) {
-      try { if (this.embedding === undefined) { throw new Error('NoEmbedding'); } const actual = prepareTextQuery(this.question).actualInput; const proof = await this.embedding.reviewQuery(actual); const snapshot = this.queryApproval.consume(actual,proof,this.embedding.state.config,'query',this.selectedSpace); this.service.state.queryApproval = snapshot; this.service.state.queryConsent = snapshot.approved; this.service.state.queryFree = snapshot.free; }
+      try { if (this.embedding === undefined) { throw new Error('NoEmbedding'); } const actual = prepareTextQuery(this.question).actualInput; const proof = await this.embedding.reviewQuery(actual); const scopeHash: string = await this.service.reviewScope(actual,this.includeArchived,this.includeReferenceAside); const snapshot = this.queryApproval.consume(actual,proof,this.embedding.state.config,'query',this.selectedSpace,'',scopeHash); this.service.state.queryApproval = snapshot; this.service.state.queryConsent = snapshot.approved; this.service.state.queryFree = snapshot.free; }
       catch { this.invalidateQueries(); this.message = 'NoRequest：相似查询授权已变化，仅执行本机正文检索'; }
     }
     this.service.state.question = this.question; this.service.state.includeReferenceAside = this.includeReferenceAside; this.service.state.includeArchived = this.includeArchived; this.service.state.selectedSpaceId = this.selectedSpace; this.invalidateQueries(); await this.service.search();
     const line: string = `R2_QUERY history=${this.service.state.historyId} hits=${this.hits.length} pdf=${this.hits.filter((hit: KnowledgeHit): boolean => hit.sourceKind === KnowledgeSourceKind.Pdf).length} text=${this.hits.filter((hit: KnowledgeHit): boolean => hit.sourceKind === KnowledgeSourceKind.Text).length} pending=${this.service.state.historyPending ? 1 : 0} failed=${this.service.state.result.failed ? 1 : 0}`;
      hilog.info(0x0001,'SHUVI_R2','%{public}s',line);
-     const context = this.getUIContext().getHostContext(); if (context !== undefined) { embeddingLogFullQuery(KnowledgeAssembly.forContext(context)); }
+      const context = this.getUIContext().getHostContext(); if (!this.isolated && context !== undefined) { embeddingLogFullQuery(KnowledgeAssembly.forContext(context)); }
   }
   private async loadHistory(reset: boolean): Promise<void> {
     if (this.service === undefined) { return; }

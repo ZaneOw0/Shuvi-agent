@@ -65,7 +65,7 @@ export class EmbeddingCredentialStore implements EmbeddingCredentialPort {
       return EmbeddingCredentialStatus.Missing;
     } finally { this.clearTransient(); }
   }
-  async fetch(config: EmbeddingConfig, purpose: EmbeddingPurpose, request: rcp.Request, session: rcp.Session, check: () => void): Promise<rcp.Response> {
+  async fetch(config: EmbeddingConfig, purpose: EmbeddingPurpose, request: rcp.Request, session: rcp.Session, check: () => void, admission?: (launch: () => void) => Promise<void>): Promise<rcp.Response> {
     // No caller-supplied host can receive the secret, including a redirect target.
     if (request.url.toString() !== embeddingEndpoint(config, purpose)) { throw new KnowledgeFailure('CredentialDestinationRejected', 'embedding'); }
     const epoch: number = this.generation; await this.checked(config);
@@ -78,7 +78,12 @@ export class EmbeddingCredentialStore implements EmbeddingCredentialPort {
       if (epoch !== this.generation) { throw new KnowledgeFailure('CredentialStale', 'embedding'); }
       check(); const secret: string = util.TextDecoder.create('utf-8', { fatal: true }).decodeToString(bytes); documentValidateToken(secret);
       const headers: rcp.RequestHeaders = { 'authorization': `Bearer ${secret}`, 'content-type': 'application/json', 'accept': 'application/json' };
-      request.headers = headers; check(); return await session.fetch(request);
+      request.headers = headers; check();
+      if (admission === undefined) { return await session.fetch(request); }
+      const response: EmbeddingFetchLaunch = new EmbeddingFetchLaunch();
+      await admission((): void => { check(); response.pending = session.fetch(request); });
+      if (response.pending === undefined) { throw new KnowledgeFailure('NoRequestAdmissionDidNotLaunch','embedding'); } return await response.pending;
     } finally { bytes.fill(0); request.headers = undefined; this.active = this.active.filter((item: Uint8Array): boolean => item !== bytes); this.requests = this.requests.filter((item: rcp.Request): boolean => item !== request); }
   }
 }
+class EmbeddingFetchLaunch { pending: Promise<rcp.Response> | undefined = undefined; }

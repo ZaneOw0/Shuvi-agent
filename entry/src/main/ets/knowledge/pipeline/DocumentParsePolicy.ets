@@ -1,10 +1,30 @@
 import {
   DocumentOriginal, DocumentParseGrant, DocumentParseSnapshot, DocumentCredentialStatus, DocumentParseUsage,
   DocumentParseFailure, DocumentParseBudget, DocumentParseFormat, DocumentPreflightStatus,
-  DocumentRemoteState, DocumentTestAcknowledgement
+  DocumentRemoteState, DocumentTestAcknowledgement, ImageParsePermit, ParseFailureKind, DocumentParseTask
 } from '../domain/DocumentParseModels';
 
 export function documentSubmitReason(original: DocumentOriginal, grant: DocumentParseGrant | undefined, snapshot: DocumentParseSnapshot, credential: DocumentCredentialStatus): string {
+  if (documentIsImage(original.format)) {
+    const legacy: boolean = imageTestInputId(original.hash,original.bytes).length > 0;
+    if (snapshot.tasks.some((task: DocumentParseTask): boolean => task.credentialRevision === snapshot.config.credentialRevision && [ParseFailureKind.Auth,ParseFailureKind.Quota,ParseFailureKind.RateLimit].indexOf(task.failureDetail.kind) >= 0)) { return '同凭据鉴权/额度/限频状态待核；未创建新任务'; }
+    if (snapshot.imagePermits.some((permit: ImageParsePermit): boolean => {
+      if (permit.stoppedReason.length === 0) { return false; }
+      if (legacy && imagePermitPolicy(permit) === ImageParsePermit.policy) { return true; }
+      const task = snapshot.tasks.find((row: DocumentParseTask): boolean => row.id === permit.taskId);
+      const account: boolean = task !== undefined && [ParseFailureKind.Auth,ParseFailureKind.Quota,ParseFailureKind.RateLimit].indexOf(task.failureDetail.kind) >= 0 || new RegExp('(^|;)(AuthAccess|Quota|RateLimit)( |;|$)').test(permit.stoppedReason);
+      if (!account) { return false; }
+      const revision = new RegExp('^revision=([0-9]+);').exec(permit.stoppedReason);
+      return (revision === null ? task?.credentialRevision ?? snapshot.config.credentialRevision : Number(revision[1])) === snapshot.config.credentialRevision;
+    })) { return '同凭据鉴权/额度/限频状态待核，或旧测试轮次已停止；未创建新任务'; }
+    const p = snapshot.imagePermits.find((permit: ImageParsePermit): boolean => permit.originalId === original.id && permit.hash === original.hash && permit.version === original.version && permit.actualFormat === original.format && permit.fullFile && permit.freeEligible);
+    if (p === undefined || p.testInputId !== imagePermitInputId(original)) { return '需逐图确认当前完整图片、元数据和本次免费资格'; }
+    if (p.taskId.length > 0 || p.usage.allocation > 0) { return '本图已有请求账本，只能恢复原任务'; }
+    if (snapshot.tasks.some((task: DocumentParseTask): boolean => {
+      const k: ParseFailureKind = task.failureDetail.kind;
+      return legacy && snapshot.imagePermits.some((permit: ImageParsePermit): boolean => permit.taskId === task.id && imagePermitPolicy(permit) === ImageParsePermit.policy) && task.failure.length > 0 && k !== ParseFailureKind.Format && (k === ParseFailureKind.Auth || k === ParseFailureKind.Quota || k === ParseFailureKind.Service || k === ParseFailureKind.RateLimit || task.batchId.length === 0);
+    })) { return '本轮鉴权/额度/接口状态待核，停止后续创建'; }
+  }
   if (!snapshot.config.enabled) { return '全局解析关闭'; }
   if (credential !== DocumentCredentialStatus.Configured) { return '凭据未配置或安全存储不可用'; }
   if (snapshot.occupancy.taskId.length > 0 && !snapshot.occupancy.terminalObserved && !snapshot.occupancy.retired) { return '存在未决远端占用；暂停或本机删除不等于云取消'; }
@@ -25,6 +45,10 @@ export function documentAcknowledged(a: DocumentTestAcknowledgement): boolean {
   return a.fullFile && a.embeddedImages && a.nonSensitive && a.privacyUnknown && a.freeEligible;
 }
 export function documentGrantMatches(original: DocumentOriginal, grant: DocumentParseGrant, revision: number): boolean {
+  if (documentIsImage(original.format)) {
+    const policy: string = imageTestInputId(original.hash,original.bytes).length > 0 ? ImageParsePermit.policy : ImageParsePermit.productionPolicy;
+    return !grant.revoked && grant.id.length > 0 && grant.originalId === original.id && grant.hash === original.hash && grant.version === original.version && grant.format === original.format && grant.credentialRevision === revision && grant.policy === policy && grant.parameters === ImageParsePermit.parameters && grant.acknowledgement.fullFile && grant.acknowledgement.freeEligible && Number.isSafeInteger(grant.issuedAt) && grant.issuedAt > 0;
+  }
   return !grant.revoked && grant.id.length > 0 && grant.originalId === original.id && grant.hash === original.hash &&
     grant.version === original.version && grant.format === original.format && grant.credentialRevision === revision &&
     grant.policy === DocumentParseBudget.policy && grant.parameters === DocumentParseBudget.parameters &&
@@ -46,7 +70,19 @@ export function documentSuffix(title: string): DocumentParseFormat {
   if (suffix.endsWith('.docx')) { return DocumentParseFormat.Docx; }
   if (suffix.endsWith('.pptx')) { return DocumentParseFormat.Pptx; }
   if (suffix.endsWith('.xlsx')) { return DocumentParseFormat.Xlsx; }
-  throw new DocumentParseFailure('只允许PDF/DOCX/PPTX/XLSX', '原件');
+  if (suffix.endsWith('.jpg') || suffix.endsWith('.jpeg')) { return DocumentParseFormat.Jpeg; }
+  if (suffix.endsWith('.png')) { return DocumentParseFormat.Png; }
+  if (suffix.endsWith('.webp')) { return DocumentParseFormat.Webp; }
+  throw new DocumentParseFailure('原件后缀不受支持', '原件');
+}
+export function documentIsImage(format: DocumentParseFormat): boolean { return [DocumentParseFormat.Jpeg,DocumentParseFormat.Png,DocumentParseFormat.Webp].indexOf(format) >= 0; }
+// The old hash/size namespace is always selected first, even after deletion/reselection.
+export function imagePermitInputId(original: DocumentOriginal): string { return imageTestInputId(original.hash,original.bytes) || 'image-'+original.hash; }
+export function imagePermitPolicy(permit: ImageParsePermit): string { return new RegExp('^U(0[1-9]|10|11)$').test(permit.testInputId) ? ImageParsePermit.policy : ImageParsePermit.productionPolicy; }
+export function imageTestInputId(hash: string, bytes: number): string {
+  const hashes: string[] = ['818091b7959d295b01516f9439cc37277d786deaaf8a5830c1a3addd10464df3','47ae1f0a095fc7efb27cb11ee53a6c63c0bf4834436881ea382cca9117289d74','f8157d2c4ea7ad363a771d961fe0795442ffc4c968b2b2f6fe146ab2d48a71a4','a8feca7c5c35e48f47761994eca103f32a5c6975e702dcc4fc600bedef2d4e47','96854814a6fc3660782656d109170128c0b4e111f7bfe593952d24f6b708001e','eef3550d520f8f1fea1c7ca9b50c5cfb46ad4c45463b3d6e0c6fc3c245cfe4ab','33ef2178c6d85699e6d80b98d54ff2f738d7f7b0605194b561e5fa4c18c3b808','3b0b709f55cca08f040fb64b8a4668e5b260a7b60c120b65ef3600e5299dbe67','7c6315b723635913d8f5fece88f2a10602acf132cd3bb0115df883764b747955','bf1c01efea7c81abf4ef3c549b8ef8d5f94d763ffa53c399b3d926abcc2b634c','1383a92286b35e583cf2bea0792a343c9049fa7f78cd2534279a8aba3d3750a1'];
+  const sizes: number[] = [231821,731350,129998,2744281,3024305,4858944,154048,317735,1043975,709381,632853];
+  const at: number = hashes.indexOf(hash); return at >= 0 && sizes[at] === bytes ? 'U'+`${at+1}`.padStart(2,'0') : '';
 }
 export function documentU16(bytes: Uint8Array, at: number): number { return bytes[at] + bytes[at + 1] * 256; }
 export function documentU32(bytes: Uint8Array, at: number): number { return documentU16(bytes, at) + documentU16(bytes, at + 2) * 65536; }
@@ -68,6 +104,7 @@ export function documentZipBoundary(head: Uint8Array, tail: Uint8Array, bytes: n
   throw new DocumentParseFailure('ZIP完整结束记录缺失', '传输校验');
 }
 export function documentOfficeIdentity(directory: Uint8Array, boundary: DocumentZipBoundary, format: DocumentParseFormat): void {
+  if ([DocumentParseFormat.Docx,DocumentParseFormat.Pptx,DocumentParseFormat.Xlsx].indexOf(format) < 0) { throw new DocumentParseFailure('不是已声明Office格式','身份预检'); }
   if (directory.length !== boundary.directoryBytes || directory.length > DocumentParseBudget.directoryBytes || boundary.entries > 4096) {
     throw new DocumentParseFailure('OOXML目录预算超限', '身份预检');
   }

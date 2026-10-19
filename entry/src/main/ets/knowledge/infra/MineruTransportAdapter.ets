@@ -5,13 +5,14 @@ import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { MineruTaskPort } from '../domain/DocumentParsePorts';
 import { DocumentParseAction, DocumentParseBudget, DocumentParseFailure, DocumentAllocationReceipt,
-  DocumentInspection, DocumentLeaseBinding, DocumentParseUsage, DocumentParseResultEnvelope } from '../domain/DocumentParseModels';
+  DocumentInspection, DocumentLeaseBinding, DocumentParseUsage, DocumentParseResultEnvelope, ParseFailureKind, ImageParsePermit } from '../domain/DocumentParseModels';
 import { MineruCredentialStore } from './MineruCredentialStore';
 import { DocumentFileAdapter, DocumentResultSink } from './DocumentFileAdapter';
 import { documentAssetPath, documentDigestHex } from './DocumentFileOperations';
 import { MINERU_ALLOCATION_ENDPOINT, MINERU_QUERY_ENDPOINT, mineruValidateDestination, mineruAllocationPayload,
   mineruDecodeAllocation, mineruDecodeInspection, MineruAllocationDTO, MineruInspectionDTO, MineruBoundedBytes, mineruHttpStatus } from '../pipeline/MineruProtocolCodec';
-import { documentSafeId } from '../pipeline/DocumentParsePolicy';
+import { documentSafeId, documentIsImage, documentGrantMatches } from '../pipeline/DocumentParsePolicy';
+import { parseSdkFailure, parseDetailedFailure, parseHttpFailure } from '../pipeline/ParseFailurePolicy';
 
 function mineruSafeSession(): rcp.Session {
   const timeout: rcp.Timeout = { connectMs: 30000, transferMs: 120000, inactivityMs: 30000 };
@@ -25,7 +26,10 @@ function mineruSafeSession(): rcp.Session {
 function mineruTransportFailure(error: BusinessError, stage: string): DocumentParseFailure {
   if (error instanceof DocumentParseFailure) { return error; }
   const code: string = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? `${error.code}` : '';
-  return new DocumentParseFailure('本机或传输能力失败', stage, code);
+  const failure = parseDetailedFailure(ParseFailureKind.Artifact,stage,'本机文件或资源处理失败'); failure.detail.sdkCode = code; return failure;
+}
+function mineruPropagateCallbackFailure(failure: DocumentParseFailure | undefined): void {
+  if (failure instanceof DocumentParseFailure) { throw failure; }
 }
 function mineruBinding(action: DocumentParseAction, purpose: string, id: string): DocumentLeaseBinding {
   const binding: DocumentLeaseBinding = new DocumentLeaseBinding(); binding.id = id; binding.taskId = action.task.id;
@@ -94,6 +98,8 @@ export class MineruTransportAdapter implements MineruTaskPort {
   }
   pause(): void { for (const session of this.sessions) { session.cancel(); session.close(); } this.sessions = []; this.credential.clearTransient(); }
   private async fetch(request: rcp.Request, authenticated: boolean, action: DocumentParseAction, incoming: rcp.IncomingDataCallback): Promise<rcp.Response> {
+    if (documentIsImage(action.original.format) && action.original.bytes === 0 && (!authenticated || request.method !== 'GET')) { throw new DocumentParseFailure('缺原件仅允许复核原批次','请求前'); }
+    if (documentIsImage(action.original.format) && ([ImageParsePermit.policy,ImageParsePermit.productionPolicy].indexOf(action.grant.policy) < 0 || action.grant.parameters !== ImageParsePermit.parameters || action.grant.revoked || action.grant.originalId !== action.original.id || action.grant.hash !== action.original.hash || action.grant.version !== action.original.version || action.grant.format !== action.original.format || action.grant.credentialRevision !== action.task.credentialRevision || action.task.originalId !== action.original.id || action.task.hash !== action.original.hash || action.task.version !== action.original.version || !action.grant.acknowledgement.fullFile || !action.grant.acknowledgement.freeEligible || action.grant.issuedAt < 1 || action.original.bytes > 0 && !documentGrantMatches(action.original,action.grant,action.task.credentialRevision))) { throw new DocumentParseFailure('当前图片许可身份或参数不符','请求前'); }
     action.cancel.check(); const session: rcp.Session = mineruSafeSession(); this.sessions.push(session);
     let complete: boolean = false; let timer: number = -1; let requestActive: boolean = true; let status: number = 0;
     let callbackTail: Promise<void> = Promise.resolve(); let callbackFailure: DocumentParseFailure | undefined = undefined;
@@ -115,13 +121,16 @@ export class MineruTransportAdapter implements MineruTaskPort {
       const operation: Promise<void> = Promise.resolve().then(async (): Promise<void> => {
         if (!requestActive) { throw new DocumentParseFailure('迟到数据未接收', '传输'); } action.cancel.check(); await incoming(buffer);
       });
-      callbackTail = operation.then((): void => {}, (error: Error): void => { callbackFailure = error instanceof DocumentParseFailure ? error : new DocumentParseFailure('响应写入失败', '接收'); });
+       callbackTail = operation.then((): void => {}, (error: Error): void => {
+         if (error instanceof DocumentParseFailure && error.detail.kind !== ParseFailureKind.Unknown) { callbackFailure = error; }
+         else { callbackFailure = parseDetailedFailure(ParseFailureKind.Artifact,error instanceof DocumentParseFailure ? error.stage : '接收',error instanceof DocumentParseFailure ? error.category : '本机响应写入失败，已收阶段保留'); }
+       });
       return operation;
     };
     try {
       if (request.method === 'PUT') { await action.onUploadStarting(); action.cancel.check(); }
       const timeout: Promise<rcp.Response> = new Promise<rcp.Response>((_resolve: (response: rcp.Response) => void, reject: (error: Object) => void): void => {
-        timer = setTimeout((): void => { action.cancel.reason = 'TIMEOUT'; action.cancel.invalid = true; requestActive = false; reject(new DocumentParseFailure('请求总墙钟超时', request.method === 'PUT' ? '原件PUT' : '传输')); session.cancel(request); }, Math.min(DocumentParseBudget.requestMs, Math.max(1, action.cancel.deadline - Date.now())));
+        timer = setTimeout((): void => { action.cancel.reason = 'TIMEOUT'; action.cancel.invalid = true; requestActive = false; const failure = parseDetailedFailure(ParseFailureKind.Network,request.method === 'PUT' ? '原件PUT' : '传输','请求总墙钟超时'); failure.detail.outcomeUnknown = request.method === 'PUT' || request.method === 'POST'; reject(failure); session.cancel(request); }, Math.min(DocumentParseBudget.requestMs, Math.max(1, action.cancel.deadline - Date.now())));
       });
       const work: Promise<rcp.Response> = authenticated ? this.credential.authenticatedFetch(request, session, (): void => {
         if (!requestActive) { throw new DocumentParseFailure('请求世代失效', '认证'); } action.cancel.check();
@@ -129,10 +138,9 @@ export class MineruTransportAdapter implements MineruTaskPort {
         action.cancel.check();
         if (request.method === 'PUT') { action.task.uploadRequestStarted = true; action.task.lastAction = 'SDK PUT 已调用，等待响应'; action.onProgress(); }
         return session.fetch(request);
-      }).catch((error: BusinessError): rcp.Response => {
-        if (error instanceof DocumentParseFailure) { throw new DocumentParseFailure(error.category, error.stage, error.serviceCode); }
-        const code: string = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? `${error.code}` : '';
-        throw new DocumentParseFailure('网络或TLS失败', request.method === 'PUT' ? '原件PUT' : '结果GET', code);
+      }).catch((error: BusinessError | DocumentParseFailure): rcp.Response => {
+        if (error instanceof DocumentParseFailure) { throw error; }
+        throw parseSdkFailure(typeof error?.code === 'number' ? error.code : undefined,request.method === 'PUT' ? '原件PUT' : '结果GET',request.method === 'PUT');
       });
       const settled: Promise<rcp.Response> = work.then(async (response: rcp.Response): Promise<rcp.Response> => {
         await callbackTail; if (callbackFailure !== undefined) { throw callbackFailure; } return response;
@@ -143,7 +151,16 @@ export class MineruTransportAdapter implements MineruTaskPort {
       if (request.method === 'PUT' && response.statusCode !== 200) { throw new DocumentParseFailure('上传HTTP未确认', '原件PUT', `${response.statusCode}`); }
       if (request.method !== 'PUT' && !complete) { throw new DocumentParseFailure('传输结束未经确认', '传输'); }
       return response;
-    } catch (error) { session.cancel(request); if (status >= 300 && status < 400) { throw new DocumentParseFailure('重定向被拒绝', '传输', `${status}`); } if (error instanceof DocumentParseFailure) { throw error; } throw new DocumentParseFailure('网络或TLS失败', '传输'); }
+    } catch (error) {
+      session.cancel(request); await callbackTail;
+      mineruPropagateCallbackFailure(callbackFailure);
+      if (status >= 300 && status < 400) { throw parseHttpFailure(status,undefined); }
+      if (error instanceof DocumentParseFailure) {
+        if (error.detail.httpStatus > 0) { error.detail.stage = request.method === 'POST' ? '申请POST' : request.method === 'PUT' ? '原件PUT' : authenticated ? '原批次查询GET' : '结果ZIP GET'; error.stage = error.detail.stage; }
+        throw error;
+      }
+      throw parseDetailedFailure(ParseFailureKind.Unknown,'传输','请求未完成，原因未确定');
+    }
     finally {
       requestActive = false; clearTimeout(timer); request.headers = undefined; request.destination = undefined; request.content = undefined;
       session.close(); this.sessions = this.sessions.filter((s: rcp.Session): boolean => s !== session);
@@ -191,7 +208,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
     const request: rcp.Request = new rcp.Request(MINERU_QUERY_ENDPOINT + action.task.batchId, 'GET');
     const dto: MineruInspectionDTO = mineruDecodeInspection(await this.control(request, action), action.task.batchId, action.task.dataId);
     const inspection: DocumentInspection = new DocumentInspection(); inspection.batchId = dto.batchId; inspection.dataId = dto.dataId;
-    inspection.state = dto.state; inspection.extractedPages = dto.extractedPages; inspection.totalPages = dto.totalPages;
+     inspection.state = dto.state; inspection.extractedPages = dto.extractedPages; inspection.totalPages = dto.totalPages; inspection.failureDetail = dto.failureDetail;
     if (dto.resultAddress.length > 0 && action.task.hash.length > 0) {
       const binding: DocumentLeaseBinding = mineruBinding(action, 'RESULT', `lease-${action.task.id}-result-${action.task.epoch}-${action.task.queries}`);
       await this.credential.sealLease(binding, dto.resultAddress); inspection.resultLease = binding.id;
@@ -212,7 +229,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
         if (length !== undefined && (typeof length !== 'string' || !new RegExp('^[0-9]{1,12}$').test(length) || Number(length) !== sink.actualBytes())) { throw new DocumentParseFailure('结果HTTP长度不符', '接收'); }
       });
       return await sink.finish();
-    } catch (error) { await sink.abort(); if (error instanceof DocumentParseFailure) { throw error; } throw new DocumentParseFailure('隔离包接收失败', '接收'); }
+    } catch (error) { await sink.abort(); if (error instanceof DocumentParseFailure) { throw error; } throw parseDetailedFailure(ParseFailureKind.Artifact,'接收','本机结果保存失败，云完成状态保留'); }
   }
   async removeLeases(ids: string[]): Promise<void> { await this.credential.removeLeases(ids); }
   async reconcileLeases(keepIds: string[]): Promise<void> { await this.credential.reconcileLeases(keepIds); }

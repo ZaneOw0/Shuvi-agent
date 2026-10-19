@@ -2,6 +2,7 @@ import { TextQueryInput, TextSourceRange } from './TextKnowledgeModels';
 import { PdfLocator } from './PdfKnowledgeModels';
 import { QueryConsentSnapshot } from './EmbeddingModels';
 import { ResultPageReference } from './PdfLocalModels';
+import { ImageLocator } from './ImageKnowledgeModels';
 
 export enum KnowledgeMatchKind { Direct = 'Direct', Similar = 'Similar', Unclassified = 'Unclassified' }
 export class KnowledgeResultRange { start: number = 0; end: number = 0; }
@@ -15,12 +16,13 @@ export class KnowledgeResultPresentation {
   wire: string = 'KNOWLEDGE-RESULT-1'; citationId: string = ''; match: KnowledgeResultMatch = new KnowledgeResultMatch(); pages: ResultPageReference = new ResultPageReference();
 }
 
-export enum KnowledgeSourceKind { Text = 'Text', Pdf = 'Pdf' }
+export enum KnowledgeSourceKind { Text = 'Text', Pdf = 'Pdf', Image = 'Image' }
 export enum KnowledgeChannel { Keyword = 'keyword', Vector = 'vector', Hybrid = 'hybrid' }
 export enum KnowledgeRouteState { Available = 'Available', Skipped = 'Skipped', Failed = 'Failed' }
 export enum KnowledgeReferenceState { Current = 'Current', Old = 'Old', Invalid = 'Invalid' }
 export class KnowledgeLocator {
   kind: KnowledgeSourceKind = KnowledgeSourceKind.Text; textRanges: TextSourceRange[] = []; pdfRegions: PdfLocator[] = [];
+  image: ImageLocator | undefined = undefined;
 }
 export class KnowledgeHit {
   id: string = ''; documentId: string = ''; sourceKind: KnowledgeSourceKind = KnowledgeSourceKind.Text;
@@ -32,6 +34,7 @@ export class KnowledgeHit {
   referenceState: KnowledgeReferenceState = KnowledgeReferenceState.Current;
   nodeIds: string[] = []; cellIds: string[] = []; assetIds: string[] = [];
   match: KnowledgeResultMatch = new KnowledgeResultMatch(); pages: ResultPageReference = new ResultPageReference();
+  actualFormat: string = '';
 }
 export class KnowledgeRoute {
   channel: KnowledgeChannel = KnowledgeChannel.Keyword; state: KnowledgeRouteState = KnowledgeRouteState.Skipped;

@@ -1,6 +1,7 @@
 import { TextCandidatePort } from '../domain/TextKnowledgePorts';
 import { TextHit, TextQueryInput, TextCancellation, TextSearchResult, TextDocument, TextHistory, TextReferenceState } from '../domain/TextKnowledgeModels';
-import { KnowledgeStateListener, KnowledgeIdentityPort, KnowledgePageReferencePort } from '../domain/KnowledgePorts';
+import { KnowledgeStateListener, KnowledgeIdentityPort, KnowledgePageReferencePort, KnowledgeScopePort } from '../domain/KnowledgePorts';
+import { KnowledgeScopeReceipt } from '../domain/ImageKnowledgeModels';
 import { KnowledgeCancellation, KnowledgeFailure } from '../domain/PdfKnowledgeModels';
 import { KnowledgeHit, KnowledgeHistory, KnowledgeSearchState, KnowledgeSourceKind, KnowledgeChannel, KnowledgeRoute, KnowledgeRouteState, KnowledgeQueryResult, KnowledgeHistoryCursor, KnowledgeHistoryPage, KnowledgeReferenceState } from '../domain/KnowledgeSearchModels';
 import { prepareTextQuery } from '../pipeline/QueryPreparation';
@@ -37,6 +38,14 @@ export class KnowledgeSearchService {
   setClock(clock: () => number): void { this.clock = clock; }
   private semantic: KnowledgeSemanticSearchPort | undefined;
   private pageReferences: KnowledgePageReferencePort | undefined;
+  private scope: KnowledgeScopePort | undefined;
+  attachScope(scope: KnowledgeScopePort): void { this.scope = scope; }
+  async reviewScope(question: string, archived: boolean, extras: boolean): Promise<string> {
+    if (this.scope === undefined) { throw new KnowledgeFailure('NoRequestSourceRegistryUnavailable','scope'); }
+    const cancel: KnowledgeCancellation = new KnowledgeCancellation(); cancel.deadline = Date.now()+10000;
+    const receipt: KnowledgeScopeReceipt = await this.scope.scan(prepareTextQuery(question),archived,extras,cancel);
+    if (!receipt.complete || !receipt.noDirect) { throw new KnowledgeFailure('NoRequestDirectOrIncompleteScope','scope'); } return receipt.scopeHash;
+  }
   attachPages(port: KnowledgePageReferencePort): void { this.pageReferences = port; }
   private async present(hit: KnowledgeHit, input: TextQueryInput, cancel: KnowledgeCancellation): Promise<void> {
     hit.match = knowledgeMatch(hit,input,true); hit.match.textHash = await knowledgeWithin<string>(this.identity.hash(pdfCodecUtf8(hit.text)),cancel);
@@ -89,6 +98,7 @@ export class KnowledgeSearchService {
   private emit(): void { for (const listener of this.listeners) { listener.changed(); } }
   pause(): void { this.epoch++; this.state.queryConsent = false; this.state.queryFree = false; this.state.queryApproval = undefined; this.semantic?.pause(); if (this.active !== undefined) { this.active.invalid = true; } this.state.historyPending = this.pendingHistory !== undefined; this.emit(); }
   async search(): Promise<void> {
+    if (this.scope !== undefined) { await this.registeredSearch(this.scope); return; }
     if (this.state.busy) { return; }
     if (this.pendingHistory !== undefined) { this.state.message = '上一条历史尚未保存，请先重试保存；已有结果保留，未执行新检索'; this.emit(); return; }
     let input: TextQueryInput;
@@ -151,6 +161,38 @@ export class KnowledgeSearchService {
       if (cancel.now() < cancel.deadline) { this.state.result = result; this.state.message = result.notice+(this.state.historyPending ? '；历史保存失败，当前结果保留，可独立重试' : ''); }
     } catch { if (epoch === this.epoch) { result.keywordHits = timelyKeyword; result.vectorHits = []; result.hits = knowledgeDirectFirst(timelyKeyword,[],input,''); result.channel = KnowledgeChannel.Keyword; result.failed = succeeded === 0; vector.state = KnowledgeRouteState.Failed; vector.reason = 'DeadlineOrCanceled'; result.notice = '查询截止，保留截止前已核正文命中；迟到结果未采纳，原页未核不跳转'; this.state.result = result; this.state.message = result.notice; } }
     finally { if (this.active === cancel) { this.active = undefined; } this.state.busy = false; this.emit(); }
+  }
+  private async registeredSearch(scope: KnowledgeScopePort): Promise<void> {
+    if (this.state.busy || this.pendingHistory !== undefined) { return; }
+    let input: TextQueryInput; try { input = prepareTextQuery(this.state.question); } catch { this.state.message = '请输入合法关键词'; this.emit(); return; }
+    const epoch: number = ++this.epoch; const cancel: KnowledgeCancellation = new KnowledgeCancellation(); cancel.now = this.clock; cancel.deadline = this.clock()+10000; this.active = cancel;
+    const archived: boolean = this.state.includeArchived; const extras: boolean = this.state.includeReferenceAside; const approval = this.state.queryApproval;
+    this.state.queryApproval = undefined; this.state.queryConsent = false; this.state.queryFree = false; this.state.busy = true;
+    const result: KnowledgeQueryResult = new KnowledgeQueryResult(); result.input = input; const keyword: KnowledgeRoute = new KnowledgeRoute(); keyword.channel = KnowledgeChannel.Keyword;
+    const vector: KnowledgeRoute = new KnowledgeRoute(); vector.channel = KnowledgeChannel.Vector; result.routes = [keyword,vector]; let timely: KnowledgeHit[] = [];
+    try {
+      const receipt = await knowledgeWithin<KnowledgeScopeReceipt>(scope.scan(input,archived,extras,cancel),cancel); const scanned: KnowledgeHit[] = scope.hits(receipt.id);
+      scanned.sort((a: KnowledgeHit,b: KnowledgeHit): number => b.keywordScore-a.keywordScore || a.id.localeCompare(b.id));
+      for (const hit of scanned) { if (knowledgeMatch(hit,input,false).kind === KnowledgeMatchKind.Direct && await scope.visible(hit,archived)) { timely.push(hit); } }
+      keyword.state = receipt.complete ? KnowledgeRouteState.Available : KnowledgeRouteState.Failed;
+      keyword.reason = receipt.complete ? 'AllEnabledSourcesScanned' : 'SourceScopeIncomplete';
+      if (timely.length > 0) { vector.reason = 'DirectPresentNoEgress'; }
+      else if (!receipt.complete || !receipt.noDirect || scanned.length > 0) { vector.reason = 'DirectScopeIncompleteOrChangedNoEgress'; }
+      else if (approval !== undefined && approval.scopeHash === receipt.scopeHash && approval.actual === input.actualInput && approval.approved && approval.free && approval.purpose === 'query' && this.semantic?.searchReviewed !== undefined) {
+        try { result.vectorHits = await knowledgeWithin<KnowledgeHit[]>(this.semantic.searchReviewed(approval,archived,extras,cancel),cancel); vector.state = KnowledgeRouteState.Available; vector.actualEgress = this.semantic.queryEgress; vector.reason = 'SameSpaceExactKnn'; }
+        catch { vector.state = KnowledgeRouteState.Failed; vector.reason = 'NoRequestOrSemanticRouteFailed'; vector.actualEgress = this.semantic.queryEgress; }
+      } else { vector.reason = 'CurrentScopeBoundQueryConsentRequired'; }
+      const visible: KnowledgeHit[] = []; for (const hit of timely) { if (await scope.visible(hit,archived)) { visible.push(hit); } } timely = visible;
+      const semantic: KnowledgeHit[] = []; for (const hit of result.vectorHits) { if (await scope.visible(hit,archived)) { semantic.push(hit); } } result.vectorHits = semantic;
+      cancel.check(); if (epoch !== this.epoch) { throw new KnowledgeFailure('StaleQuery','scope'); }
+      result.keywordHits = timely; result.hits = knowledgeDirectFirst(timely,result.vectorHits,input,this.state.selectedSpaceId);
+      for (const hit of result.hits) { await this.present(hit,input,cancel); }
+      result.notice = timely.length > 0 ? '词条直接命中；未调用问题嵌入' : !receipt.complete ? '正文范围不完整，未外发问题' : result.vectorHits.length > 0 ? '相似片段，不是生成回答' : '没有可展示片段；'+vector.reason;
+      result.failed = !receipt.complete && timely.length === 0; result.channel = timely.length > 0 || vector.state !== KnowledgeRouteState.Available ? KnowledgeChannel.Keyword : KnowledgeChannel.Vector;
+      this.state.result = result; this.state.message = result.notice; const history: KnowledgeHistory = new KnowledgeHistory(); history.id = this.identity.id(); history.createdAt = Date.now(); history.result = result; this.state.historyId = history.id; this.emit();
+      try { await knowledgeWithin<void>(this.writeHistory(history),cancel); } catch { this.state.message += '；历史保存待重试'; }
+    } catch { if (epoch === this.epoch) { result.hits = knowledgeDirectFirst(timely,[],input,''); result.notice = '查询截止或来源变化，保留已核正文；未采用迟到结果'; this.state.result = result; this.state.message = result.notice; } }
+    finally { this.active = undefined; this.state.busy = false; this.emit(); }
   }
   private async textVisible(hit: KnowledgeHit, archived: boolean, cancel: KnowledgeCancellation): Promise<boolean> { const doc = await knowledgeWithin<TextDocument | undefined>(this.text.get(hit.documentId),cancel); return doc !== undefined && doc.activeGeneration === hit.generation && doc.original.hash === hit.originalHash && (archived || !doc.archived); }
 }

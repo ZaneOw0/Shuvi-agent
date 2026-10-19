@@ -1,12 +1,13 @@
 import {
   DocumentOriginal, DocumentParseGrant, DocumentParseSnapshot, DocumentParseUsage, DocumentParseBudget,
-  DocumentParseFormat, DocumentPreflightStatus, DocumentCredentialStatus, DocumentParseFailure
+  DocumentParseFormat, DocumentPreflightStatus, DocumentCredentialStatus, DocumentParseFailure, ParseFailureKind
 } from '../main/ets/knowledge/domain/DocumentParseModels';
 import { documentSubmitReason, documentBudgetCheck, documentOfficeIdentity, DocumentZipBoundary, documentZipBoundary } from '../main/ets/knowledge/pipeline/DocumentParsePolicy';
 import {
   mineruDecodeAllocation, mineruDecodeInspection, mineruValidateDestination, MineruBoundedBytes,
   MINERU_UPLOAD_HOST, MINERU_RESULT_HOST, MineruAllocationDTO, MineruInspectionDTO, mineruHttpStatus
 } from '../main/ets/knowledge/pipeline/MineruProtocolCodec';
+import { parseSdkFailure, parseProviderFailure, parseSanitizedReason } from '../main/ets/knowledge/pipeline/ParseFailurePolicy';
 
 export interface DocumentPolicyTestCase { name: string; run: () => Promise<void>; }
 export function documentPolicyCheck(ok: boolean): void { if (!ok) { throw new Error('M2 frozen policy expectation failed'); } }
@@ -90,7 +91,7 @@ function documentProtocolCases(): DocumentPolicyTestCase[] {
       mineruHttpStatus(200, undefined); let rejected: number = 0;
       for (const code of [301,302,307,308,401,403,500]) { try { mineruHttpStatus(code, undefined); } catch { rejected++; } }
       documentPolicyCheck(rejected === 7);
-      try { mineruHttpStatus(429, '999999'); } catch (error) { documentPolicyCheck(error instanceof DocumentParseFailure && error.serviceCode === '900'); }
+       try { mineruHttpStatus(429, '999999'); } catch (error) { documentPolicyCheck(error instanceof DocumentParseFailure && error.detail.retryAfter === '900' && error.detail.kind === ParseFailureKind.RateLimit); }
       try { mineruHttpStatus(429, 'unit-sensitive-invalid-header'); } catch (error) { documentPolicyCheck(error instanceof DocumentParseFailure && error.serviceCode === '' && error.message.indexOf('unit-sensitive-invalid-header') < 0); }
     } },
     { name: '公开控制fixture仅单项batch申请', run: async (): Promise<void> => {
@@ -143,6 +144,38 @@ function documentProtocolCases(): DocumentPolicyTestCase[] {
       } documentPolicyCheck(rejected === 4);
     } });
   } return cases;
+}
+export function documentFailureCases(): DocumentPolicyTestCase[] {
+  return [
+    { name: '正式codec保顶层短原因字母码与failed未知', run: async (): Promise<void> => {
+      try { mineruDecodeAllocation('{"code":"A_NEW","msg":"unclassified reason"}'); } catch (error) { documentPolicyCheck(error instanceof DocumentParseFailure && error.detail.providerCode === 'A_NEW' && error.detail.sanitizedReason === 'unclassified reason' && error.detail.kind === ParseFailureKind.Service); }
+      const dto = mineruDecodeInspection('{"code":0,"msg":"ok","data":{"batch_id":"batch","extract_result":[{"data_id":"data","file_name":"opaque.jpg","state":"failed"}]}}','batch','data');
+      documentPolicyCheck(dto.failureDetail.kind === ParseFailureKind.Service && dto.failureDetail.sanitizedReason.length > 0);
+    } },
+    { name: 'RCP连接与本机写入错误分开', run: async (): Promise<void> => {
+      documentPolicyCheck(parseSdkFailure(1007900006,'查询',false).detail.kind === ParseFailureKind.Network);
+      documentPolicyCheck(parseSdkFailure(1007900028,'原件PUT',true).detail.outcomeUnknown);
+      documentPolicyCheck(parseSdkFailure(1007900023,'结果GET',false).detail.kind === ParseFailureKind.Artifact);
+      documentPolicyCheck(parseSdkFailure(12345,'查询',false).detail.kind === ParseFailureKind.Unknown);
+    } },
+    { name: '字母provider码保留未知而非猜格式', run: async (): Promise<void> => {
+      const failure = parseProviderFailure('A_NEW','unclassified response','控制响应');
+      documentPolicyCheck(failure.detail.providerCode === 'A_NEW' && failure.detail.kind === ParseFailureKind.Service);
+      documentPolicyCheck(parseProviderFailure('X','unsupported image format','云解析').detail.kind === ParseFailureKind.Format);
+      documentPolicyCheck(parseProviderFailure('X','quota exceeded','控制响应').detail.kind === ParseFailureKind.Quota);
+    } },
+    { name: '短原因有界去URL认证控制符', run: async (): Promise<void> => {
+      const reason = parseSanitizedReason('failure\n Authorization: Bearer sample_value https://invalid.example/path?signature=value '+ 'x'.repeat(400));
+      documentPolicyCheck(reason.length <= 300 && !reason.includes('sample_value') && !reason.includes('https:') && !reason.includes('\n'));
+    } },
+    { name: 'HTTP401429503类别与code字段独立', run: async (): Promise<void> => {
+      for (const status of [401,429,503]) {
+        try { mineruHttpStatus(status,'30'); } catch (error) {
+          documentPolicyCheck(error instanceof DocumentParseFailure && error.detail.httpStatus === status && error.detail.providerCode === '' && error.detail.sdkCode === '' && error.detail.kind === (status === 401 ? ParseFailureKind.Auth : status === 429 ? ParseFailureKind.RateLimit : ParseFailureKind.Service));
+        }
+      }
+    } }
+  ];
 }
 
 // Constructed directory metadata ONLY, never a complete Office/ZIP file or cloud artifact.

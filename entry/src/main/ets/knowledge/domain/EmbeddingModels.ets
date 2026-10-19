@@ -5,7 +5,7 @@ export enum EmbeddingAccess { Public = 'Public', Workspace = 'Workspace' }
 export enum EmbeddingModelSource { Manual = 'Manual', Remote = 'RemoteCurrentCredential' }
 export enum EmbeddingCapability { VerifiedContract = 'VerifiedContract', ContractUnverified = 'ContractUnverified', ManualOnly = 'ManualOnly' }
 export enum EmbeddingCredentialStatus { Missing = 'Missing', Configured = 'Configured', Unavailable = 'Unavailable' }
-export enum EmbeddingPurpose { Models = 'ModelList', Probe = 'Probe', Corpus = 'PdfCorpus', Query = 'Query' }
+export enum EmbeddingPurpose { Models = 'ModelList', Probe = 'Probe', Corpus = 'PdfCorpus', Query = 'Query', ImageCorpus = 'ImageCorpus' }
 export enum EmbeddingFreeEligibility { Unknown = 'Unknown', Confirmed = 'UserConfirmedForThisAction', Ineligible = 'Ineligible' }
 export enum EmbeddingDetectionStatus { Untested = 'Untested', Running = 'Running', Passed = 'Passed', Failed = 'Failed', Stale = 'Stale' }
 export enum EmbeddingJobStage {
@@ -62,6 +62,7 @@ export class EmbeddingGrant {
   snapshotHash: string = ''; inputHashes: string[] = []; spaceId: string = ''; sessionId: string = '';
   free: EmbeddingFreeEligibility = EmbeddingFreeEligibility.Unknown; issuedAt: number = 0; expiresAt: number = 0; revoked: boolean = false;
   inputEvidence: TokenEligibilityEvidence[] = [];
+  queryApproval: QueryConsentSnapshot | undefined = undefined;
   trialId: string = ''; trialSetHash: string = ''; inputChunkIds: string[] = []; scopeChunkIds: string[] = []; scopeInputHashes: string[] = [];
 }
 export class EmbeddingVectorResponse {

@@ -1,6 +1,8 @@
 import { Theme } from '../../components/Theme';
 import { DocumentParseViewState, DocumentCredentialStatus, DocumentOriginal, DocumentTestAcknowledgement, DocumentParseTask, DocumentParseResultEnvelope, DocumentParseStage, DocumentParseFormat } from '../domain/DocumentParseModels';
 import { DocumentParseService } from '../application/DocumentParseService';
+import { parseFailureSummary } from '../pipeline/ParseFailurePolicy';
+import { documentIsImage } from '../pipeline/DocumentParsePolicy';
 
 @Component
 export struct DocumentParseView {
@@ -9,6 +11,8 @@ export struct DocumentParseView {
   service: DocumentParseService | undefined = undefined;
   onClose: () => void = (): void => {};
   onPreparePdf: (resultId: string) => void = (_resultId: string): void => {};
+  onPrepareImage: (resultId: string) => void = (_resultId: string): void => {};
+  onOpenImages: () => void = (): void => {};
   @Prop @Watch('clearSecret') clearEpoch: number = 0;
   @State private tokenInput: string = '';
   @State private credentialFeedback: string = '';
@@ -50,6 +54,10 @@ export struct DocumentParseView {
     const task: DocumentParseTask | undefined = this.parseState.snapshot.tasks.find((item: DocumentParseTask): boolean => item.id === result.taskId);
     return this.parseState.snapshot.originals.some((original: DocumentOriginal): boolean => original.id === task?.originalId && original.format === DocumentParseFormat.Pdf);
   }
+  private isImageResult(result: DocumentParseResultEnvelope): boolean {
+    const task = this.parseState.snapshot.tasks.find((item: DocumentParseTask): boolean => item.id === result.taskId);
+    return this.parseState.snapshot.originals.some((original: DocumentOriginal): boolean => original.id === task?.originalId && documentIsImage(original.format));
+  }
   build() {
     Column({ space: 14 }) {
       Row({ space: 12 }) {
@@ -84,7 +92,7 @@ export struct DocumentParseView {
         Toggle({ type: ToggleType.Switch, isOn: this.parseState.snapshot.config.enabled })
           .onChange((isOn: boolean): void => { this.service?.setEnabled(isOn); })
       }.width('100%')
-      Text('普通个人资料外发门禁未通过。仅允许逐件非敏感免费测试；保存原件不代表同意上传。')
+      Text('PDF/Office 保持逐件非敏感免费测试许可；普通图片在“图片解析与入库”逐图确认完整文件、元数据与免费资格。保存不代表同意上传。')
         .fontSize(13).fontColor(Theme.muted).width('100%')
       if (!this.showSettings) {
       Text('解析任务').fontSize(16).fontWeight(FontWeight.Medium).width('100%')
@@ -123,12 +131,19 @@ export struct DocumentParseView {
             Button('校验并准备入库').constraintSize({ minHeight: 44 }).enabled(!this.parseState.busy)
               .onClick((): void => { this.onPreparePdf(result.assetId); })
           }
+          if (this.isImageResult(result)) {
+            Button('校验图片 ZIP 与审查正文').id('image-result-review-'+result.assetId).enabled(!this.parseState.busy)
+              .onClick((): void => { this.onPrepareImage(result.assetId); })
+          }
         }.width('100%').alignItems(HorizontalAlign.Start)
       }, (result: DocumentParseResultEnvelope): string => result.assetId)
       Button('选择文件，仅保存原件').enabled(!this.parseState.busy).onClick((): void => { this.service?.prepare(); })
+      Button('图片解析与入库').id('parse-open-images').enabled(!this.parseState.busy).onClick(this.onOpenImages)
       ForEach(this.parseState.snapshot.originals, (original: DocumentOriginal) => {
-        DocumentParseOriginalRow({ original: original, service: this.service, refreshEpoch: this.parseState.inputEpoch,
-          submitBlockReason: this.service?.submitReason(original) ?? '解析能力不可用' })
+        if (!documentIsImage(original.format)) {
+          DocumentParseOriginalRow({ original: original, service: this.service, refreshEpoch: this.parseState.inputEpoch,
+            submitBlockReason: this.service?.submitReason(original) ?? '解析能力不可用' })
+        }
       }, (original: DocumentOriginal): string => original.id)
       Text('本机副本管理').fontSize(16).fontWeight(FontWeight.Medium).width('100%')
       ForEach(this.parseState.snapshot.originals, (saved: DocumentOriginal) => {
@@ -136,7 +151,7 @@ export struct DocumentParseView {
           .onClick((): void => { this.deleteId = saved.id; })
       }, (saved: DocumentOriginal): string => `delete-${saved.id}`)
       if (this.resumeId.length > 0 || this.slotConfirm) {
-         Text('确认当前凭据为先前同账号，查询同一测试任务，不申请新批次。仅当远端明确等待文件、原租约有效且原件授权未变时，对同一对象最多完整补传一次；凭据已变只能复核占用。').fontSize(13).width('100%')
+         Text('确认当前凭据为先前同账号，查询同一测试任务，不申请新批次。图片禁止补传；旧PDF/Office仅原有许可内对同一对象最多补传一次，凭据已变只能复核占用。').fontSize(13).width('100%')
         Row({ space: 12 }) {
           Button('确认继续').onClick((): void => {
             if (this.slotConfirm) { this.service?.inspectOccupancy(true); } else { this.service?.resume(this.resumeId, true); }
@@ -178,7 +193,7 @@ class DocumentParseTaskPresentation {
     this.downloadText = `ZIP 本次实际写入 ${task.downloadBytes} 字节${task.downloadTotal > 0 ? ' / HTTP 长度 ' + task.downloadTotal : ' · 总长度未知'}`;
     this.pageText = task.totalPages > 0 ? `服务报告 ${task.extractedPages}/${task.totalPages} 页` : '服务未报告页进度';
     this.lastActionText = `${task.lastAction || task.checkpoint} · 同对象补传${task.recoveryUploadUsed ? '已耗用' : '未耗用'}`;
-    this.failureText = task.failure; this.failureDetail = task.failureStage.length > 0 ? `失败阶段 ${task.failureStage} · code ${task.failureCode || '未提供'}` : '';
+    this.failureText = task.failure; this.failureDetail = task.failureStage.length > 0 ? `失败阶段 ${task.failureStage}\n${parseFailureSummary(task.failureDetail)}\n${task.stage === DocumentParseStage.Received ? '云结果已收，仅本机处理恢复' : task.batchId.length > 0 ? '只查询原任务；图片不补传或新建' : '身份未知，停止待核，不新建任务'}` : '';
   }
 }
 

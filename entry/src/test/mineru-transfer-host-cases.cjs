@@ -49,6 +49,9 @@ module.exports = function transferHostCases(outputRoot, asset) {
           const supplied = [];
           for (;;) { const b = new ArrayBuffer(131072); const n = await reader.read(b); if (!n) break; supplied.push(Buffer.from(b).subarray(0, n)); if (behavior === 'PARTIAL') break; }
           assert.equal(Buffer.concat(supplied).length > 0, true);
+        } else if(behavior==='IMAGE_CONTROL' && (request.method==='POST' || request.url.includes('/extract-results/'))) {
+          const reply=request.method==='POST'?{code:0,msg:'ok',data:{batch_id:'image-batch',file_urls:['https://'+codec.MINERU_UPLOAD_HOST+'/api-upload/unit']}}:{code:0,msg:'ok',data:{batch_id:'image-batch',extract_result:[{data_id:'unit',file_name:'unit.jpg',state:'done',full_zip_url:'https://'+codec.MINERU_RESULT_HOST+'/pdf/unit.zip'}]}};
+          const bytes=Buffer.from(JSON.stringify(reply));await request.destination(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.length));request.configuration.tracing.httpEventsHandler.onDataEnd();
         } else {
           const bytes = zipBytes(); await request.destination(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
           const handler = request.configuration.tracing.httpEventsHandler;
@@ -114,10 +117,10 @@ module.exports = function transferHostCases(outputRoot, asset) {
   function setup(mode = 'OK') {
     files.clear(); handles.clear(); calls = []; activeTimers.clear(); behavior = mode; shortRead = 7001; lateDestination = undefined;
     const a = new models.DocumentParseAction(); a.task.id = 'unit'; a.task.dataId = 'unit'; a.task.hash = a.original.hash = crypto.createHash('sha256').update(Buffer.alloc(262147, 7)).digest('hex');
-    a.original.assetId = 'original-unit'; a.original.bytes = 262147; a.original.version = a.task.version = 1; a.task.uploadLease = 'lease-unit'; a.task.resultLease = 'lease-unit-result';
+    a.original.id = a.task.originalId = 'image-source'; a.original.assetId = 'original-unit'; a.original.bytes = 262147; a.original.version = a.task.version = 1; a.task.uploadLease = 'lease-unit'; a.task.resultLease = 'lease-unit-result';
     files.set('/host/files/knowledge_parse_v1/original-unit', Buffer.alloc(262147, 7));
     a.onUploadStarting = async () => { a.task.uploadAttempted = true; a.task.uploadRequestStarted = true; };
-    const credential = { clearTransient: () => {}, withLease: async (binding, consume) => {
+    const credential = { clearTransient: () => {}, authenticatedFetch:async(request,session,check)=>{check();return session.fetch(request);},sealLease:async()=>{}, withLease: async (binding, consume) => {
       if (behavior === 'LEASE') throw new models.DocumentParseFailure('租约已失效', '恢复');
       await consume('https://' + (binding.purpose === 'UPLOAD' ? codec.MINERU_UPLOAD_HOST + '/api-upload/unit' : codec.MINERU_RESULT_HOST + '/pdf/unit.zip'));
     } };
@@ -125,6 +128,23 @@ module.exports = function transferHostCases(outputRoot, asset) {
     return { a, assets, adapter: new MineruTransportAdapter(credential, assets, '/host/files') };
   }
   return [
+    { name:'legacy U03 permit retains original policy and transport identity',run:async()=>{
+      const s=setup('IMAGE_CONTROL');Object.assign(s.a.original,{hash:'f8157d2c4ea7ad363a771d961fe0795442ffc4c968b2b2f6fe146ab2d48a71a4',bytes:129998,format:models.DocumentParseFormat.Jpeg});s.a.task.hash=s.a.original.hash;Object.assign(s.a.grant,{id:'legacy-grant',originalId:s.a.original.id,hash:s.a.original.hash,version:1,format:s.a.original.format,credentialRevision:s.a.task.credentialRevision,policy:models.ImageParsePermit.policy,parameters:models.ImageParsePermit.parameters,issuedAt:Date.now()});Object.assign(s.a.grant.acknowledgement,{fullFile:true,freeEligible:true});s.a.onAllocation=async batch=>s.a.task.batchId=batch;await s.adapter.allocate(s.a);assert.equal(calls.length,1);s.a.grant.policy=models.ImageParsePermit.productionPolicy;await assert.rejects(s.adapter.inspect(s.a));assert.equal(calls.length,1);
+    }},
+    { name:'formal image adapter allocation PUT same batch and received ZIP',run:async()=>{
+      const s=setup('IMAGE_CONTROL');s.a.original.format=models.DocumentParseFormat.Jpeg;Object.assign(s.a.grant,{id:'image-grant',originalId:s.a.original.id,hash:s.a.original.hash,version:s.a.original.version,format:s.a.original.format,credentialRevision:s.a.task.credentialRevision,issuedAt:Date.now(),policy:models.ImageParsePermit.productionPolicy,parameters:models.ImageParsePermit.parameters});s.a.grant.acknowledgement.fullFile=true;s.a.grant.acknowledgement.freeEligible=true;s.a.onAllocation=async batch=>{s.a.task.batchId=batch;};
+      const allocated=await s.adapter.allocate(s.a);assert.equal(allocated.batchId,'image-batch');assert.equal(JSON.parse(calls[0].content??codec.mineruAllocationPayload('unit',models.DocumentParseFormat.Jpeg)).files[0].name,'unit.jpg');
+      await s.adapter.upload(s.a);const inspected=await s.adapter.inspect(s.a);assert.equal(inspected.state,models.DocumentRemoteState.Done);await s.adapter.receive(s.a,new models.DocumentParseUsage());assert.equal(calls.length,4);assert.equal(calls.filter(c=>c.method==='POST').length,1);assert.equal(calls.filter(c=>c.method==='PUT').length,1);assert.equal(handles.size,0);
+    }},
+    { name:'ordinary image production permit validates current identity before any SDK request',run:async()=>{
+      for(const format of [models.DocumentParseFormat.Jpeg,models.DocumentParseFormat.Png,models.DocumentParseFormat.Webp]){
+        const s=setup('IMAGE_CONTROL');Object.assign(s.a.original,{format});Object.assign(s.a.grant,{id:'ordinary-grant',originalId:s.a.original.id,hash:s.a.original.hash,version:s.a.original.version,format,credentialRevision:s.a.task.credentialRevision,issuedAt:Date.now(),policy:models.ImageParsePermit.productionPolicy,parameters:models.ImageParsePermit.parameters});Object.assign(s.a.grant.acknowledgement,{fullFile:true,freeEligible:true});s.a.onAllocation=async batch=>s.a.task.batchId=batch;
+        await s.adapter.allocate(s.a);assert.equal(calls.length,1);await s.adapter.upload(s.a);assert.equal(calls.length,2);
+      }
+      for(const mutate of [a=>a.grant.acknowledgement.fullFile=false,a=>a.grant.acknowledgement.freeEligible=false,a=>a.grant.hash='0'.repeat(64),a=>a.grant.version++,a=>a.grant.format=models.DocumentParseFormat.Png,a=>a.grant.credentialRevision++,a=>a.grant.parameters='changed',a=>a.grant.revoked=true]){
+        const s=setup('IMAGE_CONTROL');Object.assign(s.a.original,{format:models.DocumentParseFormat.Jpeg});Object.assign(s.a.grant,{id:'ordinary-grant',originalId:s.a.original.id,hash:s.a.original.hash,version:1,format:s.a.original.format,credentialRevision:s.a.task.credentialRevision,issuedAt:Date.now(),policy:models.ImageParsePermit.productionPolicy,parameters:models.ImageParsePermit.parameters});Object.assign(s.a.grant.acknowledgement,{fullFile:true,freeEligible:true});mutate(s.a);await assert.rejects(s.adapter.allocate(s.a));assert.equal(calls.length,0);
+      }
+    }},
     { name: 'short file reads fill SDK buffer; exact SHA length EOF and empty HTTP200 PUT succeeds', run: async () => {
       const s = setup(); await s.adapter.upload(s.a); assert.equal(s.a.task.uploadBytes, 262147); assert.equal(calls.length, 1); assert.equal(handles.size, 0);
     } },
@@ -173,7 +193,7 @@ module.exports = function transferHostCases(outputRoot, asset) {
       let consumed = false; await assert.rejects(s.store.withLease(s.b, async () => { consumed = true; }), /过期/); assert.equal(consumed, false);
     } },
     { name: 'timeout late SDK callback cannot write bytes or publish a result', run: async () => {
-      const s = setup('TIMEOUT'); await assert.rejects(s.adapter.receive(s.a, new models.DocumentParseUsage()), /超时/);
+      const s = setup('TIMEOUT'); await assert.rejects(s.adapter.receive(s.a, new models.DocumentParseUsage()), failure=>failure.detail.kind===models.ParseFailureKind.Network);
       await assert.rejects(lateDestination(new ArrayBuffer(100)), /迟到/);
       assert.equal(s.a.task.downloadBytes, 0); assert.equal(files.has('/host/files/knowledge_parse_v1/result-unit'), false); assert.equal(handles.size, 0);
     } },

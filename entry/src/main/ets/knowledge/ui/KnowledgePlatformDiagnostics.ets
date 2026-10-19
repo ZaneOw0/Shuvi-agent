@@ -28,10 +28,13 @@ import { CloseoutQueryView } from './CloseoutQueryView';
 import { ResidualIngestionFixture } from '../platformtests/ResidualIngestionFixture';
 import { ResidualIngestionView } from './ResidualIngestionView';
 import { ResidualHistorySession, ResidualHistoryView } from './ResidualHistoryView';
+import { ImageIntegrationSuite } from '../platformtests/ImageIntegrationSuite';
+import { ImageIntegrationView } from './ImageIntegrationView';
 
 @Component
 export struct KnowledgePlatformDiagnostics {
   onBack: () => void = (): void => {};
+  onImageHappyPath: () => void = (): void => {};
   @State running: boolean = false;
   @State summary: string = 'NotRun';
   @State results: string[] = [];
@@ -43,6 +46,13 @@ export struct KnowledgePlatformDiagnostics {
   @State queryFixture: CloseoutQueryFixture | undefined = undefined;
   @State ingestionFixture: ResidualIngestionFixture | undefined = undefined;
   @State historyFixture: ResidualHistorySession | undefined = undefined;
+  @State imageFixture: ImageIntegrationSuite | undefined = undefined;
+  private async openImageFixture(caseId: string): Promise<void> {
+    const context = this.getUIContext().getHostContext(); if (context === undefined || this.running) { return; } this.running = true;
+    try { const scope = KnowledgeStorageScope.isolated(Date.now().toString(16).padStart(16,'0')); const fixture = new ImageIntegrationSuite(context,scope,caseId); await fixture.prepare(); this.imageFixture = fixture; }
+    catch { this.summary = 'ImageFixturePrepareFailed; no real requests'; } finally { this.running = false; }
+  }
+  private async closeImageFixture(): Promise<void> { const fixture = this.imageFixture; if (fixture === undefined) { return; } try { await fixture.close(); this.imageFixture = undefined; } catch { this.summary = 'ImageFixtureReleasePending'; } }
   private async residual(kind: string): Promise<void> { const context = this.getUIContext().getHostContext(); if (context === undefined || this.running) { return; } this.running = true; try { const scope = KnowledgeStorageScope.isolated(Date.now().toString(16).padStart(16,'0')); if (kind === 'history') { const fixture = new ResidualHistorySession(context,scope); await fixture.open(); this.historyFixture = fixture; } else { const fixture = new ResidualIngestionFixture(context,scope); await fixture.prepare(); this.ingestionFixture = fixture; } } catch { this.summary = 'ResidualFixtureFailed'; } finally { this.running = false; } }
   private async closeResidual(): Promise<void> { await this.ingestionFixture?.close(); await this.historyFixture?.close(); this.ingestionFixture = undefined; this.historyFixture = undefined; }
   private async openQueryFixture(): Promise<void> { const context = this.getUIContext().getHostContext(); if (context === undefined || this.running) { return; } this.running = true; try { const fixture = new CloseoutQueryFixture(context,KnowledgeStorageScope.isolated(Date.now().toString(16).padStart(16,'0'))); await fixture.prepare(); this.queryFixture = fixture; } catch { this.summary = 'QueryFixtureFailed'; } finally { this.running = false; } }
@@ -145,13 +155,16 @@ export struct KnowledgePlatformDiagnostics {
   }
   build() {
     Column({ space: 12 }) {
-      if (this.ingestionFixture !== undefined) { ResidualIngestionView({ fixture: this.ingestionFixture,onBack: (): void => { this.closeResidual(); } }) }
+      if (this.imageFixture !== undefined) { ImageIntegrationView({ fixture: this.imageFixture, onBack: (): void => { this.closeImageFixture(); } }) }
+      else if (this.ingestionFixture !== undefined) { ResidualIngestionView({ fixture: this.ingestionFixture,onBack: (): void => { this.closeResidual(); } }) }
       else if (this.historyFixture !== undefined) { ResidualHistoryView({ session: this.historyFixture,onBack: (): void => { this.closeResidual(); } }) }
       else if (this.queryFixture !== undefined) { CloseoutQueryView({ fixture: this.queryFixture,onBack: (): void => { this.closeQueryFixture(); } }) }
       else if (this.sourceFixture !== undefined) { PdfSourceView({ adapter: this.sourceFixture.adapter,session: this.sourceFixture.session,binding: this.sourceFixture.binding,locator: this.sourceFixture.locator,onOpened: async (): Promise<void> => { await this.sourceFixture?.addEvidence(); },onBack: (): void => { this.closeFixture(); } }) }
       else if (this.smokeOpen) { EmbeddingSafetySmoke({ onBack: (): void => { this.smokeOpen = false; } }) } else {
       Text('ROUND2 Native').fontSize(20)
-      Text(this.summary).id('r2-suite-summary')
+       Text(this.summary).id('r2-suite-summary')
+       Button('11图正式解析与本机回执').id('image-happy-path-entry').enabled(!this.running).onClick((): void => { this.onImageHappyPath(); })
+      ForEach(['US1','US2','US3','US4','US5'], (caseId: string) => { Button('M3 隔离 '+caseId).id('m3-open-fixture-'+caseId).enabled(!this.running).onClick((): void => { this.openImageFixture(caseId); }) }, (caseId: string): string => caseId)
       Button('隔离 R007 入库验收').id('r2-open-residual-ingestion').enabled(!this.running).onClick((): void => { this.residual('ingestion'); })
       Button('隔离暂停历史验收').id('r2-open-residual-history').enabled(!this.running).onClick((): void => { this.residual('history'); })
       Button('运行交付修复本机测试').id('r2-run-closeout').enabled(!this.running).onClick((): void => { this.closeout(); })

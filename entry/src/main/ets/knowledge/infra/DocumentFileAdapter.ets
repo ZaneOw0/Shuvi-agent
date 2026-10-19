@@ -9,6 +9,7 @@ import { DocumentFileSelection, DocumentSelectedFile, DocumentOriginal, Document
 import { MineruBoundedBytes } from '../pipeline/MineruProtocolCodec';
 import { documentSuffix, documentZipBoundary } from '../pipeline/DocumentParsePolicy';
 import { documentEnsureDirectory, documentAssetPath, documentReadRange, documentDigestHex, documentWorkerCheck, documentHashFile, documentContainerPreflight } from './DocumentFileOperations';
+import { KnowledgeStorageScope } from '../domain/KnowledgeStorageScope';
 
 export const DOCUMENT_PARSE_DIRECTORY: string = 'knowledge_parse_v1';
 @Concurrent
@@ -58,10 +59,14 @@ export class DocumentFileAdapter implements DocumentAssetPort, DocumentSelection
   private context: common.Context; private root: string; private temp: string; private copying: boolean = false;
   private copyTask: taskpool.GenericsTask<[string, string, string, string, string], DocumentOriginal> | undefined = undefined;
   cancelLocal(): void { if (this.copyTask !== undefined) { try { taskpool.cancel(this.copyTask); } catch {} } }
-  constructor(context: common.Context) { this.context = context; this.root = `${context.filesDir}/${DOCUMENT_PARSE_DIRECTORY}`; this.temp = `${context.cacheDir}/${DOCUMENT_PARSE_DIRECTORY}`; }
+  constructor(context: common.Context, scope: KnowledgeStorageScope = KnowledgeStorageScope.production()) { this.context = context; const directory: string = scope.testing ? scope.derivedDirectory : DOCUMENT_PARSE_DIRECTORY; this.root = `${context.filesDir}/${directory}`; this.temp = `${context.cacheDir}/${directory}`; }
   async select(): Promise<DocumentFileSelection> {
+    return this.choose(false);
+  }
+  async selectImages(): Promise<DocumentFileSelection> { return this.choose(true); }
+  private async choose(imagesOnly: boolean): Promise<DocumentFileSelection> {
     const options: picker.DocumentSelectOptions = new picker.DocumentSelectOptions(); options.maxSelectNumber = 3;
-    options.selectMode = picker.DocumentSelectMode.FILE; options.fileSuffixFilters = ['复杂原件|.pdf,.docx,.pptx,.xlsx'];
+    options.selectMode = picker.DocumentSelectMode.FILE; options.fileSuffixFilters = imagesOnly ? ['图片|.jpg,.jpeg,.png,.webp'] : ['原件|.pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.png,.webp'];
     const selected: string[] = await new picker.DocumentViewPicker(this.context).select(options);
     const result: DocumentFileSelection = new DocumentFileSelection(); result.canceled = selected.length === 0;
     for (const uri of selected) {

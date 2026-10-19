@@ -1,4 +1,4 @@
-export enum DocumentParseFormat { Pdf = 'PDF', Docx = 'DOCX', Pptx = 'PPTX', Xlsx = 'XLSX' }
+export enum DocumentParseFormat { Pdf = 'PDF', Docx = 'DOCX', Pptx = 'PPTX', Xlsx = 'XLSX', Jpeg = 'JPEG', Png = 'PNG', Webp = 'WEBP' }
 export enum DocumentCredentialStatus { Missing = '未配置', Configured = '已配置', Unavailable = '安全存储不可用' }
 export enum DocumentPreflightStatus { Blocked = '待预检或预检阻止', Passed = '身份预检通过' }
 export enum DocumentParseStage {
@@ -9,6 +9,24 @@ export enum DocumentParseStage {
   Received = '结果已接收，待结构校验', Paused = '本机暂停', Failed = '本机失败'
 }
 export enum DocumentRemoteState { Unobserved = '', Waiting = 'waiting-file', Pending = 'pending', Converting = 'converting', Running = 'running', Done = 'done', Failed = 'failed' }
+export enum ParseFailureKind { Network = 'Network', Format = 'Format', Auth = 'AuthAccess', Quota = 'Quota', RateLimit = 'RateLimit', Service = 'Service', Artifact = 'ArtifactLocal', Unknown = 'Unknown' }
+export class ParseFailureDetail {
+  kind: ParseFailureKind = ParseFailureKind.Unknown; stage: string = ''; httpStatus: number = 0;
+  sdkCode: string = ''; providerCode: string = ''; sanitizedReason: string = ''; retryAfter: string = '';
+  outcomeUnknown: boolean = false;
+}
+export class ParseRequestUsage {
+  allocation: number = 0; put: number = 0; query: number = 0; download: number = 0;
+}
+export class ImageParsePermit {
+  static readonly policy: string = 'knowledge-image-happy-path-11-v1';
+  static readonly productionPolicy: string = 'knowledge-image-user-file-v1';
+  static readonly parameters: string = 'image-vlm-table-formula-ch-noocr-v1';
+  originalId: string = ''; hash: string = ''; version: number = 0; actualFormat: DocumentParseFormat = DocumentParseFormat.Jpeg;
+  fullFile: boolean = false; freeEligible: boolean = false; testInputId: string = '';
+  taskId: string = ''; usage: ParseRequestUsage = new ParseRequestUsage();
+  stoppedReason: string = '';
+}
 export class DocumentParseBudget {
   static readonly originalBytes: number = 20 * 1024 * 1024;
   static readonly batchFiles: number = 3;
@@ -36,9 +54,11 @@ export class DocumentParseFailure extends Error {
   category: string;
   stage: string;
   serviceCode: string;
+  detail: ParseFailureDetail = new ParseFailureDetail();
   constructor(category: string, stage: string, serviceCode: string = '') {
     super(`${category} · ${stage}${serviceCode.length > 0 ? ' · ' + serviceCode : ''}`);
     this.category = category; this.stage = stage; this.serviceCode = serviceCode;
+    this.detail.stage = stage;
   }
 }
 export class DocumentParseCancellation {
@@ -88,6 +108,7 @@ export class DocumentParseTask {
   lastQueryAt: number = 0; lastAction: string = ''; failureStage: string = ''; failureCode: string = '';
   uploadLease: string = ''; resultLease: string = ''; failure: string = '';
   extractedPages: number = 0; totalPages: number = 0;
+  usage: ParseRequestUsage = new ParseRequestUsage(); failureDetail: ParseFailureDetail = new ParseFailureDetail();
 }
 export class DocumentRemoteOccupancy {
   taskId: string = ''; dataId: string = ''; batchId: string = ''; credentialRevision: number = 0;
@@ -109,10 +130,18 @@ export class DocumentParseCleanup {
   resultBytes: number = 0; failure: string = '';
 }
 export class DocumentParseUsage { originalBytes: number = 0; resultBytes: number = 0; originalTemp: number = 0; resultTemp: number = 0; }
+export class DocumentImageEvidence {
+  originalId: string = ''; assetId: string = ''; hash: string = ''; version: number = 0;
+  width: number = 0; height: number = 0; orientation: number = 0; orientationEvidence: string = 'Unknown';
+  frames: number = 0; staticContainer: boolean = false; sdkVerified: boolean = false;
+  mime: string = ''; variant: string = ''; alpha: boolean = false;
+}
 export class DocumentParseSnapshot {
   config: DocumentParseConfig = new DocumentParseConfig(); originals: DocumentOriginal[] = [];
   grants: DocumentParseGrant[] = []; tasks: DocumentParseTask[] = []; results: DocumentParseResultEnvelope[] = [];
   cleanup: DocumentParseCleanup[] = []; occupancy: DocumentRemoteOccupancy = new DocumentRemoteOccupancy();
+  imageEvidence: DocumentImageEvidence[] = [];
+  imagePermits: ImageParsePermit[] = [];
 }
 export class DocumentParseViewState {
   snapshot: DocumentParseSnapshot = new DocumentParseSnapshot();
@@ -125,6 +154,7 @@ export class DocumentAllocationReceipt { batchId: string = ''; leaseId: string =
 export class DocumentInspection {
   batchId: string = ''; dataId: string = ''; state: DocumentRemoteState = DocumentRemoteState.Unobserved;
   extractedPages: number = 0; totalPages: number = 0; resultLease: string = '';
+  failureDetail: ParseFailureDetail = new ParseFailureDetail();
 }
 export class DocumentParseAction {
   original: DocumentOriginal = new DocumentOriginal(); task: DocumentParseTask = new DocumentParseTask();
@@ -160,6 +190,17 @@ export function documentValidateToken(input: string): void {
 
 export function documentCopySnapshot(source: DocumentParseSnapshot): DocumentParseSnapshot {
   const s: DocumentParseSnapshot = new DocumentParseSnapshot(); s.config.enabled = source.config.enabled; s.config.credentialRevision = source.config.credentialRevision;
+  for (const permit of source.imagePermits) {
+    const p: ImageParsePermit = new ImageParsePermit(); p.originalId = permit.originalId; p.hash = permit.hash; p.version = permit.version;
+    p.actualFormat = permit.actualFormat; p.fullFile = permit.fullFile; p.freeEligible = permit.freeEligible; p.testInputId = permit.testInputId; s.imagePermits.push(p);
+    p.taskId = permit.taskId; p.usage.allocation = permit.usage.allocation; p.usage.put = permit.usage.put; p.usage.query = permit.usage.query; p.usage.download = permit.usage.download;
+    p.stoppedReason = permit.stoppedReason;
+  }
+  for (const e of source.imageEvidence) {
+    const copy: DocumentImageEvidence = new DocumentImageEvidence(); copy.originalId = e.originalId; copy.assetId = e.assetId; copy.hash = e.hash; copy.version = e.version;
+    copy.width = e.width; copy.height = e.height; copy.orientation = e.orientation; copy.orientationEvidence = e.orientationEvidence;
+    copy.frames = e.frames; copy.staticContainer = e.staticContainer; copy.sdkVerified = e.sdkVerified; copy.mime = e.mime; copy.variant = e.variant; copy.alpha = e.alpha; s.imageEvidence.push(copy);
+  }
   for (const o of source.originals) {
     const copy: DocumentOriginal = new DocumentOriginal(); copy.id = o.id; copy.assetId = o.assetId; copy.title = o.title; copy.hash = o.hash; copy.bytes = o.bytes;
     copy.format = o.format; copy.version = o.version; copy.preflight = o.preflight; copy.pages = o.pages; copy.preflightReason = o.preflightReason; copy.savedAt = o.savedAt; s.originals.push(copy);
@@ -178,6 +219,8 @@ export function documentCopySnapshot(source: DocumentParseSnapshot): DocumentPar
     copy.uploadBytes = t.uploadBytes; copy.downloadBytes = t.downloadBytes; copy.downloadTotal = t.downloadTotal;
     copy.lastQueryAt = t.lastQueryAt; copy.lastAction = t.lastAction; copy.failureStage = t.failureStage; copy.failureCode = t.failureCode;
     copy.uploadLease = t.uploadLease; copy.resultLease = t.resultLease; copy.failure = t.failure; copy.extractedPages = t.extractedPages; copy.totalPages = t.totalPages; s.tasks.push(copy);
+    copy.usage.allocation = t.usage.allocation; copy.usage.put = t.usage.put; copy.usage.query = t.usage.query; copy.usage.download = t.usage.download;
+    copy.failureDetail = documentCopyFailure(t.failureDetail);
   }
   for (const r of source.results) {
     const copy: DocumentParseResultEnvelope = new DocumentParseResultEnvelope(); copy.assetId = r.assetId; copy.taskId = r.taskId; copy.dataId = r.dataId; copy.originalHash = r.originalHash;
@@ -189,4 +232,9 @@ export function documentCopySnapshot(source: DocumentParseSnapshot): DocumentPar
   s.occupancy.taskId = source.occupancy.taskId; s.occupancy.dataId = source.occupancy.dataId; s.occupancy.batchId = source.occupancy.batchId;
   s.occupancy.credentialRevision = source.occupancy.credentialRevision; s.occupancy.lastState = source.occupancy.lastState; s.occupancy.terminalObserved = source.occupancy.terminalObserved;
   s.occupancy.retired = source.occupancy.retired; return s;
+}
+export function documentCopyFailure(source: ParseFailureDetail): ParseFailureDetail {
+  const d: ParseFailureDetail = new ParseFailureDetail(); d.kind = source.kind; d.stage = source.stage; d.httpStatus = source.httpStatus;
+  d.sdkCode = source.sdkCode; d.providerCode = source.providerCode; d.sanitizedReason = source.sanitizedReason;
+  d.retryAfter = source.retryAfter; d.outcomeUnknown = source.outcomeUnknown; return d;
 }

@@ -2,7 +2,7 @@ import { PdfPageIdentityContext, PdfPageIdentityEvidence, PdfReviewedPageFragmen
 import { PdfContentNode } from '../main/ets/knowledge/domain/PdfKnowledgeModels';
 import { pdfResolveReviewedNodes } from '../main/ets/knowledge/application/PdfPageReferenceService';
 import { knowledgeMatch, knowledgeSegments } from '../main/ets/knowledge/pipeline/KnowledgeMatchPolicy';
-import { KnowledgeHit, KnowledgeMatchKind, KnowledgeResultSegment } from '../main/ets/knowledge/domain/KnowledgeSearchModels';
+import { KnowledgeHit, KnowledgeMatchKind, KnowledgeResultSegment, KnowledgeSourceKind, KnowledgeChannel } from '../main/ets/knowledge/domain/KnowledgeSearchModels';
 import { prepareTextQuery } from '../main/ets/knowledge/pipeline/QueryPreparation';
 
 export interface KnowledgeResultTestCase { name: string; run: () => Promise<void>; }
@@ -15,6 +15,13 @@ function resultPageEvidence(context: PdfPageIdentityContext, node: PdfContentNod
   const fragment: PdfReviewedPageFragment = new PdfReviewedPageFragment(); fragment.end = node.text.length; fragment.textHash = item.nodeHash; fragment.originalPage1 = page; item.fragments = [fragment]; return item;
 }
 export function knowledgeResultCases(): KnowledgeResultTestCase[] { return [
+  { name: 'Image真实正文Direct与有资格Similar分开',run: async (): Promise<void> => {
+    const hit: KnowledgeHit = new KnowledgeHit(); hit.sourceKind = KnowledgeSourceKind.Image; hit.text = '中文 Needle needle';
+    if (knowledgeMatch(hit,prepareTextQuery('needle'),false).ranges.length !== 2) { throw new Error('ImageLiteralRanges'); }
+    if (knowledgeMatch(hit,prepareTextQuery('absent'),true).kind !== KnowledgeMatchKind.Unclassified) { throw new Error('ImageFakeSimilar'); }
+    hit.channels = [KnowledgeChannel.Vector]; hit.spaceId = 'same-space'; hit.vectorGeneration = 'generation'; hit.vectorDistance = 0.2;
+    if (knowledgeMatch(hit,prepareTextQuery('absent'),true).kind !== KnowledgeMatchKind.Similar) { throw new Error('ImageSimilarMissing'); }
+  } },
   { name: '正文中文任一term命中且仅ASCII fold保持UTF16与原串',run: async (): Promise<void> => {
     const hit = new KnowledgeHit(); hit.text = '😀 ROC/roc 查全率；ROC İıＡa'; hit.retrievalText = '查准率\n'+hit.text;
     hit.match = knowledgeMatch(hit,prepareTextQuery('roc 查准率'),false);

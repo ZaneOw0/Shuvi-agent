@@ -19,6 +19,8 @@ import { window } from '@kit.ArkUI';
 import { DocumentParseAssembly } from '../knowledge/infra/DocumentParseAssembly';
 import { KnowledgeAssembly } from '../knowledge/infra/KnowledgeAssembly';
 import { SemanticQualitySession } from '../knowledge/platformtests/SemanticQualitySuite';
+import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
+import { ImageIntegrationSuite } from '../knowledge/platformtests/ImageIntegrationSuite';
 
 const DOMAIN = 0x0000;
 
@@ -33,6 +35,8 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    ImageIntegrationSuite.background();
+    ImageIngestionService.background();
     SemanticQualitySession.background();
     KnowledgeAssembly.background();
     DocumentParseAssembly.background();
@@ -63,6 +67,8 @@ export default class EntryAbility extends UIAbility {
   }
 
   onBackground(): void {
+    ImageIntegrationSuite.background();
+    ImageIngestionService.background();
     SemanticQualitySession.background();
     KnowledgeAssembly.background();
     DocumentParseAssembly.background();
