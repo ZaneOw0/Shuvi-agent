@@ -24,6 +24,11 @@ import {
 } from '../model/AssistantModels';
 import { MockAssistantService } from '../mock/MockAssistantService';
 import { FloatingAssistantPlacement } from '../model/FloatingAssistantPlacement';
+import { SearchResultCard } from '../components/SearchResultCard';
+import { MockSearchSession } from '../mock/MockSearchSession';
+import { SEARCH_SAMPLE, SEARCH_SCENARIOS, SearchScenario, SearchSource, SearchState, SearchTurn,
+  searchIsBusy } from '../model/SearchModels';
+import { SourceLinkService } from '../services/SourceLinkService';
 
 @Entry
 @Component
@@ -44,6 +49,11 @@ struct Index {
   @State floatingAssistantEnabled: boolean = true;
   @State floatingPlacement: FloatingAssistantPlacement = new FloatingAssistantPlacement();
   @State contentHeight: number = 0;
+  @State searchEnabled: boolean = false;
+  @State searchBusy: boolean = false;
+  @State searchScenario: SearchScenario = SearchScenario.Normal;
+  @State searchTurns: SearchTurn[] = [];
+  private searchSession: MockSearchSession = new MockSearchSession();
   private floatingHostWidth: number = 0;
   private floatingHostHeight: number = 0;
   private floatingHeaderHeight: number = 68;
@@ -66,6 +76,7 @@ struct Index {
   aboutToDisappear(): void {
     this.alive = false;
     this.service.cancel(this.requestId);
+    this.searchSession.cancel();
   }
 
   onBackPress(): boolean {
@@ -101,6 +112,9 @@ struct Index {
     if (index !== this.tab && this.generating) {
       this.cancelGeneration();
     }
+    if (index !== this.tab && this.searchBusy) {
+      this.cancelSearch();
+    }
     this.inputController.stopEditing();
     this.tab = index;
     this.calendarOpen = false;
@@ -121,19 +135,23 @@ struct Index {
   }
 
   private blocked(): boolean {
-    return this.generating || this.executing || this.draft !== undefined;
+    return this.generating || this.executing || this.searchBusy || this.draft !== undefined;
   }
 
   private useSample(): void {
     if (this.blocked()) {
       return;
     }
-    this.input = this.service.sampleText;
+    this.input = this.searchEnabled ? SEARCH_SAMPLE : this.service.sampleText;
     this.scroller.scrollEdge(Edge.Bottom);
   }
 
   private async send(): Promise<void> {
     if (this.blocked() || this.input.trim().length === 0 || this.input.length > 500) {
+      return;
+    }
+    if (this.searchEnabled) {
+      await this.sendSearch();
       return;
     }
     const id = this.service.nextId('request');
@@ -191,7 +209,7 @@ struct Index {
   }
 
   private openScenarios(): void {
-    if (this.generating || this.executing) {
+    if (this.generating || this.executing || this.searchBusy) {
       return;
     }
     this.drawerOpen = false;
@@ -222,6 +240,10 @@ struct Index {
       return;
     }
     this.service.cancel(this.requestId);
+    this.searchSession.cancel();
+    this.searchTurns = [];
+    this.searchBusy = false;
+    this.searchScenario = SearchScenario.Normal;
     this.requestId = '';
     this.operationId = '';
     this.messages = [];
@@ -230,6 +252,89 @@ struct Index {
     this.requestState = RequestState.Unsupported;
     this.scenario = DemoScenario.Normal;
     this.changeTab(0);
+  }
+
+  private updateSearch(turn: SearchTurn): void {
+    if (!this.alive) {
+      return;
+    }
+    const exists = this.searchTurns.some((item: SearchTurn) => item.id === turn.id);
+    this.searchTurns = exists ? this.searchTurns.map((item: SearchTurn) => item.id === turn.id ? turn : item) :
+      this.searchTurns.concat([turn]);
+    if (!exists) {
+      const message: ChatMessage = { id: this.service.nextId('message'), isUser: false,
+        text: '联网搜索 · 固定样例演示', searchId: turn.id };
+      this.messages = this.messages.concat([message]);
+    }
+    this.searchBusy = searchIsBusy(turn.state);
+  }
+
+  private async sendSearch(): Promise<void> {
+    const query = this.input.trim();
+    const scenario = this.searchScenario;
+    this.inputController.stopEditing();
+    this.addMessage(query, true);
+    this.input = '';
+    this.result = undefined;
+    this.requestState = RequestState.Unsupported;
+    this.searchScenario = SearchScenario.Normal;
+    const pending = this.searchSession.start(query, scenario, (turn: SearchTurn) => this.updateSearch(turn));
+    this.scroller.scrollEdge(Edge.Bottom);
+    await pending;
+  }
+
+  private cancelSearch(): void {
+    const turn = this.searchSession.cancel();
+    if (turn) {
+      this.updateSearch(turn);
+    }
+  }
+
+  private retrySearch(turn: SearchTurn): void {
+    if (this.blocked()) {
+      return;
+    }
+    this.searchEnabled = true;
+    this.input = turn.query;
+    this.searchScenario = SearchScenario.Normal;
+    this.send();
+  }
+
+  private editSearch(turn: SearchTurn): void {
+    if (this.blocked()) {
+      return;
+    }
+    this.searchEnabled = true;
+    this.input = turn.state === SearchState.Unsupported ? SEARCH_SAMPLE : turn.query;
+  }
+
+  private async retrySearchAnswer(turn: SearchTurn): Promise<void> {
+    if (!this.blocked()) {
+      await this.searchSession.retryAnswer(turn, (updated: SearchTurn) => this.updateSearch(updated));
+    }
+  }
+
+  private async openSource(source: SearchSource): Promise<void> {
+    // 跳出应用前结束演示任务，已取得的来源继续保留。
+    if (this.searchBusy) {
+      this.cancelSearch();
+    }
+    try {
+      await SourceLinkService.open(source.url);
+    } catch {
+      if (this.alive) {
+        this.notice('原文未能打开', `请检查设备是否有可用浏览器或打开方式。\n${source.url}`);
+      }
+    }
+  }
+
+  private showCitation(source: SearchSource): void {
+    this.getUIContext().showAlertDialog({
+      title: `来源 [${source.number}] ${source.title}`,
+      message: `${source.snippet}\n\n${source.url}`,
+      primaryButton: { value: '打开原文', action: () => { this.openSource(source); } },
+      secondaryButton: { value: '返回回答', action: () => {} }
+    });
   }
 
   private attachments(): void {
@@ -318,8 +423,8 @@ struct Index {
           Button({ type: ButtonType.Circle }) {
             AppIcon({ source: $r('app.media.chat_sliders') })
           }.width(44).height(44).backgroundColor(Color.Transparent)
-            .accessibilityText(`演示场景设置，当前${this.scenario}`).id('chat-scenarios')
-            .enabled(!this.generating && !this.executing).onClick(() => this.openScenarios())
+            .accessibilityText(`演示场景设置，当前${this.searchEnabled ? this.searchScenario : this.scenario}`).id('chat-scenarios')
+            .enabled(!this.generating && !this.executing && !this.searchBusy).onClick(() => this.openScenarios())
           Button({ type: ButtonType.Circle }) {
             AppIcon({ source: $r('app.media.chat_newchat') })
           }.width(44).height(44).backgroundColor(Color.Transparent)
@@ -347,6 +452,25 @@ struct Index {
               .backgroundColor(Theme.bubble).borderRadius({ topLeft: 20, topRight: 20, bottomLeft: 20, bottomRight: 6 })
               .constraintSize({ maxWidth: '92%' }).accessibilityText(`你：${message.text}`)
           }.width('100%').justifyContent(FlexAlign.End)
+        } else if (message.searchId !== undefined) {
+          Column({ space: 12 }) {
+            Row({ space: 8 }) {
+              BrandAvatar({ size: 28 })
+              Text(message.text).fontSize(11).fontColor(Theme.muted).layoutWeight(1)
+            }.width('100%')
+            ForEach(this.searchTurns, (turn: SearchTurn, index: number) => {
+              if (turn.id === message.searchId) {
+                // 轮次 ID 保持稳定；直接绑定状态数组，避免复用卡片时捕获旧 turn。
+                SearchResultCard({ turn: this.searchTurns[index], actionsEnabled: !this.blocked(),
+                  onCancel: () => this.cancelSearch(),
+                  onRetry: (item: SearchTurn) => this.retrySearch(item),
+                  onRetryAnswer: (item: SearchTurn) => this.retrySearchAnswer(item),
+                  onEdit: (item: SearchTurn) => this.editSearch(item),
+                  onOpen: (source: SearchSource) => this.openSource(source),
+                  onCitation: (source: SearchSource) => this.showCitation(source) })
+              }
+            }, (turn: SearchTurn, _index: number) => turn.id)
+          }.width('100%')
         } else {
           Row({ space: 8 }) {
             BrandAvatar({ size: 28 })
@@ -461,6 +585,7 @@ struct Index {
             .onClick(() => {
               this.changeTab(0);
               if (!this.blocked()) {
+                this.searchEnabled = false;
                 this.useSample();
               }
             })
@@ -482,7 +607,20 @@ struct Index {
       Text('选择下一次演示场景').fontSize(17).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
       Text('仅模拟界面状态，不改变系统设置。场景执行后恢复正常；提醒重试默认成功。')
         .fontSize(12).fontColor(Theme.muted).lineHeight(20)
-      ForEach(DEMO_SCENARIOS, (item: DemoScenario) => {
+      if (this.searchEnabled) {
+        Text('联网搜索 · 固定样例演示').fontSize(13).fontColor(Theme.accent)
+        ForEach(SEARCH_SCENARIOS, (item: SearchScenario) => {
+          Button(item, { type: ButtonType.Normal }).width('100%').constraintSize({ minHeight: 44 })
+            .fontSize(14).borderRadius(10)
+            .backgroundColor(item === this.searchScenario ? Theme.accent : Theme.surface)
+            .fontColor(item === this.searchScenario ? Color.White : Theme.ink)
+            .onClick(() => {
+              this.searchScenario = item;
+              this.showScenarios = false;
+            })
+        }, (item: SearchScenario) => item)
+      } else {
+        ForEach(DEMO_SCENARIOS, (item: DemoScenario) => {
         Button(item === this.scenario ? `✓ ${item}` : item, { type: ButtonType.Normal })
           .width('100%').constraintSize({ minHeight: 44 }).fontSize(14).borderRadius(10)
           .backgroundColor(item === this.scenario ? Theme.accent : Theme.surface)
@@ -491,7 +629,8 @@ struct Index {
             this.scenario = item;
             this.showScenarios = false;
           })
-      }, (item: DemoScenario) => item)
+        }, (item: DemoScenario) => item)
+      }
       Button('返回页面').fontColor(Theme.accent).backgroundColor(Theme.soft)
         .onClick(() => this.showScenarios = false)
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ bottom: 20 })
@@ -510,20 +649,21 @@ struct Index {
           Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
             Button({ type: ButtonType.Normal }) {
               Row({ space: 4 }) {
-                AppIcon({ source: $r('app.media.chat_calendar'), size: 16})
-                Text('日程样例').fontSize(12).fontColor(Theme.accent)
+                AppIcon({ source: this.searchEnabled ? $r('app.media.chat_book') : $r('app.media.chat_calendar'), size: 16})
+                Text(this.searchEnabled ? '搜索样例' : '日程样例').fontSize(12).fontColor(Theme.accent)
               }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
             }.borderRadius(22).backgroundColor(Theme.soft).border({ width: 1, color: Theme.line })
               .margin({ right: 4, bottom: 4 }).enabled(!this.blocked()).onClick(() => this.useSample())
-              .id('chat-sample').accessibilityText('日程样例，填入固定演示文字')
+              .id('chat-sample').accessibilityText(`${this.searchEnabled ? '搜索' : '日程'}样例，填入固定演示文字`)
             Button({ type: ButtonType.Normal }) {
               Row({ space: 4 }) {
                 AppIcon({ source: $r('app.media.chat_globe'), size: 16})
-                Text('搜索').fontSize(12).fontColor(Theme.muted)
+                Text('搜索').fontSize(12).fontColor(this.searchEnabled ? Theme.accent : Theme.muted)
               }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
-            }.borderRadius(22).backgroundColor(Color.Transparent).border({ width: 1, color: Theme.line })
-              .margin({ bottom: 4 }).accessibilityText('联网搜索，待接入')
-              .onClick(() => this.notice('联网搜索待接入', '本次不会发起网络请求。请使用日程样例体验确认流程。'))
+            }.borderRadius(22).backgroundColor(this.searchEnabled ? Theme.soft : Color.Transparent)
+              .border({ width: 1, color: this.searchEnabled ? Theme.accent : Theme.line })
+              .margin({ bottom: 4 }).accessibilityText(`联网搜索演示，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`)
+              .id('chat-search-toggle').enabled(!this.blocked()).onClick(() => this.searchEnabled = !this.searchEnabled)
           }
           Row() {
             Button({ type: ButtonType.Circle }) {
@@ -553,7 +693,8 @@ struct Index {
       if (this.input.length > 500) {
         Text('最多 500 字，请缩短后发送。').fontSize(12).fontColor(Theme.danger).width('100%')
       }
-      Text('演示数据 · 重启后重置 · 图片与语音待接入').fontSize(10).fontColor(Theme.muted)
+      Text(this.searchEnabled ? '固定样例演示 · 未联网 · 回答非模型生成' : '演示数据 · 重启后重置 · 图片与语音待接入')
+        .fontSize(10).fontColor(Theme.muted)
         .textAlign(TextAlign.Center).width('100%')
     }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%').backgroundColor(Theme.surface)
   }
@@ -594,7 +735,7 @@ struct Index {
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
       Button('演示场景设置  ›', { type: ButtonType.Normal }).width('100%').constraintSize({ minHeight: 44 })
         .fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
-        .enabled(!this.generating && !this.executing).onClick(() => this.openScenarios())
+        .enabled(!this.generating && !this.executing && !this.searchBusy).onClick(() => this.openScenarios())
       Text('当前仅支持固定样例\n演示数据会在重启后重置').fontSize(11).fontColor(Theme.muted)
         .width('100%').padding({ top: 16 })
     }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
@@ -637,8 +778,9 @@ struct Index {
   pageContent() {
     Column() {
       this.header()
-      if (this.scenario !== DemoScenario.Normal) {
-        Text(`下一次演示：${this.scenario}`).fontSize(12).fontColor(Theme.amber)
+      if ((this.searchEnabled && this.searchScenario !== SearchScenario.Normal) ||
+        (!this.searchEnabled && this.scenario !== DemoScenario.Normal)) {
+        Text(`下一次演示：${this.searchEnabled ? this.searchScenario : this.scenario}`).fontSize(12).fontColor(Theme.amber)
           .width('100%').textAlign(TextAlign.Center).padding({ left: 16, right: 16, bottom: 8 })
       }
       Scroll(this.scroller) {
@@ -647,7 +789,7 @@ struct Index {
             this.scenarioPanel()
           } else if (this.tab === 0) {
             if (this.messages.length === 0) {
-              AssistantWelcome()
+              AssistantWelcome({ searchEnabled: this.searchEnabled })
             } else {
               this.assistant()
             }

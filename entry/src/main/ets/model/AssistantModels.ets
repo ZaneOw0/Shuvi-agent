@@ -35,6 +35,7 @@ export interface ChatMessage {
   id: string;
   isUser: boolean;
   text: string;
+  searchId?: string;
 }
 
 export interface CalendarDraft {

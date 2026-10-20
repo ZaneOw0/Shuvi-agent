@@ -15,7 +15,10 @@ const outputRoot = path.join(project, '.cache/ux-mock-tests');
 const sources = [
   'entry/src/main/ets/model/AssistantModels.ets',
   'entry/src/main/ets/mock/MockAssistantService.ets',
-  'entry/src/test/MockAssistantCases.ets'
+  'entry/src/test/MockAssistantCases.ets',
+  'entry/src/main/ets/model/SearchModels.ets',
+  'entry/src/main/ets/mock/MockSearchSession.ets',
+  'entry/src/test/MockSearchCases.ets'
 ];
 for (const source of sources) {
   const output = path.join(outputRoot, source.replace(/\.ets$/, '.js'));
@@ -27,6 +30,7 @@ for (const source of sources) {
   fs.writeFileSync(output, result.outputText);
 }
 const { mockAssistantCases } = require(path.join(outputRoot, 'entry/src/test/MockAssistantCases.js'));
-for (const testCase of mockAssistantCases()) {
+const { mockSearchCases } = require(path.join(outputRoot, 'entry/src/test/MockSearchCases.js'));
+for (const testCase of mockAssistantCases().concat(mockSearchCases())) {
   test(testCase.name, testCase.run);
 }
