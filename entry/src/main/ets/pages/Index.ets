@@ -458,15 +458,18 @@ struct Index {
               BrandAvatar({ size: 28 })
               Text(message.text).fontSize(11).fontColor(Theme.muted).layoutWeight(1)
             }.width('100%')
-            ForEach(this.searchTurns.filter((turn: SearchTurn) => turn.id === message.searchId), (turn: SearchTurn) => {
-              SearchResultCard({ turn: turn, actionsEnabled: !this.blocked(),
-                onCancel: () => this.cancelSearch(),
-                onRetry: (item: SearchTurn) => this.retrySearch(item),
-                onRetryAnswer: (item: SearchTurn) => this.retrySearchAnswer(item),
-                onEdit: (item: SearchTurn) => this.editSearch(item),
-                onOpen: (source: SearchSource) => this.openSource(source),
-                onCitation: (source: SearchSource) => this.showCitation(source) })
-            }, (turn: SearchTurn) => turn.id)
+            ForEach(this.searchTurns, (turn: SearchTurn, index: number) => {
+              if (turn.id === message.searchId) {
+                // 轮次 ID 保持稳定；直接绑定状态数组，避免复用卡片时捕获旧 turn。
+                SearchResultCard({ turn: this.searchTurns[index], actionsEnabled: !this.blocked(),
+                  onCancel: () => this.cancelSearch(),
+                  onRetry: (item: SearchTurn) => this.retrySearch(item),
+                  onRetryAnswer: (item: SearchTurn) => this.retrySearchAnswer(item),
+                  onEdit: (item: SearchTurn) => this.editSearch(item),
+                  onOpen: (source: SearchSource) => this.openSource(source),
+                  onCitation: (source: SearchSource) => this.showCitation(source) })
+              }
+            }, (turn: SearchTurn, _index: number) => turn.id)
           }.width('100%')
         } else {
           Row({ space: 8 }) {
