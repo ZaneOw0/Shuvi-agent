@@ -24,9 +24,16 @@ import { QueryConsentSession } from '../application/QueryConsentSession';
 import { embeddingFingerprint } from '../pipeline/EmbeddingPolicy';
 import { KnowledgeResultCard } from './KnowledgeResultCard';
 import { KnowledgeCancellation } from '../domain/PdfKnowledgeModels';
+import { KnowledgeQuerySession } from '../application/KnowledgeQuerySession';
+import { UnifiedKnowledgeHistoryRepository } from '../infra/UnifiedKnowledgeHistoryRepository';
+import { UnifiedSearchCard } from '../domain/UnifiedQueryModels';
+import { UnifiedKnowledgeView } from './UnifiedKnowledgeView';
 
 @Component
 export struct KnowledgeView {
+  querySession: KnowledgeQuerySession | undefined=undefined;
+  unifiedHistory: UnifiedKnowledgeHistoryRepository | undefined=undefined;
+  onOpenUnified: (card: UnifiedSearchCard) => void=(_card: UnifiedSearchCard): void=>{};
   service: KnowledgeSearchService | undefined = undefined;
   textService: TextKnowledgeService | undefined = undefined;
   @Link textState: TextViewState;
@@ -83,7 +90,7 @@ export struct KnowledgeView {
   private trialApproval: QueryConsentSession = new QueryConsentSession();
   private consentConfig: string = '';
   private registerCancel: KnowledgeCancellation | undefined;
-  private invalidateQueries(): void { this.queryApproval.invalidate(); this.trialApproval.invalidate(); this.queryConsent = false; this.queryFree = false; this.trialConsent = false; this.trialFree = false; this.queryEligible = false; this.countedQuery = ''; this.queryBound = '输入或范围已变化，请重新计数'; }
+  private invalidateQueries(): void { this.querySession?.invalidate(); this.queryApproval.invalidate(); this.trialApproval.invalidate(); this.queryConsent = false; this.queryFree = false; this.trialConsent = false; this.trialFree = false; this.queryEligible = false; this.countedQuery = ''; this.queryBound = '输入或范围已变化，请重新计数'; }
   private editQuestion(text: string): void { this.question = text; this.invalidateQueries(); }
   private listener: KnowledgeCallbackListener = new KnowledgeCallbackListener((): void => { this.changed(); });
   aboutToAppear(): void { this.service?.subscribe(this.listener); this.embedding?.subscribe(this.listener); this.changed(); this.selectedSpace = this.initialSpace; if (this.initialTrialJob.length > 0) { this.prepareTrial(this.initialTrialJob); } this.refreshDocuments(); this.refreshVectors(); this.readBasis(); }
@@ -119,6 +126,7 @@ export struct KnowledgeView {
   private async prepareTrial(jobId: string): Promise<void> { this.invalidateQueries(); try { if (this.embedding === undefined) { return; } this.trial = await this.embedding.prepareTrial(jobId); this.trialJobId = jobId; this.message = `试验范围 3/${this.trial.job.expectedHashes.length}，不是完整语义就绪`; } catch { this.message = '三块试验scope核验失败；未请求'; } }
   private async trialSearch(): Promise<void> { try { if (this.embedding === undefined) { return; } const actual = prepareTextQuery(this.question).actualInput; const scope = await this.embedding.prepareTrial(this.trialJobId); const proof = await this.embedding.reviewQuery(actual); const snapshot = this.trialApproval.consume(actual,proof,this.embedding.state.config,'trial',scope.space.id,scope.id,scope.setHash); this.invalidateQueries(); this.trialResult = await this.embedding.submitReviewedTrial(this.trialJobId,snapshot); embeddingLogTrialResult(this.trialResult); this.message = this.trialResult.notice; } catch { this.invalidateQueries(); this.message = 'NoRequest：试验授权已变化或请求失败，不自动重试'; } }
   private canFullScope(): boolean { return this.vectorJobs.some((job: EmbeddingJob): boolean => job.documentId === this.review.documentId && job.contentGeneration === this.review.generation && job.completedHashes.length >= Math.min(3,this.review.rows.length) && job.completedHashes.length < job.expectedHashes.length); }
+  private isPdfJob(job: EmbeddingJob): boolean { return this.spaces.some((space: EmbeddingSpace): boolean => space.id === job.spaceId && space.preprocessing === 'PDF-EMBED-TEXT-1'); }
   private queryPreview(): string { if (this.question.trim().length === 0) { return '未输入'; } try { return prepareTextQuery(this.question).actualInput; } catch { return '输入格式不合法，未检索或外发'; } }
   changed(): void { const config: string = this.embedding === undefined ? '' : embeddingFingerprint(this.embedding.state.config); if (config !== this.consentConfig) { this.consentConfig = config; this.invalidateQueries(); } if (this.service === undefined) { this.message = '统一查询不可用；M1 资料仍可管理'; return; } this.hits = this.service.state.result.hits.slice(); this.message = this.service.state.message; this.busy = this.service.state.busy || (this.embedding?.state.busy ?? false); this.historyPending = this.service.state.historyPending; this.progressLabel = this.embedding?.progress() ?? 'Idle'; this.credentialLabel = this.embedding?.state.credential ?? 'Unavailable'; this.detectionLabel = this.embedding?.state.detection.status ?? 'Untested'; }
   private async search(): Promise<void> {
@@ -153,7 +161,10 @@ export struct KnowledgeView {
   private async deletePdf(id: string): Promise<void> { try { await this.lifecycle?.deleteDocument(id); await this.refreshDocuments(); } catch { this.message = '删除或派生清理未完成，按持久状态保留重试'; } }
   build() {
     Column({ space: 14 }) {
-      if (this.legacyOpen || this.textState.screen === TextScreen.Detail) {
+      if (this.querySession!==undefined && !this.legacyOpen && this.textState.screen!==TextScreen.Detail) {
+        UnifiedKnowledgeView({session:this.querySession,history:this.unifiedHistory,onOpen:this.onOpenUnified})
+        Button('旧资料与旧检索兼容').id('upd-legacy-compat').onClick((): void=> { this.legacyOpen=true; })
+      } else if (this.legacyOpen || this.textState.screen === TextScreen.Detail) {
         Button('返回统一知识库').constraintSize({ minHeight: 44 }).onClick((): void => { this.legacyOpen = false; })
         TextKnowledgeView({ knowledgeState: this.textState, service: this.textService, onRetryOpen: this.onRetryOpen, onParsePrepare: this.onParsePrepare })
       } else {
@@ -171,7 +182,7 @@ export struct KnowledgeView {
         Text(`本次实际检索输入：${this.queryPreview()}`).fontSize(13).width('100%')
         Button('仅本机计数问题').id('r2-query-count').onClick((): void => { this.countQuery(); })
         Text(this.queryBound).id('r2-query-bound').fontSize(12).width('100%')
-         ForEach(this.spaces,(space: EmbeddingSpace): void => { Button(`${this.selectedSpace === space.id ? '已选' : '选择'} ${space.returnedModel} / ${space.dimension} 维`).id(`r2-space-${space.id}`).onClick((): void => { this.selectedSpace = space.id; this.invalidateQueries(); }) },(space: EmbeddingSpace): string => space.id)
+         ForEach(this.spaces,(space: EmbeddingSpace): void => { Button(`${this.selectedSpace === space.id ? '已选' : '选择'} ${space.returnedModel} / ${space.dimension} 维 / ${space.preprocessing}`).id(`r2-space-${space.id}`).onClick((): void => { this.selectedSpace = space.id; this.invalidateQueries(); }) },(space: EmbeddingSpace): string => space.id)
          Row({ space: 10 }) { Checkbox().id('r2-query-consent').select(this.queryConsent).enabled(this.queryEligible && this.countedQuery === this.queryPreview()).onChange((checked: boolean): void => { this.queryConsent = checked; this.queryApproval.approve(checked); }); Text('仅同意本次已计数的实际检索输入外发，用于问题向量；不授权 PDF').fontSize(13).layoutWeight(1) }.width('100%')
          Row({ space: 10 }) { Checkbox().id('r2-query-free').select(this.queryFree).onChange((checked: boolean): void => { this.queryFree = checked; this.queryApproval.confirmFree(checked); }); Text('确认本次问题请求免费资格').fontSize(13).layoutWeight(1) }.width('100%')
         Button('检索').id('r2-query-search').constraintSize({ minHeight: 44 }).enabled(!this.busy && this.service !== undefined).onClick((): void => { this.search(); })
@@ -199,10 +210,10 @@ export struct KnowledgeView {
         Text(this.usageLabel).fontSize(13).width('100%')
         Row({ space: 10 }) { Checkbox().select(this.resendUnknown).onChange((checked: boolean): void => { this.resendUnknown = checked; }); Text('仅对本次显式续跑：接受 Unknown 可能已计费，并再次发送未核输入；已核输入不重发').fontSize(13).layoutWeight(1) }.width('100%')
         Button('重试派生清理').onClick((): void => { this.lifecycle?.cleanup(); })
-         ForEach(this.vectorJobs,(job: EmbeddingJob): void => {
-          Button('核验此任务前三块试验范围').id(`r2-trial-prepare-${job.id}`).enabled(!this.busy).onClick((): void => { this.prepareTrial(job.id); })
-          Button(`显式续跑 ${job.stage} ${job.completedHashes.length}/${job.expectedHashes.length}`).id(`r2-resume-${job.id}`).enabled(this.corpusConsent && this.corpusFree && !this.busy).onClick((): void => { this.vectorize(job.documentId,job.id); })
-          Button('退役此非活动向量世代').onClick((): void => { this.retireVector(job.vectorGeneration); })
+          ForEach(this.vectorJobs,(job: EmbeddingJob): void => {
+           if (this.isPdfJob(job)) { Button('核验此任务前三块试验范围').id(`r2-trial-prepare-${job.id}`).enabled(!this.busy).onClick((): void => { this.prepareTrial(job.id); }) }
+           if (this.isPdfJob(job)) { Button(`显式续跑 ${job.stage} ${job.completedHashes.length}/${job.expectedHashes.length}`).id(`r2-resume-${job.id}`).enabled(this.corpusConsent && this.corpusFree && !this.busy).onClick((): void => { this.vectorize(job.documentId,job.id); }) }
+           if (this.isPdfJob(job)) { Button('退役此非活动向量世代').onClick((): void => { this.retireVector(job.vectorGeneration); }) }
          },(job: EmbeddingJob): string => job.id)
          Row() { Button('前页任务').id('r2-task-page-prev').enabled(this.taskOffset > 0).onClick((): void => { this.pageTasks(-1); }); Button('后页任务').id('r2-task-page-next').enabled(this.vectorJobs.length === 12).onClick((): void => { this.pageTasks(1); }) }
         if (this.trialJobId.length > 0) {

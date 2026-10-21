@@ -63,6 +63,7 @@ export async function documentContainerPreflight(path: string, original: Documen
     const boundary: DocumentZipBoundary = documentZipBoundary(head, tail, original.bytes);
     if (boundary.directoryBytes > DocumentParseBudget.directoryBytes || boundary.entries > 4096) { throw new DocumentParseFailure('OOXML目录超预算', '身份预检'); }
     const directory: Uint8Array = await documentReadRange(file.fd, boundary.directoryOffset, boundary.directoryBytes);
+    if (original.format === DocumentParseFormat.Docx) { original.preflightReason = 'DOCX待根关系/Content Types核验'; return; }
     documentOfficeIdentity(directory, boundary, original.format); original.preflight = DocumentPreflightStatus.Passed;
   } finally { await fileIo.close(file); }
 }

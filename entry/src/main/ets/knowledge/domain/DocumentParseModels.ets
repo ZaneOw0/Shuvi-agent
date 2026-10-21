@@ -18,6 +18,14 @@ export class ParseFailureDetail {
 export class ParseRequestUsage {
   allocation: number = 0; put: number = 0; query: number = 0; download: number = 0;
 }
+export class DocxParsePermit {
+  static readonly policy: string = 'knowledge-docx-user-full-file-v1';
+  static readonly parameters: string = 'vlm-table-formula-ch-noocr-v1';
+  originalId: string = ''; hash: string = ''; version: number = 0; actualFormat: DocumentParseFormat = DocumentParseFormat.Docx;
+  credentialRevision: number = 0; parameters: string = DocxParsePermit.parameters;
+  fullFile: boolean = false; freeEligible: boolean = false; taskId: string = '';
+  usage: ParseRequestUsage = new ParseRequestUsage(); stoppedReason: string = '';
+}
 export class ImageParsePermit {
   static readonly policy: string = 'knowledge-image-happy-path-11-v1';
   static readonly productionPolicy: string = 'knowledge-image-user-file-v1';
@@ -142,6 +150,7 @@ export class DocumentParseSnapshot {
   cleanup: DocumentParseCleanup[] = []; occupancy: DocumentRemoteOccupancy = new DocumentRemoteOccupancy();
   imageEvidence: DocumentImageEvidence[] = [];
   imagePermits: ImageParsePermit[] = [];
+  docxPermits: DocxParsePermit[] = [];
 }
 export class DocumentParseViewState {
   snapshot: DocumentParseSnapshot = new DocumentParseSnapshot();
@@ -190,6 +199,13 @@ export function documentValidateToken(input: string): void {
 
 export function documentCopySnapshot(source: DocumentParseSnapshot): DocumentParseSnapshot {
   const s: DocumentParseSnapshot = new DocumentParseSnapshot(); s.config.enabled = source.config.enabled; s.config.credentialRevision = source.config.credentialRevision;
+  for (const permit of source.docxPermits) {
+    const p: DocxParsePermit = new DocxParsePermit(); p.originalId = permit.originalId; p.hash = permit.hash; p.version = permit.version;
+    p.actualFormat = permit.actualFormat; p.credentialRevision = permit.credentialRevision; p.parameters = permit.parameters;
+    p.fullFile = permit.fullFile; p.freeEligible = permit.freeEligible; p.taskId = permit.taskId; p.stoppedReason = permit.stoppedReason;
+    p.usage.allocation = permit.usage.allocation; p.usage.put = permit.usage.put; p.usage.query = permit.usage.query; p.usage.download = permit.usage.download;
+    s.docxPermits.push(p);
+  }
   for (const permit of source.imagePermits) {
     const p: ImageParsePermit = new ImageParsePermit(); p.originalId = permit.originalId; p.hash = permit.hash; p.version = permit.version;
     p.actualFormat = permit.actualFormat; p.fullFile = permit.fullFile; p.freeEligible = permit.freeEligible; p.testInputId = permit.testInputId; s.imagePermits.push(p);

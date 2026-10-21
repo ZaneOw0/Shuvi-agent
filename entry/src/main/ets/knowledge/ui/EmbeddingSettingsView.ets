@@ -4,9 +4,16 @@ import { EmbeddingConfig, EmbeddingProvider, EmbeddingRegion, EmbeddingAccess, E
 import { KnowledgeCallbackListener } from '../domain/KnowledgePorts';
 import { embeddingFingerprint } from '../pipeline/EmbeddingPolicy';
 import { embeddingPublicAudit } from '../infra/EmbeddingPublicAudit';
+import { UnifiedSettingsService } from '../application/UnifiedSettingsService';
+import { UnifiedProcessingSettings } from '../domain/UnifiedKnowledgeModels';
 
 @Component
 export struct EmbeddingSettingsView {
+  unifiedSettings: UnifiedSettingsService | undefined=undefined;
+  @State unifiedCost: boolean=false;
+  @State unifiedBaseline: boolean=false;
+  @State unifiedOn: boolean=false;
+  private async saveUnified(): Promise<void> { try { await this.unifiedSettings?.enableEmbedding(!this.unifiedOn,this.unifiedCost,this.unifiedBaseline); this.unifiedOn=(await this.unifiedSettings?.setting('Embedding'))?.enabled ?? false; this.unifiedCost=false; this.unifiedBaseline=false; this.message='统一自动全量设置已保存'; } catch { this.message='统一模式需当前配置/工程基线与可能费用确认'; } }
   service: EmbeddingService | undefined = undefined;
   onBack: () => void = (): void => {};
   @Prop @Watch('clearSecret') clearEpoch: number = 0;
@@ -21,7 +28,7 @@ export struct EmbeddingSettingsView {
   @State detectionLabel: string = 'Untested';
   private passwordController: TextInputController = new TextInputController();
   private listener: KnowledgeCallbackListener = new KnowledgeCallbackListener((): void => { this.changed(); });
-  aboutToAppear(): void { this.service?.subscribe(this.listener); this.changed(); }
+  aboutToAppear(): void { this.service?.subscribe(this.listener); this.changed(); this.unifiedSettings?.setting('Embedding').then((s: UnifiedProcessingSettings): void=> { this.unifiedOn=s.enabled; }).catch((): void=> { this.message='统一设置读取失败'; }); }
   aboutToDisappear(): void { this.clearSecret(); this.service?.unsubscribe(this.listener); }
   clearSecret(): void { this.secretInput = ''; this.passwordController.stopEditing(); }
   changed(): void {
@@ -52,8 +59,12 @@ export struct EmbeddingSettingsView {
     Column({ space: 14 }) {
       Row() {
         Button('‹ 返回').id('r2-embedding-back').onClick((): void => { this.clearSecret(); this.onBack(); }).constraintSize({ minHeight: 44 })
-        Text('嵌入模型').fontSize(20).fontWeight(FontWeight.Bold).layoutWeight(1)
+      Text('嵌入模型').fontSize(20).fontWeight(FontWeight.Bold).layoutWeight(1)
       }.width('100%')
+      Text('统一新导入自动全量：正文/OCR与图片描述+标签。接收方为当前硅基流动 BGE-M3，可能收费；旧免费许可不授权此模式。').fontSize(13).width('100%')
+      Row() { Checkbox().id('upd-embedding-cost').select(this.unifiedCost).onChange((v: boolean): void=> { this.unifiedCost=v; }); Text('确认全部上述实际文本自动发送及可能费用').layoutWeight(1) }.width('100%')
+      Row() { Checkbox().id('upd-embedding-baseline').select(this.unifiedBaseline).onChange((v: boolean): void=> { this.unifiedBaseline=v; }); Text('接受当前配置的新统一policy工程基线；非供应商用量保证').layoutWeight(1) }.width('100%')
+      Button(this.unifiedOn?'关闭统一自动嵌入':'启用统一自动全量嵌入').id('upd-embedding-enable').enabled(this.unifiedSettings!==undefined && (this.unifiedOn || this.unifiedCost && this.unifiedBaseline)).onClick((): void=> { this.saveUnified(); })
       Select([{ value: '硅基流动' },{ value: '阿里云百炼' },{ value: 'Gemini' },{ value: 'OpenAI' }])
         .value(this.config.provider).enabled(!this.busy).onSelect((index: number): void => { this.selectProvider(index); })
       if (this.config.provider === EmbeddingProvider.Bailian) {

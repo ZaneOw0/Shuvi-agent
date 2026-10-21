@@ -1,6 +1,7 @@
 import { KnowledgeHit, KnowledgeResultMatch, KnowledgeResultRange, KnowledgeResultSegment, KnowledgeMatchKind, KnowledgeChannel, KnowledgeSourceKind } from '../domain/KnowledgeSearchModels';
 import { TextQueryInput } from '../domain/TextKnowledgeModels';
 import { prepareTextQuery } from './QueryPreparation';
+import { UnifiedSearchRange } from '../domain/UnifiedQueryModels';
 
 export function knowledgeAsciiFold(text: string): string {
   let output: string = ''; for (let at: number = 0; at < text.length; at++) { const code: number = text.charCodeAt(at); output += code >= 65 && code <= 90 ? String.fromCharCode(code+32) : text.charAt(at); } return output;
@@ -15,7 +16,7 @@ export function knowledgeMatch(hit: KnowledgeHit, input: TextQueryInput, allowSi
   }
   ranges.sort((a: KnowledgeResultRange,b: KnowledgeResultRange): number => a.start-b.start || a.end-b.end);
   for (const range of ranges) { const last = match.ranges[match.ranges.length-1]; if (last !== undefined && range.start <= last.end) { last.end = Math.max(last.end,range.end); } else { match.ranges.push(range); } }
-  match.kind = match.ranges.length > 0 ? KnowledgeMatchKind.Direct : allowSimilar && (hit.sourceKind === KnowledgeSourceKind.Pdf || hit.sourceKind === KnowledgeSourceKind.Image) && hit.channels.indexOf(KnowledgeChannel.Vector) >= 0 && hit.spaceId.length > 0 && hit.vectorGeneration.length > 0 && hit.vectorDistance !== undefined && Number.isFinite(hit.vectorDistance) ? KnowledgeMatchKind.Similar : KnowledgeMatchKind.Unclassified; return match;
+  match.kind = match.ranges.length > 0 ? KnowledgeMatchKind.Direct : allowSimilar && (hit.sourceKind === KnowledgeSourceKind.Pdf || hit.sourceKind === KnowledgeSourceKind.Image || hit.sourceKind === KnowledgeSourceKind.Docx) && hit.channels.indexOf(KnowledgeChannel.Vector) >= 0 && hit.spaceId.length > 0 && hit.vectorGeneration.length > 0 && hit.vectorDistance !== undefined && Number.isFinite(hit.vectorDistance) ? KnowledgeMatchKind.Similar : KnowledgeMatchKind.Unclassified; return match;
 }
 export function knowledgeLiteralScore(text: string, input: TextQueryInput): number {
   const hit = new KnowledgeHit(); hit.text = text; const match = knowledgeMatch(hit,input,false); return match.matchedTerms.length*100+match.ranges.length;
@@ -33,4 +34,9 @@ export function knowledgeSegments(hit: KnowledgeHit): KnowledgeResultSegment[] {
     const marked = new KnowledgeResultSegment(); marked.id = `${range.start}:${range.end}:match`; marked.text = hit.text.slice(range.start,range.end); marked.matched = true; result.push(marked); cursor = range.end;
   }
   if (cursor < hit.text.length) { const plain = new KnowledgeResultSegment(); plain.id = `${cursor}:end`; plain.text = hit.text.slice(cursor); result.push(plain); } return result;
+}
+export function unifiedDirectRanges(text: string, actual: string, evidence: string): UnifiedSearchRange[] {
+  if (['Body','Ocr','Formula'].indexOf(evidence)<0) { return []; }
+  const hit: KnowledgeHit=new KnowledgeHit(); hit.text=text; const result: UnifiedSearchRange[]=[];
+  for (const range of knowledgeMatch(hit,prepareTextQuery(actual),false).ranges) { const r: UnifiedSearchRange=new UnifiedSearchRange(); r.start=range.start; r.end=range.end; result.push(r); } return result;
 }

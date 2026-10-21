@@ -12,14 +12,14 @@ export class TextKnowledgeAssembly implements TextStateListener {
   repository: TextRdbRepository;
   private onChanged: () => void;
   constructor(context: common.Context, onChanged: () => void, host: KnowledgeStoreHost = KnowledgeStoreHost.forContext(context)) {
-    const assets: TextFileAdapter = new TextFileAdapter(context);
+    const assets: TextFileAdapter = new TextFileAdapter(context,host);
     const repository: TextRdbRepository = new TextRdbRepository(context, host); this.repository = repository;
     this.service = new TextKnowledgeService(assets, assets, new TextProcessingAdapter(), repository);
     this.onChanged = onChanged; this.service.subscribe(this);
   }
   changed(): void { this.onChanged(); }
-  async initialize(): Promise<void> {
-    try { await this.service.initialize(); hilog.info(0xD002, 'TextKnowledge', 'session initialized; local L0 only'); }
+  async initialize(deferRecovery: boolean = false): Promise<void> {
+    try { await this.service.initialize(deferRecovery); hilog.info(0xD002, 'TextKnowledge', 'session initialized; local L0 only'); }
     catch { hilog.error(0xD002, 'TextKnowledge', 'session initialization failed; no data reset'); throw new Error('用户知识库打开失败，资料未清理'); }
   }
   async close(): Promise<void> { this.service.unsubscribe(this); await this.service.close(); }

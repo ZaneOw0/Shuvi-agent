@@ -5,7 +5,7 @@ export enum EmbeddingAccess { Public = 'Public', Workspace = 'Workspace' }
 export enum EmbeddingModelSource { Manual = 'Manual', Remote = 'RemoteCurrentCredential' }
 export enum EmbeddingCapability { VerifiedContract = 'VerifiedContract', ContractUnverified = 'ContractUnverified', ManualOnly = 'ManualOnly' }
 export enum EmbeddingCredentialStatus { Missing = 'Missing', Configured = 'Configured', Unavailable = 'Unavailable' }
-export enum EmbeddingPurpose { Models = 'ModelList', Probe = 'Probe', Corpus = 'PdfCorpus', Query = 'Query', ImageCorpus = 'ImageCorpus' }
+export enum EmbeddingPurpose { Models = 'ModelList', Probe = 'Probe', Corpus = 'PdfCorpus', Query = 'Query', ImageCorpus = 'ImageCorpus', DocxCorpus = 'DocxCorpus' }
 export enum EmbeddingFreeEligibility { Unknown = 'Unknown', Confirmed = 'UserConfirmedForThisAction', Ineligible = 'Ineligible' }
 export enum EmbeddingDetectionStatus { Untested = 'Untested', Running = 'Running', Passed = 'Passed', Failed = 'Failed', Stale = 'Stale' }
 export enum EmbeddingJobStage {
@@ -94,4 +94,9 @@ export class EmbeddingViewState {
   credential: EmbeddingCredentialStatus = EmbeddingCredentialStatus.Missing; detection: EmbeddingDetection = new EmbeddingDetection();
   busy: boolean = false; message: string = ''; inputEpoch: number = 0;
   inputGate: string = 'InputLimitUnverified'; corpusEnabled: boolean = false; queryEnabled: boolean = false;
+}
+// New settings-level cost approval is not an EmbeddingFreeEligibility value.
+export class UnifiedEmbeddingCostReceipt {
+  policy: string = 'UNIFIED-KNOWLEDGE-TEXT-1'; settingsRevision: number = 0; costRevision: number = 0;
+  configBinding: string = ''; inputHash: string = ''; attemptId: string = ''; possibleCost: boolean = true;
 }

@@ -1,5 +1,13 @@
 // Supplemental host checks of pure logic, NOT ArkUI/Hypium/device execution.
 // Reuses the installed SDK compiler; adds no dependency and never ships in the HAP.
+if (process.argv.includes('--unified-only')) {
+  require('./unified-host-entry.cjs').run().catch(error => { const message=String(error?.message||'');const moduleName=message.startsWith('UPD_ALLOWLIST:')?message.slice(14).replace(/[^A-Za-z0-9_/-]/g,''):'NotReported';console.log(`UPD_HOST_SETUP_FAIL category=${error?.constructor?.name||'Error'} module=${moduleName}`);process.exitCode = 1; });
+  return;
+}
+if (process.argv.includes('--docx-only')) {
+  require('./docx-host-entry.cjs').run().catch(() => { process.exitCode = 1; });
+  return;
+}
 if (process.argv.includes('--image-only') || process.argv.includes('--image-happy-path')) {
   require('./image-host-entry.cjs');
   return;

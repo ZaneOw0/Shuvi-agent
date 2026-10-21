@@ -80,6 +80,8 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
     this.requireDetection(); const basis = await this.baseline(); if (!embeddingBaselineMatches(basis,this.config)) { throw new KnowledgeFailure('EngineeringBaselineNotAccepted','space'); }
     const space: EmbeddingSpace = new EmbeddingSpace(); space.id = this.identity.id(); space.provider = this.config.provider; space.region = this.config.region; space.access = this.config.access; space.workspaceId = this.config.workspaceId; space.configFingerprint = embeddingFingerprint(this.config); space.requestedModel = this.config.modelId; space.returnedModel = this.detection.returnedModel; space.dimension = this.detection.dimension; space.profileId = basis.profile; space.profileRevision = basis.revision; space.tokenizerSha256 = basis.tokenizer; space.profileParameters = basis.parameters; space.rolePair = 'SingleStringNoInventedPrefix'; space.detectionFingerprint = `${this.detection.probeHash}|${this.detection.dimension}`;
     if (sourceKind === 'Image') { space.preprocessing = 'IMAGE-EMBED-TEXT-1'; }
+    else if (sourceKind === 'Docx') { space.preprocessing = 'DOCX-EMBED-TEXT-1'; }
+    else if (sourceKind !== 'Pdf') { throw new KnowledgeFailure('UnknownCorpusSource','space'); }
     space.fingerprint = await this.identity.hash(pdfCodecUtf8(JSON.stringify([space.provider,space.region,space.access,space.workspaceId,space.requestedModel,space.returnedModel,space.providerRevision,space.dimension,space.profileId,space.profileRevision,space.tokenizerSha256,space.profileParameters,space.preprocessing,space.rolePair,space.normalization,space.metric])));
     const existing = (await this.spaces()).find((item: EmbeddingSpace): boolean => item.fingerprint === space.fingerprint); return existing ?? space;
   }
@@ -99,7 +101,7 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
   }
   private async vectorizeLeased(documentId: string, free: boolean, resumeId: string, resendUnknown: boolean, fullScope: boolean, epoch: number, cancel: KnowledgeCancellation): Promise<void> {
     this.requireDetection(); const plan: VectorCorpusPlan = await this.repository.corpus(documentId); if (plan.document.archived) { throw new KnowledgeFailure('ArchivedCorpusNotWritable','embedding-workflow'); } const space: EmbeddingSpace = await this.space(plan.document.sourceKind);
-    const corpusPurpose: EmbeddingPurpose = plan.document.sourceKind === 'Image' ? EmbeddingPurpose.ImageCorpus : EmbeddingPurpose.Corpus;
+    const corpusPurpose: EmbeddingPurpose = plan.document.sourceKind === 'Docx' ? EmbeddingPurpose.DocxCorpus : plan.document.sourceKind === 'Image' ? EmbeddingPurpose.ImageCorpus : EmbeddingPurpose.Corpus;
     const grant: EmbeddingGrant = this.grant(corpusPurpose,space,free); grant.documentId = documentId; grant.generation = plan.document.activeContentGeneration; grant.snapshotHash = plan.snapshotHash;
     grant.expiresAt = Math.min(grant.expiresAt,cancel.deadline);
     for (const input of plan.inputs) { cancel.check(); const hash: string = await this.identity.hash(pdfCodecUtf8(input.chunk.embeddingText)); if (hash !== input.chunk.inputHash) { throw new KnowledgeFailure('CorpusInputHashMismatch','embedding-workflow'); } grant.inputHashes.push(hash); grant.inputEvidence.push(await this.evidence(input.chunk.embeddingText,'document',hash)); }
@@ -153,6 +155,8 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
     } catch (error) { if (error instanceof Error) { this.invalidateResponse(error); } if (job !== undefined) { await this.repository.pauseJob(job,error instanceof KnowledgeFailure ? error.category : 'PlatformOrTransportFailed'); job.stage = EmbeddingJobStage.Paused; } if (error instanceof Error) { throw error; } throw new KnowledgeFailure('VectorWorkflowFailed','embedding-workflow'); }
   }
   private async verify(job: EmbeddingJob, input: VectorInputRecord, row: KnowledgeVectorRow): Promise<void> {
+    const space: EmbeddingSpace | undefined = (await this.repository.spaces()).find((s: EmbeddingSpace): boolean => s.id === job.spaceId);
+    if (space === undefined || row.values.length !== space.dimension || row.values.some((n: number): boolean => !Number.isFinite(n))) { throw new KnowledgeFailure('VectorReadbackDimensionOrFinite','embedding-workflow'); }
     if (row.documentId !== job.documentId || row.contentGeneration !== job.contentGeneration || row.vectorGeneration !== job.vectorGeneration || row.spaceId !== job.spaceId || row.inputHash !== input.chunk.inputHash || row.chunkId !== input.chunk.id || row.epoch !== job.epoch || row.eligible) { throw new KnowledgeFailure('VectorReadbackIdentity','embedding-workflow'); }
     await this.repository.inputState(job,input.chunk.id,VectorInputState.Verified,await this.identity.hash(vectorReadbackProjection(row)));
   }
@@ -202,7 +206,9 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
     await this.vectors.open(); const job = (await this.jobs()).find((item: EmbeddingJob): boolean => item.vectorGeneration === target.vectorGeneration && item.contentGeneration === target.contentGeneration && item.spaceId === target.spaceId);
     if (job === undefined) { throw new KnowledgeFailure('MirrorJobMissing','mirror'); }
     const inputs = await this.repository.inputs(job);
-    for (const input of inputs) { const read = await this.vectors.read(target.spaceId,input.chunk.id,target.vectorGeneration); if (read === undefined || read.documentId !== documentId || read.contentGeneration !== target.contentGeneration || read.inputHash !== input.chunk.inputHash || await this.identity.hash(vectorReadbackProjection(read)) !== input.readbackHash || input.state !== VectorInputState.Verified) { throw new KnowledgeFailure('MirrorCoverageReadbackChanged','mirror'); } }
+    const space: EmbeddingSpace | undefined = (await this.repository.spaces()).find((s: EmbeddingSpace): boolean => s.id === target.spaceId);
+    if (space === undefined) { throw new KnowledgeFailure('MirrorSpaceMissing','mirror'); }
+    for (const input of inputs) { const read = await this.vectors.read(target.spaceId,input.chunk.id,target.vectorGeneration); if (read === undefined || read.values.length !== space.dimension || read.values.some((n: number): boolean => !Number.isFinite(n)) || read.documentId !== documentId || read.contentGeneration !== target.contentGeneration || read.inputHash !== input.chunk.inputHash || await this.identity.hash(vectorReadbackProjection(read)) !== input.readbackHash || input.state !== VectorInputState.Verified) { throw new KnowledgeFailure('MirrorCoverageReadbackChanged','mirror'); } }
     await this.vectors.synchronize(target);
     for (const input of inputs) { const read = await this.vectors.read(target.spaceId,input.chunk.id,target.vectorGeneration); if (read === undefined || !read.eligible || read.epoch !== target.epoch || await this.identity.hash(vectorReadbackProjection(read)) !== input.readbackHash) { throw new KnowledgeFailure('MirrorEligibilityReadbackChanged','mirror'); } }
     await this.repository.acknowledge(target);
@@ -233,7 +239,9 @@ export class EmbeddingWorkflow implements KnowledgeSemanticSearchPort, Knowledge
     const epoch: number = this.epoch;
     const started: number = Date.now();
     if (!consent || !free) { throw new KnowledgeFailure('QueryConsentOff','query'); } this.requireDetection();
-    const space = (await this.spaces()).find((item: EmbeddingSpace): boolean => item.id === spaceId); const current = await this.space(space?.preprocessing === 'IMAGE-EMBED-TEXT-1' ? 'Image' : 'Pdf'); if (space === undefined || current.fingerprint !== space.fingerprint || current.id !== spaceId) { throw new KnowledgeFailure('QuerySpaceMismatch','query'); }
+    const space = (await this.spaces()).find((item: EmbeddingSpace): boolean => item.id === spaceId);
+    if (space === undefined || ['DOCX-EMBED-TEXT-1','IMAGE-EMBED-TEXT-1','PDF-EMBED-TEXT-1'].indexOf(space.preprocessing) < 0) { throw new KnowledgeFailure('QuerySpaceUnknown','query'); }
+    const current = await this.space(space.preprocessing === 'DOCX-EMBED-TEXT-1' ? 'Docx' : space.preprocessing === 'IMAGE-EMBED-TEXT-1' ? 'Image' : 'Pdf'); if (current.fingerprint !== space.fingerprint || current.id !== spaceId) { throw new KnowledgeFailure('QuerySpaceMismatch','query'); }
     const grant: EmbeddingGrant = this.grant(EmbeddingPurpose.Query,space,free); grant.expiresAt = Math.min(grant.expiresAt,cancel.deadline); const hash: string = await this.identity.hash(pdfCodecUtf8(input)); grant.inputHashes = [hash]; grant.inputEvidence = [await this.evidence(input,'query',hash)]; embeddingAuthorize(this.config,grant,EmbeddingPurpose.Query); cancel.check();
     const targets: VectorEligibility[] = await this.repository.targets(spaceId,archived,extras); if (targets.length === 0) { throw new KnowledgeFailure('NoSyncedVectorAuthority','query'); }
     cancel.check(); if (epoch !== this.epoch) { throw new KnowledgeFailure('StaleQueryPreparation','query'); }

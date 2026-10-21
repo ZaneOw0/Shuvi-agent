@@ -1,10 +1,16 @@
 import {
   DocumentOriginal, DocumentParseGrant, DocumentParseSnapshot, DocumentCredentialStatus, DocumentParseUsage,
   DocumentParseFailure, DocumentParseBudget, DocumentParseFormat, DocumentPreflightStatus,
-  DocumentRemoteState, DocumentTestAcknowledgement, ImageParsePermit, ParseFailureKind, DocumentParseTask
+  DocumentRemoteState, DocumentTestAcknowledgement, ImageParsePermit, ParseFailureKind, DocumentParseTask, DocxParsePermit
 } from '../domain/DocumentParseModels';
 
 export function documentSubmitReason(original: DocumentOriginal, grant: DocumentParseGrant | undefined, snapshot: DocumentParseSnapshot, credential: DocumentCredentialStatus): string {
+  if (original.format === DocumentParseFormat.Docx) {
+    const permit: DocxParsePermit | undefined = snapshot.docxPermits.find((p: DocxParsePermit): boolean => p.originalId === original.id && p.hash === original.hash && p.version === original.version && p.credentialRevision === snapshot.config.credentialRevision);
+    if (permit === undefined || !permit.fullFile || !permit.freeEligible || permit.parameters !== DocxParsePermit.parameters) { return '需确认当前完整DOCX（含隐藏/修订/批注/辅助内容）和本次免费资格'; }
+    if (permit.taskId.length > 0 || permit.usage.allocation > 0) { return '已有DOCX请求账本，仅恢复原任务，不重建'; }
+    if (permit.stoppedReason.length > 0 || snapshot.tasks.some((t: DocumentParseTask): boolean => t.credentialRevision === snapshot.config.credentialRevision && [ParseFailureKind.Auth,ParseFailureKind.Quota,ParseFailureKind.RateLimit].indexOf(t.failureDetail.kind) >= 0)) { return '当前凭据/任务失败待核，不自动重发'; }
+  }
   if (documentIsImage(original.format)) {
     const legacy: boolean = imageTestInputId(original.hash,original.bytes).length > 0;
     if (snapshot.tasks.some((task: DocumentParseTask): boolean => task.credentialRevision === snapshot.config.credentialRevision && [ParseFailureKind.Auth,ParseFailureKind.Quota,ParseFailureKind.RateLimit].indexOf(task.failureDetail.kind) >= 0)) { return '同凭据鉴权/额度/限频状态待核；未创建新任务'; }
@@ -45,6 +51,9 @@ export function documentAcknowledged(a: DocumentTestAcknowledgement): boolean {
   return a.fullFile && a.embeddedImages && a.nonSensitive && a.privacyUnknown && a.freeEligible;
 }
 export function documentGrantMatches(original: DocumentOriginal, grant: DocumentParseGrant, revision: number): boolean {
+  if (original.format === DocumentParseFormat.Docx) {
+    return !grant.revoked && grant.id.length > 0 && grant.originalId === original.id && grant.hash === original.hash && grant.version === original.version && grant.format === DocumentParseFormat.Docx && grant.credentialRevision === revision && grant.policy === DocxParsePermit.policy && grant.parameters === DocxParsePermit.parameters && grant.acknowledgement.fullFile && grant.acknowledgement.freeEligible && Number.isSafeInteger(grant.issuedAt) && grant.issuedAt > 0;
+  }
   if (documentIsImage(original.format)) {
     const policy: string = imageTestInputId(original.hash,original.bytes).length > 0 ? ImageParsePermit.policy : ImageParsePermit.productionPolicy;
     return !grant.revoked && grant.id.length > 0 && grant.originalId === original.id && grant.hash === original.hash && grant.version === original.version && grant.format === original.format && grant.credentialRevision === revision && grant.policy === policy && grant.parameters === ImageParsePermit.parameters && grant.acknowledgement.fullFile && grant.acknowledgement.freeEligible && Number.isSafeInteger(grant.issuedAt) && grant.issuedAt > 0;

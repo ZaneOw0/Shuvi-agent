@@ -2,6 +2,8 @@ import { KnowledgeSourceProtectionPort } from '../domain/KnowledgePorts';
 import {
   KnowledgeFailure, PdfKnowledgeDocument, PdfIngestionJob, KnowledgePin, KnowledgeReadLease, KnowledgeCleanupIntent, KnowledgeCleanupTarget
 } from '../domain/PdfKnowledgeModels';
+import { ParsedLifecycleRepositoryPort, ParsedLifecycleAssetsPort, ParsedLifecycleMirrorPort } from '../domain/ParsedLifecyclePorts';
+import { ParsedFailure } from '../domain/ParsedDocumentModels';
 
 export interface KnowledgePinRepository {
   ready(): boolean;
@@ -13,7 +15,11 @@ export interface KnowledgePinRepository {
 export class KnowledgeLifecycleService implements KnowledgeSourceProtectionPort {
   private repository: KnowledgePinRepository;
   private imageProtection: ((assets: string[]) => Promise<void>) | undefined = undefined;
+  private docxProtection: ((assets: string[]) => Promise<void>) | undefined = undefined;
+  private unifiedProtection: ((assets: string[]) => Promise<void>) | undefined = undefined;
+  attachUnifiedProtection(check: (assets: string[]) => Promise<void>): void { this.unifiedProtection = check; }
   attachImageProtection(check: (assets: string[]) => Promise<void>): void { this.imageProtection = check; }
+  attachDocxProtection(check: (assets: string[]) => Promise<void>): void { this.docxProtection = check; }
   // A single queue is deliberately stronger than per-source locking. Cleanup records
   // may contain several sources; keeping them together prevents lock-order races.
   private tail: Promise<void> = Promise.resolve();
@@ -24,8 +30,10 @@ export class KnowledgeLifecycleService implements KnowledgeSourceProtectionPort 
   }
   private requireReady(): void { if (!this.repository.ready()) { throw new KnowledgeFailure('ProtectionUnavailable', 'source-lifecycle'); } }
   async assertDeletable(sourceId: string, assetIds: string[]): Promise<void> {
+    if (this.unifiedProtection !== undefined) { await this.unifiedProtection(assetIds); }
     this.requireReady();
     if (this.imageProtection !== undefined) { await this.imageProtection(assetIds); }
+    if (this.docxProtection !== undefined) { await this.docxProtection(assetIds); }
     if ((await this.repository.pins(sourceId, assetIds)).length > 0) { throw new KnowledgeFailure('KnowledgeSourcePinned', 'source-delete'); }
     if (assetIds.length > 0) { await this.repository.assertNoReaders(assetIds); }
   }
@@ -81,4 +89,18 @@ export class KnowledgeDerivedLifecycle {
       await this.repository.finishCleanup(claim,failure);
     }
   }
+}
+export class ParsedDocumentLifecycle {
+  private repository: ParsedLifecycleRepositoryPort; private assets: ParsedLifecycleAssetsPort; private mirror: ParsedLifecycleMirrorPort;
+  private invalidate: () => void; private changed: () => void;
+  message: string='';
+  constructor(repository: ParsedLifecycleRepositoryPort, assets: ParsedLifecycleAssetsPort, mirror: ParsedLifecycleMirrorPort, invalidate: () => void, changed: () => void) { this.repository=repository; this.assets=assets; this.mirror=mirror; this.invalidate=invalidate; this.changed=changed; }
+  async archive(id: string, archived: boolean): Promise<void> { this.message=''; this.invalidate(); await this.repository.setUnifiedArchived(id,archived); await this.sync(); const detail=this.message; this.message=(archived?'已归档，后续增强停止；本机资料保留':'已恢复本机资料，未重新上传或嵌入')+(detail.length>0?'；'+detail:''); this.changed(); }
+  async deleteDocument(id: string, confirmed: boolean): Promise<void> { if (!confirmed) { return; } this.message=''; this.invalidate(); await this.repository.deleteUnified(id); await this.sync(); const mirrorMessage=this.message; await this.cleanup(); const cleanupMessage=this.message; this.message='已删除当前资料；共享资产按其他父来源/读租约/任务持有保留'+(mirrorMessage.length>0?'；'+mirrorMessage:'')+(cleanupMessage.length>0?'；'+cleanupMessage:''); this.changed(); }
+  async retire(document: string, generation: string, confirmed: boolean): Promise<void> { if (!confirmed) { return; } await this.repository.retireUnifiedGeneration(document,generation); await this.cleanup(); this.changed(); }
+  async retired(document: string): Promise<string[]> { return this.repository.retiredGenerationIds(document); }
+  async unknownResources(): Promise<string[]> { const ids: string[]=[]; for (const job of await this.repository.jobs()) { if (job.state==='Unknown' && job.resourcePhase!=='Released' && (await this.repository.get(job.documentKey))?.tombstone) { ids.push(job.id); } } return ids; }
+  async releaseUnknown(id: string, confirmed: boolean): Promise<void> { if (!confirmed) { return; } await this.repository.acknowledgeUnknownRelease(id); await this.cleanup(); this.message='已明确放弃已删文档的本机结果追踪；未取消或确认远端请求'; this.changed(); }
+  async sync(): Promise<void> { await this.repository.reconcileUnifiedOwners(); try { await this.mirror.reconcileCurrentOwners(); } catch { this.message='本机镜像协调未完成；普通库当前资格已撤，未发送请求'; } }
+  async cleanup(): Promise<void> { this.message=''; await this.repository.retryReadReleases(); await this.repository.retryProcessingReleases(); let pending: number=0; for (const id of await this.repository.unifiedCleanupAssets()) { if (!await this.assets.cleanup(id)) { pending++; } } if (pending>0) { this.message=`仍有 ${pending} 个资产待读取/任务释放或清理重试`; } this.changed(); }
 }

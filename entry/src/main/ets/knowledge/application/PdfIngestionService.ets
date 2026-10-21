@@ -24,6 +24,8 @@ export class PdfIngestionService {
   private repository: PdfIngestionRepository; private lifecycle: KnowledgeLifecycleService; private archive: PdfArchivePort;
   private normalizer: PdfNormalizationPort; private assets: PdfAssetPort; private identity: KnowledgeIdentityPort;
   private active: KnowledgeCancellation | undefined = undefined; private snapshot: PdfNormalizedDocument | undefined = undefined;
+  private unifiedConsumer: ((parse: DocumentParseService, result: string) => Promise<void>) | undefined;
+  attachUnifiedConsumer(consumer: (parse: DocumentParseService, result: string) => Promise<void>): void { this.unifiedConsumer = consumer; }
   constructor(repository: PdfIngestionRepository, lifecycle: KnowledgeLifecycleService, archive: PdfArchivePort, normalizer: PdfNormalizationPort, assets: PdfAssetPort, identity: KnowledgeIdentityPort) {
     this.repository = repository; this.lifecycle = lifecycle; this.archive = archive; this.normalizer = normalizer; this.assets = assets; this.identity = identity;
   }
@@ -103,6 +105,7 @@ export class PdfIngestionService {
     binding.taskId = task.id; binding.dataId = task.dataId; binding.resultAssetId = result.assetId; binding.zipHash = result.hash; binding.zipBytes = result.bytes; binding.requestMode = grant?.parameters ?? 'NotRecorded'; binding.backend = 'NotRecorded'; binding.producerVersion = 'NotRecorded'; return binding;
   }
   async prepare(parse: DocumentParseService, resultId: string): Promise<void> {
+    if (this.unifiedConsumer !== undefined) { await this.unifiedConsumer(parse,resultId); return; }
     if (this.state.busy || this.state.releasing) { return; }
     this.state = new PdfIngestionState(); this.snapshot = undefined; this.state.busy = true; this.state.stage = PdfStage.Validating; const cancel: KnowledgeCancellation = new KnowledgeCancellation(); this.active = cancel; this.emit(); let readLeaseId: string = '';
     let currentJob: PdfIngestionJob | undefined = undefined;

@@ -13,6 +13,7 @@ export struct DocumentParseView {
   onPreparePdf: (resultId: string) => void = (_resultId: string): void => {};
   onPrepareImage: (resultId: string) => void = (_resultId: string): void => {};
   onOpenImages: () => void = (): void => {};
+  onOpenDocx: () => void = (): void => {};
   @Prop @Watch('clearSecret') clearEpoch: number = 0;
   @State private tokenInput: string = '';
   @State private credentialFeedback: string = '';
@@ -58,6 +59,10 @@ export struct DocumentParseView {
     const task = this.parseState.snapshot.tasks.find((item: DocumentParseTask): boolean => item.id === result.taskId);
     return this.parseState.snapshot.originals.some((original: DocumentOriginal): boolean => original.id === task?.originalId && documentIsImage(original.format));
   }
+  private isDocxResult(result: DocumentParseResultEnvelope): boolean {
+    const task: DocumentParseTask | undefined = this.parseState.snapshot.tasks.find((t: DocumentParseTask): boolean => t.id === result.taskId);
+    return this.parseState.snapshot.originals.some((o: DocumentOriginal): boolean => o.id === task?.originalId && o.format === DocumentParseFormat.Docx);
+  }
   build() {
     Column({ space: 14 }) {
       Row({ space: 12 }) {
@@ -72,6 +77,7 @@ export struct DocumentParseView {
       if (this.credentialFeedback.length > 0) {
         Text(this.credentialFeedback).fontSize(13).fontColor(Theme.amber).width('100%')
       }
+      Button('DOCX解析与入库').id('parse-open-docx').onClick(this.onOpenDocx)
       if (this.showSettings) {
       Text(this.parseState.credential).fontColor(Theme.muted).width('100%')
       TextInput({ text: this.tokenInput, placeholder: '输入 Token', controller: this.tokenController })
@@ -135,12 +141,13 @@ export struct DocumentParseView {
             Button('校验图片 ZIP 与审查正文').id('image-result-review-'+result.assetId).enabled(!this.parseState.busy)
               .onClick((): void => { this.onPrepareImage(result.assetId); })
           }
+          if (this.isDocxResult(result)) { Button('打开DOCX原生工作区').id('docx-result-open-'+result.assetId).enabled(!this.parseState.busy).onClick(this.onOpenDocx) }
         }.width('100%').alignItems(HorizontalAlign.Start)
       }, (result: DocumentParseResultEnvelope): string => result.assetId)
       Button('选择文件，仅保存原件').enabled(!this.parseState.busy).onClick((): void => { this.service?.prepare(); })
       Button('图片解析与入库').id('parse-open-images').enabled(!this.parseState.busy).onClick(this.onOpenImages)
       ForEach(this.parseState.snapshot.originals, (original: DocumentOriginal) => {
-        if (!documentIsImage(original.format)) {
+        if (!documentIsImage(original.format) && original.format !== DocumentParseFormat.Docx) {
           DocumentParseOriginalRow({ original: original, service: this.service, refreshEpoch: this.parseState.inputEpoch,
             submitBlockReason: this.service?.submitReason(original) ?? '解析能力不可用' })
         }

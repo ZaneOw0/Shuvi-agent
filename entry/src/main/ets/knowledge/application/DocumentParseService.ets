@@ -3,7 +3,7 @@ import {
   DocumentCredentialStatus, DocumentParseViewState, DocumentParseStateListener, DocumentParseFailure, documentValidateToken,
   DocumentParseCancellation, DocumentOriginal, DocumentFileSelection, DocumentParseGrant, DocumentTestAcknowledgement,
   DocumentParseAction, DocumentParseTask, DocumentParseStage, DocumentRemoteState, DocumentRemoteOccupancy,
-   DocumentParseBudget, DocumentAllocationReceipt, DocumentInspection, DocumentParseResultEnvelope, DocumentParseCleanup, DocumentParseUsage, documentCopySnapshot, DocumentPreflightStatus, DocumentParseFormat, DocumentImageEvidence, DocumentSelectedFile, ImageParsePermit, documentCopyFailure, ParseFailureKind
+   DocumentParseBudget, DocumentAllocationReceipt, DocumentInspection, DocumentParseResultEnvelope, DocumentParseCleanup, DocumentParseUsage, documentCopySnapshot, DocumentPreflightStatus, DocumentParseFormat, DocumentImageEvidence, DocumentSelectedFile, ImageParsePermit, documentCopyFailure, ParseFailureKind, DocxParsePermit
 } from '../domain/DocumentParseModels';
 import { MineruCredentialPort, DocumentParseRepositoryPort, DocumentSelectionPort, DocumentAssetPort, DocumentPreflightPort, MineruTaskPort, DocumentParseClockPort, DocumentImageResultSourcePort } from '../domain/DocumentParsePorts';
 import { documentBudgetCheck, documentUsage, documentAcknowledged, documentSubmitReason, documentGrantMatches, documentRemoteTerminal, documentSafeId, documentHashValid, documentIsImage, documentSuffix, imagePermitInputId, imagePermitPolicy } from '../pipeline/DocumentParsePolicy';
@@ -29,11 +29,33 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
   private scope: KnowledgeStorageScope;
   attachLocalCapacity(check: (bytes: number) => Promise<void>): void { this.capacity = check; }
   attachSourceProtection(protection: KnowledgeSourceProtectionPort): void { this.sourceProtection = protection; }
+  async withReceivedResult<T>(resultId: string, action: (original: DocumentOriginal, result: DocumentParseResultEnvelope, task: DocumentParseTask) => Promise<T>): Promise<T> {
+    const protection: KnowledgeSourceProtectionPort | undefined = this.sourceProtection;
+    if (protection === undefined) { throw new DocumentParseFailure('原件保护不可用','统一本机消费'); }
+    const result: DocumentParseResultEnvelope | undefined = this.state.snapshot.results.find((r: DocumentParseResultEnvelope): boolean => r.assetId === resultId);
+    const task: DocumentParseTask | undefined = this.state.snapshot.tasks.find((t: DocumentParseTask): boolean => t.id === result?.taskId);
+    const original: DocumentOriginal | undefined = this.state.snapshot.originals.find((o: DocumentOriginal): boolean => o.id === task?.originalId);
+    if (original === undefined || result === undefined || task === undefined) { throw new DocumentParseFailure('已收来源不存在','统一本机消费'); }
+    return protection.withSource<T>(original.id,async (): Promise<T> => {
+      if (this.state.busy || !this.state.snapshot.originals.some((o: DocumentOriginal): boolean => o.id === original.id && o.hash === original.hash && o.version === original.version) ||
+        !result.completeTransport || !result.signature || result.originalHash !== original.hash || result.version !== original.version || task.hash !== original.hash || task.version !== original.version || result.dataId !== task.dataId ||
+        this.state.snapshot.cleanup.some((c: DocumentParseCleanup): boolean => c.assets.indexOf(original.assetId) >= 0 || c.assets.indexOf(result.assetId) >= 0)) { throw new DocumentParseFailure('来源变化或待清理','统一本机消费'); }
+      return action(original,result,task);
+    });
+  }
   async withImageOriginal<T>(originalId: string, action: () => Promise<T>): Promise<T> {
     const protection = this.sourceProtection;
     if (protection === undefined) { throw new DocumentParseFailure('原件保护不可用','图片本机核验'); }
     return protection.withSource<T>(originalId,async (): Promise<T> => {
       if (!this.state.snapshot.originals.some((o: DocumentOriginal): boolean => o.id === originalId && documentIsImage(o.format))) { throw new DocumentParseFailure('图片原件已变化','图片本机核验'); }
+      return action();
+    });
+  }
+  async withDocxOriginal<T>(originalId: string, action: () => Promise<T>): Promise<T> {
+    const protection: KnowledgeSourceProtectionPort | undefined = this.sourceProtection;
+    if (protection === undefined) { throw new DocumentParseFailure('原件保护不可用','DOCX本机动作'); }
+    return protection.withSource<T>(originalId,async (): Promise<T> => {
+      if (!this.state.snapshot.originals.some((o: DocumentOriginal): boolean => o.id === originalId && o.format === DocumentParseFormat.Docx)) { throw new DocumentParseFailure('DOCX原件已变化','DOCX本机动作'); }
       return action();
     });
   }
@@ -72,10 +94,16 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     const previous: number = original.version; original.version = version;
     try { await this.repository.save(this.state.snapshot); } catch { original.version = previous; throw new DocumentParseFailure('图片版本登记失败','图片换版'); } this.emit(); return original;
   }
+  async assignDocxVersion(originalId: string, version: number): Promise<DocumentOriginal> {
+    const original: DocumentOriginal | undefined = this.state.snapshot.originals.find((o: DocumentOriginal): boolean => o.id === originalId);
+    if (this.state.busy || original === undefined || original.format !== DocumentParseFormat.Docx || !Number.isSafeInteger(version) || version < 1 || this.state.snapshot.tasks.some((t: DocumentParseTask): boolean => t.originalId === originalId) || this.state.snapshot.docxPermits.some((p: DocxParsePermit): boolean => p.originalId === originalId)) { throw new DocumentParseFailure('DOCX版本登记不当前','换版'); }
+    const prior: number = original.version; original.version = version; try { await this.repository.save(this.state.snapshot); } catch { original.version = prior; throw new DocumentParseFailure('DOCX版本保存失败','换版'); } return original;
+  }
   private emit(): void { this.state.inputEpoch++; for (const listener of this.listeners) { listener.changed(); } }
   capabilitySummary(): string { return '四格式仅原件准备与转发；服务产物结构/原生定位未验证，不索引，不提供完整PDF预览或高亮'; }
   async initialize(): Promise<void> {
     await this.repository.open(); this.state.snapshot = await this.repository.load();
+    for (const grant of this.state.snapshot.grants) { if (grant.format === DocumentParseFormat.Docx) { grant.revoked = true; } }
     this.state.credential = await this.credential.status();
     for (const task of this.state.snapshot.tasks) {
       if (task.stage === DocumentParseStage.Allocation) { task.stage = DocumentParseStage.Uncertain; }
@@ -111,11 +139,12 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     const grant: DocumentParseGrant | undefined = this.state.snapshot.grants.find((g: DocumentParseGrant): boolean => g.originalId === original.id && !g.revoked);
     return documentSubmitReason(original, grant, this.state.snapshot, this.state.credential);
   }
-  async prepare(imagesOnly: boolean = false): Promise<void> {
+  async prepare(imagesOnly: boolean = false, docxOnly: boolean = false): Promise<void> {
     if (this.state.busy || this.selection === undefined || this.assets === undefined || this.preflight === undefined) { return; }
     this.state.busy = true; const cancel: DocumentParseCancellation = new DocumentParseCancellation(); this.localCancel = cancel;
     try {
-      const selected: DocumentFileSelection = imagesOnly && this.selection.selectImages !== undefined ? await this.selection.selectImages() : await this.selection.select(); cancel.check();
+      const selected: DocumentFileSelection = docxOnly && this.selection.selectDocx !== undefined ? await this.selection.selectDocx() : imagesOnly && this.selection.selectImages !== undefined ? await this.selection.selectImages() : await this.selection.select(); cancel.check();
+      if (docxOnly && selected.files.some((file: DocumentSelectedFile): boolean => documentSuffix(file.title) !== DocumentParseFormat.Docx)) { throw new DocumentParseFailure('DOCX入口只接受.docx','选择'); }
       if (imagesOnly && selected.files.some((file: DocumentSelectedFile): boolean => !documentIsImage(documentSuffix(file.title)))) { throw new DocumentParseFailure('图片入口不接受其他格式','选择'); }
       if (selected.canceled) { return; }
       let batchBytes: number = 0;
@@ -182,7 +211,31 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     if (prior === undefined) { this.state.snapshot.imagePermits.push(p); } this.state.snapshot.grants.push(g);
     try { await this.repository.save(this.state.snapshot); } catch { g.revoked = true; throw new DocumentParseFailure('本轮许可未保存','图片许可'); } this.emit();
   }
+  async confirmDocx(originalId: string, fullFile: boolean, free: boolean): Promise<void> {
+    if (this.state.busy) { throw new DocumentParseFailure('动作进行中','DOCX许可'); }
+    const o: DocumentOriginal | undefined = this.state.snapshot.originals.find((row: DocumentOriginal): boolean => row.id === originalId);
+    if (o === undefined || o.format !== DocumentParseFormat.Docx || o.preflight !== DocumentPreflightStatus.Passed || !fullFile || !free || this.state.credential !== DocumentCredentialStatus.Configured) { throw new DocumentParseFailure('当前DOCX/完整原件/免费或安全凭据未确认','DOCX许可'); }
+    const prior: DocxParsePermit | undefined = this.state.snapshot.docxPermits.find((p: DocxParsePermit): boolean => p.originalId === originalId);
+    if (prior !== undefined && (prior.hash !== o.hash || prior.version !== o.version || prior.actualFormat !== o.format || prior.credentialRevision !== this.state.snapshot.config.credentialRevision && (prior.taskId.length > 0 || prior.usage.allocation > 0))) { throw new DocumentParseFailure('原DOCX任务身份或凭据已变，只可核对原任务','DOCX许可'); }
+    const p: DocxParsePermit = prior ?? new DocxParsePermit(); p.originalId = o.id; p.hash = o.hash; p.version = o.version; p.actualFormat = o.format; p.credentialRevision = this.state.snapshot.config.credentialRevision; p.fullFile = fullFile; p.freeEligible = free;
+    const g: DocumentParseGrant = new DocumentParseGrant(); g.id = 'docx-grant-'+this.requireClock().id(); g.originalId = o.id; g.hash = o.hash; g.version = o.version; g.format = o.format; g.credentialRevision = p.credentialRevision; g.policy = DocxParsePermit.policy; g.parameters = DocxParsePermit.parameters; g.issuedAt = Date.now(); g.acknowledgement.fullFile = fullFile; g.acknowledgement.freeEligible = free;
+    for (const grant of this.state.snapshot.grants) { if (grant.originalId === originalId) { grant.revoked = true; } }
+    if (prior === undefined) { this.state.snapshot.docxPermits.push(p); } this.state.snapshot.grants.push(g);
+    try { await this.repository.save(this.state.snapshot); } catch { g.revoked = true; throw new DocumentParseFailure('DOCX许可持久化失败','DOCX许可'); } this.emit();
+  }
+  private async consumeDocx(action: DocumentParseAction, purpose: string): Promise<void> {
+    if (action.original.format !== DocumentParseFormat.Docx) { return; }
+    const p: DocxParsePermit | undefined = this.state.snapshot.docxPermits.find((permit: DocxParsePermit): boolean => permit.originalId === action.original.id);
+    if (p === undefined || p.hash !== action.original.hash || p.version !== action.original.version || p.actualFormat !== DocumentParseFormat.Docx || p.credentialRevision !== action.task.credentialRevision || p.parameters !== action.grant.parameters || !p.fullFile || !p.freeEligible || p.stoppedReason.length > 0 || !documentGrantMatches(action.original,action.grant,this.state.snapshot.config.credentialRevision) || p.taskId.length > 0 && p.taskId !== action.task.id) { throw new DocumentParseFailure('DOCX许可或原任务不当前','请求计数'); }
+    if (purpose === 'POST') { if (p.usage.allocation >= 1) { throw new DocumentParseFailure('DOCX已申请，禁止重建','请求计数'); } p.usage.allocation++; p.taskId = action.task.id; }
+    else if (purpose === 'PUT') { if (p.usage.put >= 1) { throw new DocumentParseFailure('DOCX已尝试上传，禁止补传','请求计数'); } p.usage.put++; }
+    else if (purpose === 'QUERY') { if (p.usage.query >= 90) { throw new DocumentParseFailure('DOCX累计查询已达90次','请求计数'); } p.usage.query++; }
+    else if (purpose === 'ZIP') { if (p.usage.download >= 1) { throw new DocumentParseFailure('DOCX已请求ZIP，仅可读缓存','请求计数'); } p.usage.download++; }
+    else { throw new DocumentParseFailure('请求用途未知','请求计数'); }
+    action.task.usage = p.usage; await this.repository.save(this.state.snapshot); this.check(action);
+  }
   private async consumeImage(action: DocumentParseAction, purpose: string): Promise<void> {
+    await this.consumeDocx(action,purpose);
     if (!documentIsImage(action.original.format)) { return; }
     const p = this.state.snapshot.imagePermits.find((permit: ImageParsePermit): boolean => permit.originalId === action.original.id && permit.hash === action.original.hash && permit.version === action.original.version && permit.fullFile && permit.freeEligible);
     if (p === undefined || p.actualFormat !== action.original.format || p.testInputId !== imagePermitInputId(action.original) || action.grant.policy !== imagePermitPolicy(p) || !documentGrantMatches(action.original,action.grant,this.state.snapshot.config.credentialRevision) || p.taskId.length > 0 && p.taskId !== action.task.id) { throw new DocumentParseFailure('图片许可身份不符','请求计数'); }
@@ -306,6 +359,8 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     action.task.failureDetail.outcomeUnknown = action.task.failureDetail.outcomeUnknown || action.task.stage === DocumentParseStage.UploadUnknown || action.task.stage === DocumentParseStage.Uncertain;
     action.task.failure = parseFailureSummary(action.task.failureDetail); action.task.failureStage = action.task.failureDetail.stage; action.task.failureCode = failure.serviceCode;
     const permit = this.state.snapshot.imagePermits.find((p: ImageParsePermit): boolean => p.taskId === action.task.id);
+    const docxPermit: DocxParsePermit | undefined = this.state.snapshot.docxPermits.find((p: DocxParsePermit): boolean => p.taskId === action.task.id);
+    if (docxPermit !== undefined && [ParseFailureKind.Auth,ParseFailureKind.Quota,ParseFailureKind.RateLimit,ParseFailureKind.Service].indexOf(action.task.failureDetail.kind) >= 0) { docxPermit.stoppedReason = parseSanitizedReason(action.task.failureDetail.sanitizedReason || action.task.failureDetail.kind); }
     if (permit !== undefined && ([ParseFailureKind.Auth,ParseFailureKind.Quota,ParseFailureKind.RateLimit,ParseFailureKind.Service].indexOf(action.task.failureDetail.kind) >= 0 || action.task.failureDetail.kind === ParseFailureKind.Unknown && (action.task.failureDetail.sdkCode.length > 0 || action.task.failureDetail.httpStatus > 0 || ['协议','控制响应','请求前'].indexOf(action.task.failureDetail.stage) >= 0))) { permit.stoppedReason = `revision=${action.task.credentialRevision};`+parseSanitizedReason(action.task.failureDetail.kind+' '+action.task.failureDetail.sanitizedReason).slice(0,260); }
     this.state.message = action.task.failure;
     try { await this.repository.save(this.state.snapshot); }
@@ -375,7 +430,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
         await this.repository.save(this.state.snapshot); return;
       }
       if (inspected.state === DocumentRemoteState.Waiting && !action.task.uploaded && recovery) {
-        if (documentIsImage(action.original.format)) { await this.checkpoint(action,DocumentParseStage.Paused); this.state.message = '同任务仍待文件；本轮禁止补传或重建'; return; }
+        if (documentIsImage(action.original.format) || action.original.format === DocumentParseFormat.Docx) { await this.checkpoint(action,DocumentParseStage.Paused); this.state.message = '同任务仍待文件；本轮禁止补传或重建'; return; }
         await this.checkpoint(action, DocumentParseStage.Waiting);
         await this.assets?.verify(action.original, action.cancel); this.check(action);
         await this.uploadOriginal(action, action.task.uploadAttempted);
@@ -415,6 +470,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     await this.checkpoint(action, DocumentParseStage.Paused); this.state.message = '前台等待窗口耗尽，云任务可能继续；可手动查询现有批次';
   }
   pauseImmediate(): void {
+    for (const grant of this.state.snapshot.grants) { if (grant.format === DocumentParseFormat.Docx) { grant.revoked = true; } }
     this.assets?.cancelLocal(); this.preflight?.cancelLocal();
     if (this.localCancel !== undefined) { this.localCancel.invalid = true; }
     if (this.activeAction !== undefined) {
@@ -432,7 +488,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     this.pauseImmediate(); try { await this.repository.save(this.state.snapshot); this.state.message = '已停本机动作，远端可能继续；未释放未知占用'; }
     catch { this.state.message = '暂停检查点保存失败，远端占用仍保留'; } this.emit();
   }
-  async close(): Promise<void> { await this.pause(); await this.repository.close(); this.listeners = []; }
+  async close(): Promise<void> { await this.pause(); if (this.sourceProtection!==undefined) { await this.sourceProtection.withSource<void>('',async (): Promise<void>=>{}); } await this.repository.close(); this.listeners = []; }
   async resume(taskId: string, sameAccountConfirmed: boolean): Promise<void> {
     if (this.state.busy || !sameAccountConfirmed || !this.state.snapshot.config.enabled || this.state.credential !== DocumentCredentialStatus.Configured) {
       this.state.message = '须启用解析并确认同账号继续先前同一测试任务；不会自动重提'; this.emit(); return;
@@ -540,6 +596,15 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
         if (stored !== undefined) { stored.queries++; stored.usage = permit.usage; }
         await this.repository.save(this.state.snapshot);
       }
+      const docxPermit: DocxParsePermit | undefined = this.state.snapshot.docxPermits.find((p: DocxParsePermit): boolean => p.taskId === slot.taskId);
+      if (docxPermit !== undefined) {
+        const source: DocumentOriginal | undefined = this.state.snapshot.originals.find((o: DocumentOriginal): boolean => o.id === docxPermit.originalId);
+        const grant: DocumentParseGrant | undefined = this.state.snapshot.grants.find((g: DocumentParseGrant): boolean => g.originalId === docxPermit.originalId && !g.revoked);
+        if (source === undefined || grant === undefined || !documentGrantMatches(source,grant,this.state.snapshot.config.credentialRevision) || docxPermit.credentialRevision !== slot.credentialRevision || docxPermit.usage.query >= 90) { throw new DocumentParseFailure('DOCX原件/当前同意或累计查询资格不足，保留原占用','占用查询'); }
+        action.original = source; action.grant = grant; action.task.originalId = source.id; action.task.hash = source.hash; action.task.version = source.version;
+        docxPermit.usage.query++; const stored: DocumentParseTask | undefined = this.state.snapshot.tasks.find((t: DocumentParseTask): boolean => t.id === slot.taskId);
+        if (stored !== undefined) { stored.queries++; stored.usage = docxPermit.usage; } await this.repository.save(this.state.snapshot);
+      }
       const inspected: DocumentInspection = await this.requireNetwork().inspect(action); action.cancel.check();
       if (inspected.batchId !== slot.batchId || inspected.dataId !== slot.dataId) { throw new DocumentParseFailure('占用复核身份不符', '查询'); }
       if (inspected.state === DocumentRemoteState.Failed) {
@@ -563,6 +628,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     finally { this.tombstoneCancel = undefined; this.state.busy = false; this.emit(); }
   }
   private occupancyRetireEligible(slot: DocumentRemoteOccupancy): boolean {
+    if (this.state.snapshot.docxPermits.some((p: DocxParsePermit): boolean => p.taskId === slot.taskId)) { return false; }
     if (this.state.snapshot.imagePermits.some((p: ImageParsePermit): boolean => p.taskId === slot.taskId)) { return false; }
     if (slot.retired) { return false; }
     const task: DocumentParseTask | undefined = this.state.snapshot.tasks.find((t: DocumentParseTask): boolean => t.id === slot.taskId);

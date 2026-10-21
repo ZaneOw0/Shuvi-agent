@@ -19,6 +19,47 @@ export class KnowledgeStoreHost {
   m1Ready: boolean = false;
   extensionReady: boolean = false;
   imageReady: boolean = false;
+  docxReady: boolean = false;
+  unifiedReady: boolean = false;
+  private unifiedRequired: boolean = false;
+  requireUnifiedProtection(): void { this.unifiedRequired = true; }
+  async unifiedHeldAssets(owner: string): Promise<string[]> {
+    if (!this.unifiedReady) { if (this.unifiedRequired) { throw new KnowledgeFailure('UnifiedProtectionUnavailable','cleanup'); } return []; }
+    const rows: relationalStore.ResultSet = await this.requireStore().querySql('SELECT asset FROM upd_asset_ref WHERE owner=? UNION SELECT asset FROM upd_read_lease WHERE owner=?',[owner,owner]);
+    const ids: string[] = []; try { while (rows.goToNextRow()) { ids.push(rows.getString(0)); } } finally { rows.close(); } return ids;
+  }
+  async assertUnifiedUnheld(owner: string, assets: string[]): Promise<void> {
+    const held: string[] = await this.unifiedHeldAssets(owner);
+    if (assets.some((id: string): boolean => held.indexOf(id) >= 0)) { throw new KnowledgeFailure('UnifiedAssetHeld','cleanup'); }
+  }
+  async unifiedLegacyRoute(namespace: string, id: string, active: string): Promise<boolean> {
+    if (!this.unifiedReady) { return false; }
+    const rows: relationalStore.ResultSet=await this.requireStore().querySql("SELECT l.doc FROM upd_legacy_link l JOIN upd_document d ON d.id=l.doc AND d.active=l.generation WHERE l.namespace=? AND l.legacy_id=? AND l.legacy_generation=? AND l.state='Committed'",[namespace,id,active]);
+    try { return rows.goToNextRow(); } finally { rows.close(); }
+  }
+  withUnifiedCleanup<T>(owner: string, assets: string[], action: () => Promise<T>): Promise<T> {
+    // The same queue excludes a concurrent addRef/lease between check and unlink.
+    return this.enqueue<T>(async (): Promise<T> => {
+      await this.assertUnifiedUnheld(owner,assets);
+      if (this.unifiedReady) {
+        await this.transaction(async (tx: relationalStore.Transaction): Promise<void> => {
+          for (const asset of assets) {
+            const rows: relationalStore.ResultSet = await tx.querySql('SELECT owner FROM upd_cleanup WHERE asset=?',[asset]);
+            try { if (rows.goToNextRow() && rows.getString(0) !== owner) { throw new KnowledgeFailure('CleanupOwnerConflict','cleanup'); } } finally { rows.close(); }
+            await tx.execute("INSERT OR REPLACE INTO upd_cleanup VALUES(?,?,'Claimed','')",[asset,owner]);
+          }
+        });
+      }
+      try {
+        const result: T = await action();
+        if (this.unifiedReady) { for (const asset of assets) { await this.requireStore().executeSql("UPDATE upd_cleanup SET state='Done',failure='' WHERE asset=? AND owner=?",[asset,owner]); } }
+        return result;
+      } catch (error) {
+        if (this.unifiedReady) { for (const asset of assets) { await this.requireStore().executeSql("UPDATE upd_cleanup SET state='Pending',failure='OwnerCleanupPending' WHERE asset=? AND owner=?",[asset,owner]); } }
+        if (error instanceof Error) { throw error; } throw new KnowledgeFailure('OwnerCleanupPending','cleanup');
+      }
+    });
+  }
   extensionFailure: string = '';
   sessionId: string = '';
   textChannel: TextChannel = TextChannel.Unavailable;
@@ -75,7 +116,7 @@ export class KnowledgeStoreHost {
       if (this.leases <= 0) { throw new KnowledgeFailure('LeaseUnderflow', 'ordinary-store'); }
       if (this.leases === 1 && this.store !== undefined) {
         if (this.closeFault) { this.closeFault = false; throw new KnowledgeFailure('InjectedCloseFailure','ordinary-store'); }
-        await this.store.close(); this.store = undefined; this.m1Ready = false; this.extensionReady = false; this.imageReady = false;
+        await this.store.close(); this.store = undefined; this.m1Ready = false; this.extensionReady = false; this.imageReady = false; this.docxReady = false; this.unifiedReady = false;
         this.textChannel = TextChannel.Unavailable;
       }
       this.leases--;

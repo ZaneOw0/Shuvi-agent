@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { TextCandidatePort, TextDirectCandidatePort } from '../domain/TextKnowledgePorts';
 import { knowledgeLiteralScore } from '../pipeline/KnowledgeMatchPolicy';
 import { KnowledgeStoreHost } from './KnowledgeStoreHost';
+import { knowledgePublicationBudget } from './KnowledgePublicationBudget';
 import { KnowledgeLegacyHistoryPort } from '../application/KnowledgeSearchService';
 import {
   TextBudget, TextFailure, TextDocument, TextFormat, TextStage, TextJob, TextChunk, TextUsage,
@@ -261,6 +262,7 @@ export class TextRdbRepository implements TextDirectCandidatePort, KnowledgeLega
           [doc.id,doc.original.hash,doc.version,job.id,job.cancelGeneration,TextStage.Prepared]);
         try { published = rows.goToNextRow(); } finally { rows.close(); }
         if (!published) { return; }
+        await knowledgePublicationBudget(transaction,'Text',doc.id,chunks);
         if (Date.now() - job.startedAt >= TextBudget.indexMs || job.stage !== TextStage.Prepared) { published = false; return; }
         const old: relationalStore.ResultSet = await transaction.querySql('SELECT active FROM text_doc WHERE id=?', [doc.id]);
         let oldGeneration: string = '';
@@ -389,6 +391,7 @@ export class TextRdbRepository implements TextDirectCandidatePort, KnowledgeLega
       if (failure.length > 0) { await this.requireStore().executeSql('UPDATE text_cleanup SET failure=? WHERE id=?', [failure,id]); return; }
       const items: TextCleanup[] = await this.cleanups(); const item: TextCleanup | undefined = items.find((c: TextCleanup): boolean => c.id === id);
       if (item === undefined) { return; }
+      await this.host.assertUnifiedUnheld('TextFileAdapter',item.assetIds);
       if (item.generation.length > 0 && await this.scalar('SELECT count(*) FROM text_doc WHERE active=?', [item.generation]) > 0) {
         throw new TextFailure('ACTIVE', 'cleanup', '拒绝清理活动世代');
       }

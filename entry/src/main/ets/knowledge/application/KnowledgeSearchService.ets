@@ -12,6 +12,7 @@ import { pdfCodecUtf8 } from '../pipeline/PdfSnapshotCodec';
 import { ResultPageReference } from '../domain/PdfLocalModels';
 import { KnowledgeSemanticSearchPort } from '../domain/VectorWorkflowModels';
 import { knowledgeWithin } from './KnowledgeDeadline';
+import { KnowledgeQuerySession } from './KnowledgeQuerySession';
 
 export interface KnowledgeSearchRepository {
   ready(): boolean;
@@ -28,6 +29,8 @@ export function knowledgeTextHit(source: TextHit): KnowledgeHit {
   hit.title = source.title; hit.text = source.text; hit.retrievalText = source.retrievalText; hit.locator.textRanges = source.ranges.slice(); hit.keywordScore = source.score; hit.channels = [KnowledgeChannel.Keyword]; return hit;
 }
 export class KnowledgeSearchService {
+  unifiedSession: KnowledgeQuerySession | undefined;
+  attachUnifiedSession(session: KnowledgeQuerySession): void { this.unifiedSession=session; }
   state: KnowledgeSearchState = new KnowledgeSearchState(); private text: TextCandidatePort; private pdf: KnowledgeSearchRepository;
   private identity: KnowledgeIdentityPort; private listeners: KnowledgeStateListener[] = []; private epoch: number = 0;
   private active: KnowledgeCancellation | undefined = undefined;

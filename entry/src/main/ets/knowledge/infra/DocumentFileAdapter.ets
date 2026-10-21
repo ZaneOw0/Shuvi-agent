@@ -10,6 +10,8 @@ import { MineruBoundedBytes } from '../pipeline/MineruProtocolCodec';
 import { documentSuffix, documentZipBoundary } from '../pipeline/DocumentParsePolicy';
 import { documentEnsureDirectory, documentAssetPath, documentReadRange, documentDigestHex, documentWorkerCheck, documentHashFile, documentContainerPreflight } from './DocumentFileOperations';
 import { KnowledgeStorageScope } from '../domain/KnowledgeStorageScope';
+import { docxPreflightPath } from './DocxArchiveAdapter';
+import { KnowledgeStoreHost } from './KnowledgeStoreHost';
 
 export const DOCUMENT_PARSE_DIRECTORY: string = 'knowledge_parse_v1';
 @Concurrent
@@ -45,6 +47,7 @@ async function documentCopyWorker(uri: string, title: string, id: string, filesR
     if (await documentHashFile(temporary, DocumentParseBudget.originalBytes, cancel) !== original.hash) { throw new DocumentParseFailure('副本摘要不一致', '保存'); }
     try {
       original.format = documentSuffix(title); await documentContainerPreflight(temporary, original);
+      if (original.format === DocumentParseFormat.Docx) { await docxPreflightPath(temporary,original.bytes); original.preflight = DocumentPreflightStatus.Passed; original.preflightReason = ''; }
     } catch (error) { original.preflightReason = error instanceof DocumentParseFailure ? error.message : '身份预检失败'; }
     documentWorkerCheck(cancel); if (await fileIo.access(target)) { throw new DocumentParseFailure('发布目标已存在', '保存'); }
     await fileIo.rename(temporary, target); original.savedAt = Date.now(); return original;
@@ -56,17 +59,19 @@ async function documentCopyWorker(uri: string, title: string, id: string, filesR
   }
 }
 export class DocumentFileAdapter implements DocumentAssetPort, DocumentSelectionPort {
+  private host: KnowledgeStoreHost;
   private context: common.Context; private root: string; private temp: string; private copying: boolean = false;
   private copyTask: taskpool.GenericsTask<[string, string, string, string, string], DocumentOriginal> | undefined = undefined;
   cancelLocal(): void { if (this.copyTask !== undefined) { try { taskpool.cancel(this.copyTask); } catch {} } }
-  constructor(context: common.Context, scope: KnowledgeStorageScope = KnowledgeStorageScope.production()) { this.context = context; const directory: string = scope.testing ? scope.derivedDirectory : DOCUMENT_PARSE_DIRECTORY; this.root = `${context.filesDir}/${directory}`; this.temp = `${context.cacheDir}/${directory}`; }
+  constructor(context: common.Context, scope: KnowledgeStorageScope = KnowledgeStorageScope.production()) { this.context = context; this.host = KnowledgeStoreHost.forContext(context,scope); const directory: string = scope.testing ? scope.derivedDirectory : DOCUMENT_PARSE_DIRECTORY; this.root = `${context.filesDir}/${directory}`; this.temp = `${context.cacheDir}/${directory}`; }
   async select(): Promise<DocumentFileSelection> {
     return this.choose(false);
   }
   async selectImages(): Promise<DocumentFileSelection> { return this.choose(true); }
-  private async choose(imagesOnly: boolean): Promise<DocumentFileSelection> {
+  async selectDocx(): Promise<DocumentFileSelection> { return this.choose(false,true); }
+  private async choose(imagesOnly: boolean, docxOnly: boolean = false): Promise<DocumentFileSelection> {
     const options: picker.DocumentSelectOptions = new picker.DocumentSelectOptions(); options.maxSelectNumber = 3;
-    options.selectMode = picker.DocumentSelectMode.FILE; options.fileSuffixFilters = imagesOnly ? ['图片|.jpg,.jpeg,.png,.webp'] : ['原件|.pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.png,.webp'];
+    options.selectMode = picker.DocumentSelectMode.FILE; options.fileSuffixFilters = docxOnly ? ['DOCX|.docx'] : imagesOnly ? ['图片|.jpg,.jpeg,.png,.webp'] : ['原件|.pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.png,.webp'];
     const selected: string[] = await new picker.DocumentViewPicker(this.context).select(options);
     const result: DocumentFileSelection = new DocumentFileSelection(); result.canceled = selected.length === 0;
     for (const uri of selected) {
@@ -99,6 +104,9 @@ export class DocumentFileAdapter implements DocumentAssetPort, DocumentSelection
     const sink: DocumentResultSink = new DocumentResultSink(this.root, this.temp, action); await sink.open(); return sink;
   }
   async remove(ids: string[]): Promise<void> {
+    await this.host.withUnifiedCleanup<void>('DocumentParseService',ids,async (): Promise<void> => { await this.removeOwned(ids); });
+  }
+  private async removeOwned(ids: string[]): Promise<void> {
     for (const id of ids) {
       const root: string = id.startsWith('part-') ? this.temp : this.root; const path: string = documentAssetPath(root, id);
       if (!(await fileIo.access(path))) { continue; }

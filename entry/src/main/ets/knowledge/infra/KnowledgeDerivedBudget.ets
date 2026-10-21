@@ -1,15 +1,17 @@
 import { common } from '@kit.AbilityKit';
+import { relationalStore } from '@kit.ArkData';
 import { fileIo } from '@kit.CoreFileKit';
 import { KnowledgeStorageScope } from '../domain/KnowledgeStorageScope';
 import { KnowledgeFailure, PdfBudget } from '../domain/PdfKnowledgeModels';
 import { KnowledgeStoreHost } from './KnowledgeStoreHost';
+import { ParsedPhysicalUsagePort } from '../domain/ParsedDocumentPorts';
 
 export class KnowledgeDerivedUsage {
   assetsPhysical: number = 0; vectorPhysical: number = 0; sharedNonReclaimable: number = 0; metadataReserved: number = 0; pendingReserved: number = 0;
   total(): number { return this.assetsPhysical+this.vectorPhysical+Math.max(this.sharedNonReclaimable,this.metadataReserved)+this.pendingReserved; }
 }
 export interface KnowledgePhysicalBudgetPort { usage(): Promise<KnowledgeDerivedUsage>; }
-export class KnowledgeDerivedBudget implements KnowledgePhysicalBudgetPort {
+export class KnowledgeDerivedBudget implements KnowledgePhysicalBudgetPort, ParsedPhysicalUsagePort {
   private context: common.Context; private scope: KnowledgeStorageScope;
   constructor(context: common.Context, scope: KnowledgeStorageScope = KnowledgeStorageScope.production()) { this.context = context; this.scope = scope; }
   private async tree(root: string, depth: number = 0): Promise<number> {
@@ -24,7 +26,9 @@ export class KnowledgeDerivedBudget implements KnowledgePhysicalBudgetPort {
   async usage(): Promise<KnowledgeDerivedUsage> {
     const usage: KnowledgeDerivedUsage = new KnowledgeDerivedUsage();
     usage.assetsPhysical = await this.tree(`${this.context.filesDir}/${this.scope.derivedDirectory}`)+await this.tree(`${this.context.cacheDir}/${this.scope.derivedDirectory}`);
-    // The recursive derived root includes Image's /image subtree exactly once.
+    const unifiedDirectory: string = this.scope.testing ? `knowledge_unified_v1_${this.scope.key}` : 'knowledge_unified_v1';
+    usage.assetsPhysical += await this.tree(`${this.context.filesDir}/${unifiedDirectory}`)+await this.tree(`${this.context.cacheDir}/${unifiedDirectory}`);
+    // The recursive derived root includes /image and /docx exactly once.
     if (!this.scope.testing) {
       // Conservative shared accounting includes parse staging and M1 snapshot roots.
       usage.assetsPhysical += await this.tree(`${this.context.filesDir}/knowledge_parse_v1`)+await this.tree(`${this.context.cacheDir}/knowledge_parse_v1`)+await this.tree(`${this.context.filesDir}/knowledge_user_v1`);
@@ -45,6 +49,23 @@ export class KnowledgeDerivedBudget implements KnowledgePhysicalBudgetPort {
       const rows = await host.requireStore().querySql("SELECT COALESCE(SUM(bytes),0) FROM kb_image_reservation WHERE state='Reserved'");
       try { if (!rows.goToNextRow() || rows.getLong(0) < 0) { throw new KnowledgeFailure('ImageReservationReadFailed','budget'); } usage.pendingReserved = rows.getLong(0); } finally { rows.close(); }
     }
+    if (host.docxReady) {
+      const rows = await host.requireStore().querySql("SELECT COALESCE(SUM(bytes),0) FROM kb_docx_reservation WHERE state='Reserved'");
+      try { if (!rows.goToNextRow() || rows.getLong(0) < 0) { throw new KnowledgeFailure('DocxReservationReadFailed','budget'); } usage.pendingReserved += rows.getLong(0); } finally { rows.close(); }
+    }
+    if (host.unifiedReady) {
+      const rows: relationalStore.ResultSet = await host.requireStore().querySql('SELECT path,reserved FROM upd_asset_write WHERE reserved>0');
+      try { while (rows.goToNextRow()) {
+        const relative: string = rows.getString(0); const reserved: number = rows.getLong(1);
+        if (!new RegExp('^(images|snapshots|annotations|history)/[A-Za-z0-9_-]+$').test(relative) || reserved < 0) { throw new KnowledgeFailure('UnifiedReservationInvalid','budget'); }
+        const path: string = `${this.context.filesDir}/${unifiedDirectory}/${relative}`;
+        // A partially materialized file is already in tree(); reserve only its remainder.
+        let materialized: number = 0;
+        for (const candidate of [path,`${path}-pending`]) { if (await fileIo.access(candidate)) { materialized += await this.tree(candidate); } }
+        usage.pendingReserved += Math.max(0,reserved-materialized);
+      } } finally { rows.close(); }
+    }
     return usage;
   }
+  async totalBytes(): Promise<number> { return (await this.usage()).total(); }
 }

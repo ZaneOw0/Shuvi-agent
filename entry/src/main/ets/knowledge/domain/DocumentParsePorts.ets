@@ -4,7 +4,7 @@ import {
   DocumentInspection, DocumentParseResultEnvelope, DocumentParseUsage, DocumentParseViewState
 } from './DocumentParseModels';
 
-export interface DocumentSelectionPort { select(): Promise<DocumentFileSelection>; selectImages?(): Promise<DocumentFileSelection>; }
+export interface DocumentSelectionPort { select(): Promise<DocumentFileSelection>; selectImages?(): Promise<DocumentFileSelection>; selectDocx?(): Promise<DocumentFileSelection>; }
 export interface DocumentAssetPort {
   save(file: DocumentSelectedFile, id: string, cancel: DocumentParseCancellation): Promise<DocumentOriginal>;
   verify(original: DocumentOriginal, cancel: DocumentParseCancellation): Promise<void>;

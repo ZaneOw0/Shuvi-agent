@@ -5,7 +5,7 @@ import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { MineruTaskPort } from '../domain/DocumentParsePorts';
 import { DocumentParseAction, DocumentParseBudget, DocumentParseFailure, DocumentAllocationReceipt,
-  DocumentInspection, DocumentLeaseBinding, DocumentParseUsage, DocumentParseResultEnvelope, ParseFailureKind, ImageParsePermit } from '../domain/DocumentParseModels';
+  DocumentInspection, DocumentLeaseBinding, DocumentParseUsage, DocumentParseResultEnvelope, ParseFailureKind, ImageParsePermit, DocumentParseFormat } from '../domain/DocumentParseModels';
 import { MineruCredentialStore } from './MineruCredentialStore';
 import { DocumentFileAdapter, DocumentResultSink } from './DocumentFileAdapter';
 import { documentAssetPath, documentDigestHex } from './DocumentFileOperations';
@@ -98,6 +98,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
   }
   pause(): void { for (const session of this.sessions) { session.cancel(); session.close(); } this.sessions = []; this.credential.clearTransient(); }
   private async fetch(request: rcp.Request, authenticated: boolean, action: DocumentParseAction, incoming: rcp.IncomingDataCallback): Promise<rcp.Response> {
+    if (action.original.format === DocumentParseFormat.Docx && (!documentGrantMatches(action.original,action.grant,action.task.credentialRevision) || action.task.originalId !== action.original.id || action.task.hash !== action.original.hash || action.task.version !== action.original.version)) { throw new DocumentParseFailure('当前DOCX完整原件许可或参数不符','请求前'); }
     if (documentIsImage(action.original.format) && action.original.bytes === 0 && (!authenticated || request.method !== 'GET')) { throw new DocumentParseFailure('缺原件仅允许复核原批次','请求前'); }
     if (documentIsImage(action.original.format) && ([ImageParsePermit.policy,ImageParsePermit.productionPolicy].indexOf(action.grant.policy) < 0 || action.grant.parameters !== ImageParsePermit.parameters || action.grant.revoked || action.grant.originalId !== action.original.id || action.grant.hash !== action.original.hash || action.grant.version !== action.original.version || action.grant.format !== action.original.format || action.grant.credentialRevision !== action.task.credentialRevision || action.task.originalId !== action.original.id || action.task.hash !== action.original.hash || action.task.version !== action.original.version || !action.grant.acknowledgement.fullFile || !action.grant.acknowledgement.freeEligible || action.grant.issuedAt < 1 || action.original.bytes > 0 && !documentGrantMatches(action.original,action.grant,action.task.credentialRevision))) { throw new DocumentParseFailure('当前图片许可身份或参数不符','请求前'); }
     action.cancel.check(); const session: rcp.Session = mineruSafeSession(); this.sessions.push(session);

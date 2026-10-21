@@ -9,6 +9,10 @@ import { embeddingSpaceCopy, embeddingSpaceDecode } from '../pipeline/EmbeddingS
 import { VectorEligibility, VectorWorkflowStorePort } from '../domain/VectorWorkflowModels';
 import { KnowledgeVectorCleanupPort } from '../application/KnowledgeLifecycleService';
 import { KnowledgeCapabilityAudit, CapabilityAuditGate } from './KnowledgeCapabilityAudit';
+import { UnifiedNumericVectorPort } from '../domain/UnifiedEmbeddingPorts';
+import { UnifiedQueryNumericPort } from '../domain/UnifiedQueryPorts';
+import { UnifiedQueryTarget } from '../domain/UnifiedQueryModels';
+import { ParsedCancellation } from '../domain/ParsedDocumentModels';
 
 function vectorTableId(spaceId: string): string {
   if (!new RegExp('^kb-[a-f0-9]{32}$').test(spaceId)) { throw new KnowledgeFailure('UnregisteredSpaceId','vector-store'); }
@@ -16,7 +20,7 @@ function vectorTableId(spaceId: string): string {
 }
 function vectorNumbers(values: Float32Array): number[] { const result: number[] = []; for (const value of values) { result.push(value); } return result; }
 function vectorLayout(space: EmbeddingSpace): string { return `CREATE TABLE ${vectorTableId(space.id)} (chunk TEXT,generation TEXT,doc TEXT,content_generation TEXT,input_hash TEXT,epoch INTEGER,eligible INTEGER,embedding FLOATVECTOR(${space.dimension}),PRIMARY KEY(chunk,generation))`; }
-export class VectorRdbRepository implements KnowledgeVectorPort, VectorWorkflowStorePort, KnowledgeVectorCleanupPort {
+export class VectorRdbRepository implements KnowledgeVectorPort, VectorWorkflowStorePort, KnowledgeVectorCleanupPort, UnifiedNumericVectorPort, UnifiedQueryNumericPort {
   private static selfCheck: Promise<void> | undefined;
   private static auditGate: CapabilityAuditGate = new CapabilityAuditGate();
   private static checkSequence: number = 0;
@@ -165,6 +169,17 @@ export class VectorRdbRepository implements KnowledgeVectorPort, VectorWorkflowS
       } catch (error) { await store.rollback(transaction); if (error instanceof Error) { throw error; } throw new KnowledgeFailure('VectorMirrorFailed','vector-store'); }
     });
   }
+  async synchronizeUnified(spaceId: string, owner: string, content: string, generation: string, epoch: number): Promise<void> {
+    if (!owner.startsWith('upd:') || this.space(spaceId).preprocessing!=='UNIFIED-KNOWLEDGE-TEXT-1') { throw new KnowledgeFailure('UnifiedOwnerOrSpaceRequired','mirror'); }
+    await this.write<void>(async (): Promise<void>=> { const store=this.requireStore(); const tx: number=await store.beginTrans();
+      try { await store.execute(`UPDATE ${vectorTableId(spaceId)} SET eligible=0 WHERE doc=?`,tx,[owner]); await store.execute(`UPDATE ${vectorTableId(spaceId)} SET eligible=1,epoch=? WHERE doc=? AND content_generation=? AND generation=?`,tx,[epoch,owner,content,generation]); await store.commit(tx); }
+      catch (error) { await store.rollback(tx); throw error; }
+    });
+  }
+  async revokeUnified(spaceId: string, owner: string): Promise<void> {
+    if (!owner.startsWith('upd:') || this.space(spaceId).preprocessing!=='UNIFIED-KNOWLEDGE-TEXT-1') { throw new KnowledgeFailure('UnifiedOwnerOrSpaceRequired','revoke'); }
+    await this.write<void>(async (): Promise<void>=> { await this.requireStore().execute(`UPDATE ${vectorTableId(spaceId)} SET eligible=0 WHERE doc=?`,[owner]); });
+  }
   async filteredKnn(space: EmbeddingSpace, query: Float32Array, targets: VectorEligibility[], cancel: KnowledgeCancellation): Promise<KnowledgeVectorCandidate[]> {
     return this.write<KnowledgeVectorCandidate[]>(async (): Promise<KnowledgeVectorCandidate[]> => {
       const registered: EmbeddingSpace = this.space(space.id); if (JSON.stringify(embeddingSpaceCopy(space)) !== JSON.stringify(registered)) { throw new KnowledgeFailure('KnnSpaceMismatch','vector-store'); }
@@ -179,6 +194,20 @@ export class VectorRdbRepository implements KnowledgeVectorPort, VectorWorkflowS
         try { while (rows.goToNextRow()) { cancel.check(); const item: KnowledgeVectorCandidate = new KnowledgeVectorCandidate(); item.row = this.row(rows,registered); item.distance = rows.getDouble(8); if (!Number.isFinite(item.distance)) { throw new KnowledgeFailure('KnnDistanceInvalid','query'); } candidates.push(item); } } finally { rows.close(); }
         candidates.sort((a: KnowledgeVectorCandidate,b: KnowledgeVectorCandidate): number => a.distance-b.distance || a.row.chunkId.localeCompare(b.row.chunkId)); if (candidates.length > 20) { candidates.splice(20); }
       } return candidates;
+    });
+  }
+  async filteredKnnAll(space: EmbeddingSpace, query: Float32Array, targets: UnifiedQueryTarget[], cancel: ParsedCancellation): Promise<KnowledgeVectorCandidate[]> {
+    return this.write<KnowledgeVectorCandidate[]>(async (): Promise<KnowledgeVectorCandidate[]>=> {
+      const registered: EmbeddingSpace=this.space(space.id);
+      if (space.preprocessing!=='UNIFIED-KNOWLEDGE-TEXT-1' || JSON.stringify(embeddingSpaceCopy(space))!==JSON.stringify(registered) || targets.length>30000) { throw new KnowledgeFailure('UnifiedKnnScope','query'); }
+      const vector: Float32Array=embeddingValidateVector(vectorNumbers(query),registered.dimension); const candidates: KnowledgeVectorCandidate[]=[];
+      for (let start: number=0;start<targets.length;start+=64) {
+        cancel.check(); const conditions: string[]=[]; const args: relationalStore.ValueType[]=[vector];
+        for (const input of targets.slice(start,start+64)) { const target=input.qualification; if (target.spaceId!==space.id || target.chunkIds.length!==1 || !target.documentId.startsWith('upd:')) { throw new KnowledgeFailure('UnifiedKnnTargetIdentity','query'); } conditions.push('(chunk=? AND generation=? AND doc=? AND content_generation=? AND epoch=? AND input_hash=?)'); args.push(target.chunkIds[0],target.vectorGeneration,target.documentId,target.contentGeneration,target.epoch,target.inputHash); }
+        const rows=await this.requireStore().querySql(`SELECT *,embedding <=> ? AS distance FROM ${vectorTableId(space.id)} WHERE eligible=1 AND (${conditions.join(' OR ')}) ORDER BY distance,doc,chunk,generation`,args);
+        try { while (rows.goToNextRow()) { cancel.check(); const c: KnowledgeVectorCandidate=new KnowledgeVectorCandidate(); c.row=this.row(rows,registered); c.distance=rows.getDouble(8); if (!Number.isFinite(c.distance)) { throw new KnowledgeFailure('UnifiedKnnDistance','query'); } candidates.push(c); if (candidates.length>30000) { throw new KnowledgeFailure('UnifiedKnnCandidateBudget','query'); } } } finally { rows.close(); }
+      }
+      candidates.sort((a: KnowledgeVectorCandidate,b: KnowledgeVectorCandidate): number=>a.distance-b.distance || a.row.documentId.localeCompare(b.row.documentId) || a.row.chunkId.localeCompare(b.row.chunkId) || a.row.vectorGeneration.localeCompare(b.row.vectorGeneration)); return candidates;
     });
   }
   async trialKnn(space: EmbeddingSpace, query: Float32Array, targets: VectorEligibility[], cancel: KnowledgeCancellation): Promise<KnowledgeVectorCandidate[]> {

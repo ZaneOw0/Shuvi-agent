@@ -8,8 +8,12 @@ import { EmbeddingPinnedBasis } from '../domain/EmbeddingBasisModels';
 import { KnowledgeFailure } from '../domain/PdfKnowledgeModels';
 import { embeddingCountWorker } from './EmbeddingCountWorker';
 import { pdfCodecUtf8 } from '../pipeline/PdfSnapshotCodec';
+import { EmbeddingConfig } from '../domain/EmbeddingModels';
+import { UNIFIED_TEXT_POLICY, UNIFIED_QUERY_POLICY } from '../domain/UnifiedKnowledgeModels';
+import { UnifiedQueryTokenPort } from '../domain/UnifiedQueryPorts';
+import { UnifiedTokenPort } from '../domain/UnifiedEmbeddingPorts';
 
-export class EmbeddingTokenAdapter implements EmbeddingTokenCounterPort {
+export class EmbeddingTokenAdapter implements EmbeddingTokenCounterPort, UnifiedTokenPort, UnifiedQueryTokenPort {
   private context: common.Context; private identity: KnowledgeIdentityPort; private weights: string = ''; private loading: Promise<void> | undefined;
   constructor(context: common.Context, identity: KnowledgeIdentityPort) { this.context = context; this.identity = identity; }
   private async load(): Promise<void> {
@@ -20,8 +24,13 @@ export class EmbeddingTokenAdapter implements EmbeddingTokenCounterPort {
     this.weights = util.TextDecoder.create('utf-8',{ fatal: true }).decodeToString(weights);
   }
   async evidence(modelId: string, role: string, text: string, textHash: string): Promise<TokenEligibilityEvidence> {
+    return this.count(modelId,role,text,textHash,EmbeddingPinnedBasis.policy);
+  }
+  async unifiedEvidence(config: EmbeddingConfig, text: string, hash: string): Promise<TokenEligibilityEvidence> { return this.count(config.modelId,'document',text,hash,UNIFIED_TEXT_POLICY); }
+  async unifiedQueryEvidence(config: EmbeddingConfig, text: string, hash: string): Promise<TokenEligibilityEvidence> { return this.count(config.modelId,'query',text,hash,UNIFIED_QUERY_POLICY); }
+  private async count(modelId: string, role: string, text: string, textHash: string, policy: string): Promise<TokenEligibilityEvidence> {
     if (this.loading === undefined) { this.loading = this.load(); } await this.loading;
-    const input: BgeM3CountInput = new BgeM3CountInput(); input.fullInput = text; input.modelId = modelId; input.policyVersion = EmbeddingPinnedBasis.policy;
+    const input: BgeM3CountInput = new BgeM3CountInput(); input.fullInput = text; input.modelId = modelId; input.policyVersion = policy;
     if (role === 'document') { input.role = BgeM3InputRole.Document; } else if (role === 'query') { input.role = BgeM3InputRole.Query; } else if (role === 'probe') { input.role = BgeM3InputRole.Probe; } else { throw new KnowledgeFailure('InputRoleInvalid','input-count'); }
     const result: BgeM3CountEvidence = await taskpool.execute<[string,BgeM3CountInput],BgeM3CountEvidence>(embeddingCountWorker,this.weights,input);
     if (result.textHash.length > 0) {

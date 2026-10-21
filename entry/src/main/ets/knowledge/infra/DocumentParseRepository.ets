@@ -5,7 +5,7 @@ import { DocumentParseRepositoryPort } from '../domain/DocumentParsePorts';
 import {
   DocumentParseSnapshot, DocumentOriginal, DocumentParseGrant, DocumentParseTask, DocumentParseResultEnvelope,
   DocumentParseCleanup, DocumentParseFailure, DocumentParseFormat, DocumentPreflightStatus, DocumentParseStage,
-  DocumentRemoteState, DocumentParseBudget, documentCopySnapshot, DocumentRemoteOccupancy, DocumentImageEvidence, ImageParsePermit, ParseFailureKind
+  DocumentRemoteState, DocumentParseBudget, documentCopySnapshot, DocumentRemoteOccupancy, DocumentImageEvidence, ImageParsePermit, ParseFailureKind, DocxParsePermit
 } from '../domain/DocumentParseModels';
 import { documentSafeId, documentHashValid } from '../pipeline/DocumentParsePolicy';
 import { KnowledgeStorageScope } from '../domain/KnowledgeStorageScope';
@@ -16,6 +16,8 @@ const DOCUMENT_TRANSFER_LAYOUT: string = 'parse-stage-transfer-additive-v2';
 const DOCUMENT_SLOT_RETIRE_LAYOUT: string = 'parse-stage-slot-retire-additive-v3';
 const DOCUMENT_IMAGE_LAYOUT: string = 'parse-stage-image-additive-v4';
 const DOCUMENT_HAPPY_LAYOUT: string = 'parse-stage-image-permit-failure-v5';
+const DOCUMENT_DOCX_LAYOUT: string = 'parse-stage-docx-permit-v6';
+const DOCUMENT_DOCX_PERMIT_DDL: string = 'CREATE TABLE docx_parse_permit (original TEXT PRIMARY KEY,hash TEXT NOT NULL,version INTEGER NOT NULL,format TEXT NOT NULL,revision INTEGER NOT NULL,parameters TEXT NOT NULL,full_file INTEGER NOT NULL,free INTEGER NOT NULL,task_id TEXT NOT NULL,allocation INTEGER NOT NULL,put_count INTEGER NOT NULL,query_count INTEGER NOT NULL,download INTEGER NOT NULL,stopped_reason TEXT NOT NULL)';
 const DOCUMENT_PERMIT_DDL: string = 'CREATE TABLE image_parse_permit (original TEXT PRIMARY KEY,hash TEXT NOT NULL,version INTEGER NOT NULL,format TEXT NOT NULL,input_id TEXT NOT NULL,full_file INTEGER NOT NULL,free INTEGER NOT NULL,task_id TEXT NOT NULL,allocation INTEGER NOT NULL,put_count INTEGER NOT NULL,query_count INTEGER NOT NULL,download INTEGER NOT NULL,stopped_reason TEXT NOT NULL)';
 const DOCUMENT_FAILURE_DDL: string = 'CREATE TABLE task_failure_detail (task_id TEXT PRIMARY KEY,kind TEXT NOT NULL,stage TEXT NOT NULL,http INTEGER NOT NULL,sdk TEXT NOT NULL,provider TEXT NOT NULL,reason TEXT NOT NULL,retry_after TEXT NOT NULL,uncertain INTEGER NOT NULL)';
 const DOCUMENT_IMAGE_DDL: string = 'CREATE TABLE image_evidence (original TEXT PRIMARY KEY,asset TEXT NOT NULL,hash TEXT NOT NULL,version INTEGER NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,orientation INTEGER NOT NULL,orientation_evidence TEXT NOT NULL,frames INTEGER NOT NULL,static INTEGER NOT NULL,sdk INTEGER NOT NULL,mime TEXT NOT NULL,variant TEXT NOT NULL,alpha INTEGER NOT NULL)';
@@ -127,7 +129,8 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
         const retireLayout: boolean = (store.version === 2 || store.version === 3) && ddl.length === 8 && ddl.every((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) >= 0 || statement === DOCUMENT_TRANSFER_DDL || documentSlotRetireDDL(statement));
         const imageLayout: boolean = (store.version === 3 || store.version === 4) && ddl.length === 9 && ddl.every((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) >= 0 || statement === DOCUMENT_TRANSFER_DDL || statement === DOCUMENT_IMAGE_DDL || documentSlotRetireDDL(statement));
         const happyLayout: boolean = (store.version === 4 || store.version === 5) && ddl.length === 11 && ddl.every((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) >= 0 || statement === DOCUMENT_TRANSFER_DDL || statement === DOCUMENT_IMAGE_DDL || statement === DOCUMENT_PERMIT_DDL || statement === DOCUMENT_FAILURE_DDL || documentSlotRetireDDL(statement));
-        if (!oldLayout && !extendedLayout && !retireLayout && !imageLayout && !happyLayout) { throw new DocumentParseFailure('既有解析库版本或布局未知，拒绝覆盖/清库', '持久化'); }
+        const docxLayout: boolean = (store.version === 5 || store.version === 6) && ddl.length === 12 && ddl.every((statement: string): boolean => DOCUMENT_PARSE_DDL.indexOf(statement) >= 0 || statement === DOCUMENT_TRANSFER_DDL || statement === DOCUMENT_IMAGE_DDL || statement === DOCUMENT_PERMIT_DDL || statement === DOCUMENT_FAILURE_DDL || statement === DOCUMENT_DOCX_PERMIT_DDL || documentSlotRetireDDL(statement));
+        if (!oldLayout && !extendedLayout && !retireLayout && !imageLayout && !happyLayout && !docxLayout) { throw new DocumentParseFailure('既有解析库版本或布局未知，拒绝覆盖/清库', '持久化'); }
       }
       const meta: relationalStore.ResultSet = await store.querySql('SELECT layout FROM parse_meta WHERE id=1');
       let layout: string = '';
@@ -160,11 +163,16 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
         try { await migration.execute(DOCUMENT_PERMIT_DDL); await migration.execute(DOCUMENT_FAILURE_DDL); await migration.execute('UPDATE parse_meta SET layout=? WHERE id=1',[DOCUMENT_HAPPY_LAYOUT]); await migration.commit(); layout = DOCUMENT_HAPPY_LAYOUT; }
         catch { await migration.rollback(); throw new DocumentParseFailure('图片许可迁移失败，旧库保留','持久化'); }
       }
-      if (layout !== DOCUMENT_HAPPY_LAYOUT) { throw new DocumentParseFailure('布局标识未知', '持久化'); }
+      if (layout === DOCUMENT_HAPPY_LAYOUT) {
+        const migration: relationalStore.Transaction = await store.createTransaction();
+        try { await migration.execute(DOCUMENT_DOCX_PERMIT_DDL); await migration.execute('UPDATE parse_meta SET layout=? WHERE id=1',[DOCUMENT_DOCX_LAYOUT]); await migration.commit(); layout = DOCUMENT_DOCX_LAYOUT; }
+        catch { await migration.rollback(); throw new DocumentParseFailure('DOCX许可增量迁移失败，旧库保留','持久化'); }
+      }
+      if (layout !== DOCUMENT_DOCX_LAYOUT) { throw new DocumentParseFailure('布局标识未知', '持久化'); }
       try { const probe: relationalStore.ResultSet = await store.querySql('SELECT retired FROM remote_slot WHERE id=1'); probe.close(); }
       catch { throw new DocumentParseFailure('停止跟踪字段缺失，拒绝旧布局冒用', '持久化'); }
       // Version finalization is restart-safe after a committed migration. No existing table or asset is replaced.
-      store.version = 5;
+      store.version = 6;
     } catch (error) { await store.close(); this.store = undefined; if (error instanceof DocumentParseFailure) { throw error; } throw new DocumentParseFailure('解析库打开失败，资料未清理', '持久化'); }
   }
   async load(): Promise<DocumentParseSnapshot> {
@@ -236,6 +244,21 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
       const task = s.tasks.find((t: DocumentParseTask): boolean => t.id === p.taskId);
       if (task !== undefined) { task.usage = p.usage; } s.imagePermits.push(p);
     } } finally { permits.close(); }
+    const docxPermits: relationalStore.ResultSet = await store.querySql('SELECT * FROM docx_parse_permit');
+    try { while (docxPermits.goToNextRow()) {
+      const p: DocxParsePermit = new DocxParsePermit(); p.originalId = parseRowString(docxPermits,'original'); p.hash = parseRowString(docxPermits,'hash');
+      p.version = parseRowNumber(docxPermits,'version'); p.actualFormat = parseStoredFormat(parseRowString(docxPermits,'format'));
+      p.credentialRevision = parseRowNumber(docxPermits,'revision'); p.parameters = parseRowString(docxPermits,'parameters');
+      p.fullFile = parseRowBool(docxPermits,'full_file'); p.freeEligible = parseRowBool(docxPermits,'free'); p.taskId = parseRowString(docxPermits,'task_id');
+      p.usage.allocation = parseRowNumber(docxPermits,'allocation'); p.usage.put = parseRowNumber(docxPermits,'put_count'); p.usage.query = parseRowNumber(docxPermits,'query_count'); p.usage.download = parseRowNumber(docxPermits,'download'); p.stoppedReason = parseRowString(docxPermits,'stopped_reason');
+      if (!documentSafeId(p.originalId) || !documentHashValid(p.hash) || p.version < 1 || p.actualFormat !== DocumentParseFormat.Docx || p.parameters !== DocxParsePermit.parameters || p.stoppedReason.length > 300 || p.taskId.length > 0 && !documentSafeId(p.taskId) || p.usage.allocation > 1 || p.usage.put > 1 || p.usage.query > 90 || p.usage.download > 1 || s.docxPermits.some((prior: DocxParsePermit): boolean => prior.originalId === p.originalId)) { throw new DocumentParseFailure('DOCX许可账本非法','任务库'); }
+      const task: DocumentParseTask | undefined = s.tasks.find((t: DocumentParseTask): boolean => t.id === p.taskId);
+      if (task !== undefined) {
+        if (task.originalId !== p.originalId || task.hash !== p.hash || task.version !== p.version || task.credentialRevision !== p.credentialRevision) { throw new DocumentParseFailure('DOCX许可任务关联非法','任务库'); }
+        task.usage = p.usage;
+      }
+      s.docxPermits.push(p);
+    } } finally { docxPermits.close(); }
     const failures: relationalStore.ResultSet = await store.querySql('SELECT * FROM task_failure_detail');
     try { while (failures.goToNextRow()) {
       const task = s.tasks.find((t: DocumentParseTask): boolean => t.id === parseRowString(failures,'task_id'));
@@ -254,7 +277,8 @@ export class DocumentParseRepository implements DocumentParseRepositoryPort {
       const tx: relationalStore.Transaction = await this.requireStore().createTransaction();
       try {
         await tx.execute('UPDATE parse_meta SET enabled=?,revision=? WHERE id=1', [s.config.enabled ? 1 : 0, s.config.credentialRevision]);
-        for (const table of ['original', 'grant', 'task', 'task_transfer', 'result', 'cleanup', 'image_evidence', 'image_parse_permit', 'task_failure_detail']) { await tx.execute(`DELETE FROM ${table}`); }
+        for (const table of ['original', 'grant', 'task', 'task_transfer', 'result', 'cleanup', 'image_evidence', 'image_parse_permit', 'task_failure_detail', 'docx_parse_permit']) { await tx.execute(`DELETE FROM ${table}`); }
+        for (const p of s.docxPermits) { await tx.execute('INSERT INTO docx_parse_permit VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[p.originalId,p.hash,p.version,p.actualFormat,p.credentialRevision,p.parameters,p.fullFile ? 1 : 0,p.freeEligible ? 1 : 0,p.taskId,p.usage.allocation,p.usage.put,p.usage.query,p.usage.download,p.stoppedReason]); }
         for (const p of s.imagePermits) { await tx.execute('INSERT INTO image_parse_permit VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',[p.originalId,p.hash,p.version,p.actualFormat,p.testInputId,p.fullFile ? 1 : 0,p.freeEligible ? 1 : 0,p.taskId,p.usage.allocation,p.usage.put,p.usage.query,p.usage.download,p.stoppedReason]); }
         for (const task of s.tasks) { const d = task.failureDetail; await tx.execute('INSERT INTO task_failure_detail VALUES(?,?,?,?,?,?,?,?,?)',[task.id,d.kind,d.stage,d.httpStatus,d.sdkCode,d.providerCode,d.sanitizedReason,d.retryAfter,d.outcomeUnknown ? 1 : 0]); }
         for (const e of s.imageEvidence) { await tx.execute('INSERT INTO image_evidence VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[e.originalId,e.assetId,e.hash,e.version,e.width,e.height,e.orientation,e.orientationEvidence,e.frames,e.staticContainer ? 1 : 0,e.sdkVerified ? 1 : 0,e.mime,e.variant,e.alpha ? 1 : 0]); }

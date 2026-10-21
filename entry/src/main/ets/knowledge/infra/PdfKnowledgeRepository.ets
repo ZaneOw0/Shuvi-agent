@@ -1,6 +1,9 @@
 import { relationalStore } from '@kit.ArkData';
 import { KnowledgeStoreHost } from './KnowledgeStoreHost';
 import { imageVerifyExisting, imageTableNames } from './ImageStoreLayout';
+import { docxVerifyExisting, docxTableNames } from './DocxStoreLayout';
+import { docxReadLocator } from '../pipeline/DocxSnapshotCodec';
+import { knowledgePublicationBudget } from './KnowledgePublicationBudget';
 import { imageReadLocator, imageExactFields } from '../pipeline/ImageSnapshotCodec';
 import { EmbeddingConfig, EmbeddingProvider, EmbeddingRegion, EmbeddingAccess, EmbeddingModelSource, EmbeddingDetection, EmbeddingGrant, EmbeddingModelInfo } from '../domain/EmbeddingModels';
 import { EmbeddingSpace, EmbeddingJob, EmbeddingDetectionStatus } from '../domain/EmbeddingModels';
@@ -37,6 +40,10 @@ const PDF_EXTENSION_LAYOUT: string = 'KB-PDF-EXT-2';
 class ImageResultPresentation {
   wire: string = 'KNOWLEDGE-RESULT-2'; citationId: string = ''; match: KnowledgeResultMatch = new KnowledgeResultMatch();
   sourceKind: string = 'Image'; actualFormat: string = ''; originalHash: string = ''; originalVersion: number = 0;
+}
+class DocxResultPresentation {
+  wire: string = 'KNOWLEDGE-RESULT-3'; citationId: string = ''; match: KnowledgeResultMatch = new KnowledgeResultMatch();
+  sourceKind: string = 'Docx'; actualFormat: string = 'DOCX'; originalHash: string = ''; originalVersion: number = 0;
 }
 class PdfRelationLayout {
   name: string;
@@ -178,9 +185,10 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
         await this.host.transaction(async (transaction: relationalStore.Transaction): Promise<void> => {
           const tables: relationalStore.ResultSet = await transaction.querySql("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'kb_*'");
           const existing: string[] = [];
-          try { while (tables.goToNextRow()) { existing.push(tables.getString(0)); if (existing.length > 64) { throw new KnowledgeFailure('ExtensionResidual', 'open'); } } } finally { tables.close(); }
+           try { while (tables.goToNextRow()) { existing.push(tables.getString(0)); if (existing.length > 80) { throw new KnowledgeFailure('ExtensionResidual', 'open'); } } } finally { tables.close(); }
           const imagePresent: boolean = await imageVerifyExisting(transaction);
-          if (imagePresent) { const imageNames: string[] = imageTableNames(); for (let at: number = existing.length-1; at >= 0; at--) { if (imageNames.indexOf(existing[at]) >= 0) { existing.splice(at,1); } } }
+           if (imagePresent) { const imageNames: string[] = imageTableNames(); for (let at: number = existing.length-1; at >= 0; at--) { if (imageNames.indexOf(existing[at]) >= 0) { existing.splice(at,1); } } }
+           if (await docxVerifyExisting(transaction)) { const docxNames: string[] = docxTableNames(); for (let at: number = existing.length-1; at >= 0; at--) { if (docxNames.indexOf(existing[at]) >= 0) { existing.splice(at,1); } } }
           if (existing.length === 0) {
             for (const relation of PDF_RELATIONS) { await transaction.execute(`CREATE TABLE ${relation.name} (${relation.columns})`); }
             await transaction.execute('CREATE INDEX kb_chunk_generation ON kb_chunk(doc,generation)');
@@ -566,6 +574,7 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
         try { if (!rows.goToNextRow()) { throw new KnowledgeFailure('StalePreparation','prepare'); } } finally { rows.close(); }
         const count: relationalStore.ResultSet = await transaction.querySql('SELECT coalesce(sum(chunks),0) FROM kb_document WHERE tombstone=0 AND id<>?',[document.id]);
         try { if (!count.goToNextRow() || count.getLong(0)+chunks.length > PdfBudget.activeChunks) { throw new KnowledgeFailure('ActiveChunkBudget','prepare'); } } finally { count.close(); }
+        await knowledgePublicationBudget(transaction,'Pdf',document.id,chunks.length);
         for (const chunk of chunks) {
           if (chunk.documentId !== document.id || chunk.generation !== job.generation || chunk.snapshotHash !== job.snapshotHash || chunk.originalHash !== document.binding.originalHash || pdfCodecUtf8(chunk.retrievalText).length > 2048 || Array.from(chunk.retrievalText).length > 512) { throw new KnowledgeFailure('ChunkIdentityOrBudget','prepare'); }
           const locators: string = JSON.stringify(chunk.locators); if (pdfCodecUtf8(locators).length > PdfBudget.rowBytes) { throw new KnowledgeFailure('LocatorRowBudget','prepare'); }
@@ -593,6 +602,7 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
         const rows: relationalStore.ResultSet = await transaction.querySql('SELECT g.expected FROM kb_content_generation g JOIN kb_job j ON j.id=g.job JOIN kb_document d ON d.id=g.doc WHERE g.id=? AND g.state=? AND g.cleanup_claim=? AND g.snapshot_hash=? AND g.report_hash=? AND g.approval_hash=? AND j.id=? AND j.epoch=? AND j.terminated=0 AND j.stage=? AND d.tombstone=0 AND d.epoch=? AND d.active_content=? AND d.original_hash=?',[job.generation,'Publishable','',job.snapshotHash,job.reportHash,approval.reportHash,job.id,job.epoch,PdfStage.Prepared,job.epoch,job.expectedOldGeneration,document.binding.originalHash]);
         let chunks: number = 0; try { if (!rows.goToNextRow()) { return; } chunks = rows.getLong(0); } finally { rows.close(); }
         if (approval.snapshotHash !== job.snapshotHash || approval.confirmedAt <= 0 || chunks < 1) { return; }
+        await knowledgePublicationBudget(transaction,'Pdf',document.id,chunks);
         await transaction.execute('UPDATE kb_content_generation SET state=? WHERE id=?',['Active',job.generation]);
         await transaction.execute('UPDATE kb_vector_generation SET state=?,eligibility=0 WHERE doc=? AND id IN (SELECT active_vector FROM kb_document WHERE id=?)',['Retained',document.id,document.id]);
         await transaction.execute('UPDATE kb_document SET active_content=?,chunks=?,partial=1,stage=?,active_vector=?,active_space=?,updated=? WHERE id=?',[job.generation,chunks,PdfStage.Published,'','',Date.now(),document.id]);
@@ -649,14 +659,15 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
         for (let start: number = 0; start < full.length;) { const end: number = safeTextBoundary(full,Math.min(full.length,start+16384)); await transaction.execute('INSERT INTO kb_question_part VALUES(?,?,?)',[history.id,ordinal++,full.slice(start,end)]); start = end; }
         for (let index: number = 0; index < history.result.hits.length; index++) {
           const hit: KnowledgeHit = history.result.hits[index];
-          if ([KnowledgeSourceKind.Text,KnowledgeSourceKind.Pdf,KnowledgeSourceKind.Image].indexOf(hit.sourceKind) < 0 || hit.sourceKind === KnowledgeSourceKind.Image && hit.locator.image === undefined) { throw new KnowledgeFailure('UnknownCitationSource','history'); }
-          const locator: string = hit.sourceKind === KnowledgeSourceKind.Text ? encodeRanges(hit.locator.textRanges) : hit.sourceKind === KnowledgeSourceKind.Image ? JSON.stringify(hit.locator.image) : JSON.stringify(hit.locator.pdfRegions);
+          if ([KnowledgeSourceKind.Text,KnowledgeSourceKind.Pdf,KnowledgeSourceKind.Image,KnowledgeSourceKind.Docx].indexOf(hit.sourceKind) < 0 || hit.sourceKind === KnowledgeSourceKind.Image && hit.locator.image === undefined || hit.sourceKind === KnowledgeSourceKind.Docx && hit.locator.docx === undefined) { throw new KnowledgeFailure('UnknownCitationSource','history'); }
+          const locator: string = hit.sourceKind === KnowledgeSourceKind.Docx ? JSON.stringify(hit.locator.docx) : hit.sourceKind === KnowledgeSourceKind.Text ? encodeRanges(hit.locator.textRanges) : hit.sourceKind === KnowledgeSourceKind.Image ? JSON.stringify(hit.locator.image) : JSON.stringify(hit.locator.pdfRegions);
           if (pdfCodecUtf8(locator).length > PdfBudget.rowBytes || pdfCodecUtf8(hit.text).length > 2048 || pdfCodecUtf8(hit.retrievalText).length > 2048 || pdfCodecUtf8(hit.title).length > 4096) { throw new KnowledgeFailure('CitationBudget','save'); }
           await transaction.execute('INSERT INTO kb_citation VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[history.id,index,hit.id,hit.documentId,hit.sourceKind,hit.chunkId,hit.generation,hit.snapshotId,hit.snapshotHash,hit.originalHash,hit.originalVersion,hit.title,hit.text,hit.retrievalText,locator,pdfStoreFields(hit.channels),hit.keywordScore,hit.vectorDistance ?? null,hit.rrfScore,hit.spaceId,hit.epoch]);
           await transaction.execute('INSERT INTO r2v_citation VALUES(?,?,?,?,?)',[history.id,index,hit.vectorGeneration,hit.keywordRank,hit.vectorRank]);
           const presentation = new KnowledgeResultPresentation(); presentation.citationId = hit.id; presentation.match = hit.match.actualInput.length === 0 ? knowledgeLegacyMatch(hit,history.result.input.actualInput) : hit.match; presentation.pages = hit.pages;
           const imagePresentation: ImageResultPresentation = new ImageResultPresentation(); imagePresentation.citationId = hit.id; imagePresentation.match = presentation.match; imagePresentation.actualFormat = hit.actualFormat; imagePresentation.originalHash = hit.originalHash; imagePresentation.originalVersion = hit.originalVersion;
-          const wire: string = hit.sourceKind === KnowledgeSourceKind.Image ? JSON.stringify(imagePresentation) : JSON.stringify(presentation); if (pdfCodecUtf8(wire).length > PdfBudget.rowBytes) { throw new KnowledgeFailure('PresentationBudget','history'); } await transaction.execute('INSERT INTO kb_result_presentation VALUES(?,?,?)',[history.id,index,wire]);
+          const docxPresentation: DocxResultPresentation = new DocxResultPresentation(); docxPresentation.citationId = hit.id; docxPresentation.match = presentation.match; docxPresentation.originalHash = hit.originalHash; docxPresentation.originalVersion = hit.originalVersion;
+          const wire: string = hit.sourceKind === KnowledgeSourceKind.Docx ? JSON.stringify(docxPresentation) : hit.sourceKind === KnowledgeSourceKind.Image ? JSON.stringify(imagePresentation) : JSON.stringify(presentation); if (pdfCodecUtf8(wire).length > PdfBudget.rowBytes) { throw new KnowledgeFailure('PresentationBudget','history'); } await transaction.execute('INSERT INTO kb_result_presentation VALUES(?,?,?)',[history.id,index,wire]);
         }
       });
     });
@@ -685,12 +696,13 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
         while (cites.goToNextRow()) {
           if (history.result.hits.length >= 5) { throw new KnowledgeFailure('CitationCount','read'); }
           const hit: KnowledgeHit = new KnowledgeHit(); hit.id = cites.getString(2); hit.documentId = cites.getString(3);
-          const sourceKind: string = cites.getString(4); const knownSource = [KnowledgeSourceKind.Text,KnowledgeSourceKind.Pdf,KnowledgeSourceKind.Image].find((kind: KnowledgeSourceKind): boolean => kind === sourceKind);
+          const sourceKind: string = cites.getString(4); const knownSource = [KnowledgeSourceKind.Text,KnowledgeSourceKind.Pdf,KnowledgeSourceKind.Image,KnowledgeSourceKind.Docx].find((kind: KnowledgeSourceKind): boolean => kind === sourceKind);
           if (knownSource === undefined) { throw new KnowledgeFailure('UnknownHistorySource','history'); } hit.sourceKind = knownSource;
           hit.chunkId = cites.getString(5); hit.generation = cites.getString(6); hit.snapshotId = cites.getString(7); hit.snapshotHash = cites.getString(8); hit.originalHash = cites.getString(9); hit.originalVersion = cites.getLong(10);
           hit.title = cites.getString(11); hit.text = cites.getString(12); hit.retrievalText = cites.getString(13); hit.locator.kind = hit.sourceKind;
           if (hit.sourceKind === KnowledgeSourceKind.Text) { hit.locator.textRanges = decodeRanges(cites.getString(14)); }
           else if (hit.sourceKind === KnowledgeSourceKind.Pdf) { hit.locator.pdfRegions = pdfDecodeLocators(new BoundedDocumentJson(pdfCodecUtf8(cites.getString(14)),new KnowledgeCancellation()).read()); }
+          else if (hit.sourceKind === KnowledgeSourceKind.Docx) { hit.locator.docx = docxReadLocator(new BoundedDocumentJson(pdfCodecUtf8(cites.getString(14)),new KnowledgeCancellation()).read()); if (hit.locator.docx.originalHash !== hit.originalHash || hit.locator.docx.originalVersion !== hit.originalVersion || hit.locator.docx.end-hit.locator.docx.start !== hit.text.length) { throw new KnowledgeFailure('DocxCitationBinding','history'); } }
           else { hit.locator.image = imageReadLocator(new BoundedDocumentJson(pdfCodecUtf8(cites.getString(14)),new KnowledgeCancellation()).read()); if (hit.locator.image.originalHash !== hit.originalHash || hit.locator.image.originalVersion !== hit.originalVersion || hit.locator.image.end-hit.locator.image.start !== hit.text.length) { throw new KnowledgeFailure('ImageCitationSourceMismatch','history'); } }
           hit.channels = pdfReadFields(cites.getString(15),2).map((channel: string): KnowledgeChannel => channel === KnowledgeChannel.Vector ? KnowledgeChannel.Vector : KnowledgeChannel.Keyword);
           hit.keywordScore = cites.getDouble(16); hit.vectorDistance = cites.isColumnNull(17) ? undefined : cites.getDouble(17); hit.rrfScore = cites.getDouble(18); hit.spaceId = cites.getString(19); hit.epoch = cites.getLong(20); history.result.hits.push(hit);
@@ -699,13 +711,16 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
       for (let at: number = 0; at < history.result.hits.length; at++) { const extra = await this.requireStore().querySql('SELECT vector_generation,keyword_rank,vector_rank FROM r2v_citation WHERE query_id=? AND ordinal=?',[history.id,at]); try { if (extra.goToNextRow()) { const hit = history.result.hits[at]; hit.vectorGeneration = extra.getString(0); hit.keywordRank = extra.getLong(1); hit.vectorRank = extra.getLong(2); } } finally { extra.close(); } }
       for (let at: number = 0; at < history.result.hits.length; at++) {
         const hit = history.result.hits[at]; const saved = await this.requireStore().querySql('SELECT wire FROM kb_result_presentation WHERE query_id=? AND ordinal=?',[history.id,at]);
-        try { if (saved.goToNextRow()) { this.restorePresentation(hit,history.result.input,saved.getString(0)); } else { if (hit.sourceKind === KnowledgeSourceKind.Image) { throw new KnowledgeFailure('ImagePresentationMissing','history'); } hit.match = knowledgeLegacyMatch(hit,history.result.input.actualInput); } } finally { saved.close(); }
+        try { if (saved.goToNextRow()) { this.restorePresentation(hit,history.result.input,saved.getString(0)); } else { if (hit.sourceKind === KnowledgeSourceKind.Image || hit.sourceKind === KnowledgeSourceKind.Docx) { throw new KnowledgeFailure('SourcePresentationMissing','history'); } hit.match = knowledgeLegacyMatch(hit,history.result.input.actualInput); } } finally { saved.close(); }
       }
       for (const hit of history.result.hits) {
         if (hit.sourceKind === KnowledgeSourceKind.Pdf) { const doc: PdfKnowledgeDocument | undefined = await this.get(hit.documentId); hit.referenceState = doc === undefined || doc.tombstone ? KnowledgeReferenceState.Invalid : doc.activeContentGeneration !== hit.generation || doc.binding.originalHash !== hit.originalHash ? KnowledgeReferenceState.Old : KnowledgeReferenceState.Current; }
         else if (hit.sourceKind === KnowledgeSourceKind.Image) {
           const image = await this.requireStore().querySql('SELECT d.active_generation,o.hash,o.version,d.tombstone FROM kb_image_document d JOIN kb_image_original o ON o.asset=d.active_original WHERE d.id=?',[hit.documentId]);
           try { hit.referenceState = !image.goToNextRow() || image.getLong(3) !== 0 ? KnowledgeReferenceState.Invalid : image.getString(0) !== hit.generation || image.getString(1) !== hit.originalHash || image.getLong(2) !== hit.originalVersion ? KnowledgeReferenceState.Old : KnowledgeReferenceState.Current; } finally { image.close(); }
+        } else if (hit.sourceKind === KnowledgeSourceKind.Docx) {
+          const docx = await this.requireStore().querySql('SELECT d.active_generation,o.hash,o.version,d.tombstone FROM kb_docx_document d JOIN kb_docx_original o ON o.asset=d.active_original WHERE d.id=?',[hit.documentId]);
+          try { hit.referenceState = !docx.goToNextRow() || docx.getLong(3) !== 0 ? KnowledgeReferenceState.Invalid : docx.getString(0) !== hit.generation || docx.getString(1) !== hit.originalHash || docx.getLong(2) !== hit.originalVersion ? KnowledgeReferenceState.Old : KnowledgeReferenceState.Current; } finally { docx.close(); }
         } else {
           const text: relationalStore.ResultSet = await this.requireStore().querySql('SELECT active,hash FROM text_doc WHERE id=?',[hit.documentId]);
           try { hit.referenceState = !text.goToNextRow() ? KnowledgeReferenceState.Invalid : text.getString(0) !== hit.generation || text.getString(1) !== hit.originalHash ? KnowledgeReferenceState.Old : KnowledgeReferenceState.Current; } finally { text.close(); }
@@ -716,7 +731,11 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
   private restorePresentation(hit: KnowledgeHit, input: TextQueryInput, wire: string): void {
     const raw = new BoundedDocumentJson(pdfCodecUtf8(wire),new KnowledgeCancellation()).read();
     const wireVersion: string = raw.required('wire').string();
-    if (wireVersion !== (hit.sourceKind === KnowledgeSourceKind.Image ? 'KNOWLEDGE-RESULT-2' : 'KNOWLEDGE-RESULT-1') || raw.required('citationId').string() !== hit.id) { throw new KnowledgeFailure('PresentationIdentity','history'); }
+    if (wireVersion !== (hit.sourceKind === KnowledgeSourceKind.Docx ? 'KNOWLEDGE-RESULT-3' : hit.sourceKind === KnowledgeSourceKind.Image ? 'KNOWLEDGE-RESULT-2' : 'KNOWLEDGE-RESULT-1') || raw.required('citationId').string() !== hit.id) { throw new KnowledgeFailure('PresentationIdentity','history'); }
+    if (hit.sourceKind === KnowledgeSourceKind.Docx) {
+      imageExactFields(raw,['wire','citationId','match','sourceKind','actualFormat','originalHash','originalVersion']);
+      if (raw.required('sourceKind').string() !== 'Docx' || raw.required('actualFormat').string() !== 'DOCX' || raw.required('originalHash').string() !== hit.originalHash || raw.required('originalVersion').integer() !== hit.originalVersion) { throw new KnowledgeFailure('DocxPresentationBinding','history'); } hit.actualFormat = 'DOCX';
+    }
     if (hit.sourceKind === KnowledgeSourceKind.Image) {
       imageExactFields(raw,['wire','citationId','match','sourceKind','actualFormat','originalHash','originalVersion']);
       hit.actualFormat = raw.required('actualFormat').string();
@@ -729,7 +748,7 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
     const ranges: string = JSON.stringify(match.required('ranges').array().map((range: PdfJsonNode): number[] => [range.required('start').integer(),range.required('end').integer()]));
     if (rebuilt.kind !== match.required('kind').string() || ranges !== JSON.stringify(rebuilt.ranges.map((range: KnowledgeResultRange): number[] => [range.start,range.end])) || match.required('matchedTerms').array().map((term: PdfJsonNode): string => term.string()).join('\t') !== rebuilt.matchedTerms.join('\t')) { throw new KnowledgeFailure('PresentationRangeMismatch','history'); }
     rebuilt.textHash = match.required('textHash').string(); rebuilt.compatibility = match.required('compatibility').kind === 'true'; hit.match = rebuilt;
-    if (hit.sourceKind === KnowledgeSourceKind.Image) { return; }
+    if (hit.sourceKind === KnowledgeSourceKind.Image || hit.sourceKind === KnowledgeSourceKind.Docx) { return; }
     const pages = raw.required('pages'); const state: string = pages.required('state').string(); const restored = new ResultPageReference();
     // Text citations have no PDF context. PDF context is independently revalidated before navigation.
     if (hit.sourceKind === KnowledgeSourceKind.Pdf && pages.required('originalHash').string().length > 0) { pdfCopyPageContext(pdfDecodePageContext(pages),restored); }
@@ -796,6 +815,7 @@ export class PdfKnowledgeRepository implements PdfRepositoryPort, EmbeddingMetad
         if (intent.claim.length === 0) {
           intent.claim = `claim-${intent.generation}`; const assets: relationalStore.ResultSet = await transaction.querySql('SELECT id FROM kb_asset WHERE generation=?',[intent.generation]);
           try { while (assets.goToNextRow()) { intent.assets.push(assets.getString(0)); } } finally { assets.close(); }
+          await this.host.assertUnifiedUnheld('PdfAssetAdapter',intent.assets);
           const vectors: relationalStore.ResultSet = await transaction.querySql('SELECT id,space,job FROM kb_vector_generation WHERE content_generation=?',[intent.generation]);
           try { while (vectors.goToNextRow()) { const target: KnowledgeCleanupTarget = new KnowledgeCleanupTarget(); target.vectorGeneration = vectors.getString(0); target.spaceId = vectors.getString(1); target.owner = vectors.getString(2); target.contentGeneration = intent.generation; intent.vectorTargets.push(target); } } finally { vectors.close(); }
           for (const target of intent.vectorTargets) { await transaction.execute('UPDATE kb_vector_generation SET state=?,eligibility=0,cleanup_claim=? WHERE id=?',['CleanupClaimed',intent.claim,target.vectorGeneration]); await transaction.execute('INSERT INTO kb_cleanup_target VALUES(?,?,?,?,?,?,?,?)',[intent.id,'Vector',intent.generation,target.spaceId,target.vectorGeneration,target.owner,'Pending','']); }

@@ -20,6 +20,7 @@ import { DocumentParseAssembly } from '../knowledge/infra/DocumentParseAssembly'
 import { KnowledgeAssembly } from '../knowledge/infra/KnowledgeAssembly';
 import { SemanticQualitySession } from '../knowledge/platformtests/SemanticQualitySuite';
 import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
+import { DocxIngestionService } from '../knowledge/application/DocxIngestionService';
 import { ImageIntegrationSuite } from '../knowledge/platformtests/ImageIntegrationSuite';
 
 const DOMAIN = 0x0000;
@@ -35,6 +36,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    DocxIngestionService.background();
     ImageIntegrationSuite.background();
     ImageIngestionService.background();
     SemanticQualitySession.background();
@@ -62,11 +64,13 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
+    KnowledgeAssembly.foreground();
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 
   onBackground(): void {
+    DocxIngestionService.background();
     ImageIntegrationSuite.background();
     ImageIngestionService.background();
     SemanticQualitySession.background();

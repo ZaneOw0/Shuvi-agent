@@ -8,12 +8,14 @@ import {
   TextBudget, TextFailure, TextCancellation, TextSelection, TextSelectedFile, TextFormat, TextOriginal, TextSnapshot
 } from '../domain/TextKnowledgeModels';
 import { textEncodeSnapshotTask, textDecodeSnapshotTask } from './TextProcessingAdapter';
+import { KnowledgeStoreHost } from './KnowledgeStoreHost';
 
 export const TEXT_USER_DIRECTORY: string = 'knowledge_user_v1';
 export class TextFileAdapter implements TextSelectionPort, TextAssetPort {
   private context: common.Context;
   private root: string;
-  constructor(context: common.Context) { this.context = context; this.root = `${context.filesDir}/${TEXT_USER_DIRECTORY}`; }
+  private host: KnowledgeStoreHost;
+  constructor(context: common.Context, host: KnowledgeStoreHost = KnowledgeStoreHost.forContext(context)) { this.context = context; this.root = `${context.filesDir}/${TEXT_USER_DIRECTORY}`; this.host = host; }
 
   async select(): Promise<TextSelection> {
     const options: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
@@ -147,6 +149,9 @@ export class TextFileAdapter implements TextSelectionPort, TextAssetPort {
     return snapshot;
   }
   async remove(assetIds: string[]): Promise<void> {
+    await this.host.withUnifiedCleanup<void>('TextFileAdapter',assetIds,async (): Promise<void> => { await this.removeOwned(assetIds); });
+  }
+  private async removeOwned(assetIds: string[]): Promise<void> {
     await this.ensureRoot();
     for (const id of assetIds) {
       const path: string = this.path(id);
@@ -157,6 +162,7 @@ export class TextFileAdapter implements TextSelectionPort, TextAssetPort {
     }
   }
   async reconcile(keepIds: string[]): Promise<void> {
+    keepIds = keepIds.concat(await this.host.unifiedHeldAssets('TextFileAdapter'));
     await this.ensureRoot();
     const names: string[] = await fileIo.listFile(this.root);
     for (const name of names) {

@@ -6,6 +6,8 @@ import {
 import { KnowledgeFailure } from '../domain/PdfKnowledgeModels';
 import { documentUtf8Bytes } from '../domain/DocumentParseModels';
 import { embeddingLocalEligible, embeddingConfigBinding } from './EmbeddingBasisPolicy';
+import { UnifiedQueryGrant } from '../domain/UnifiedQueryModels';
+import { UNIFIED_QUERY_POLICY } from '../domain/UnifiedKnowledgeModels';
 
 export function embeddingCredentialAlias(config: EmbeddingConfig): string {
   if ([EmbeddingProvider.SiliconFlow,EmbeddingProvider.Bailian,EmbeddingProvider.Gemini,EmbeddingProvider.OpenAI].indexOf(config.provider) < 0 || [EmbeddingRegion.Unselected,EmbeddingRegion.Beijing,EmbeddingRegion.Singapore].indexOf(config.region) < 0 || [EmbeddingAccess.Public,EmbeddingAccess.Workspace].indexOf(config.access) < 0) { throw new KnowledgeFailure('ProviderConfigurationInvalid','embedding'); }
@@ -36,9 +38,13 @@ export function embeddingValidateConfig(config: EmbeddingConfig): void {
 }
 export function embeddingAuthorize(config: EmbeddingConfig, grant: EmbeddingGrant, purpose: EmbeddingPurpose): void {
   embeddingValidateConfig(config); embeddingEndpoint(config, purpose);
+  if (grant instanceof UnifiedQueryGrant) {
+    const a=grant.approval;
+    if (purpose!==EmbeddingPurpose.Query || grant.purpose!==EmbeddingPurpose.Query || grant.unifiedPolicy!==UNIFIED_QUERY_POLICY || a.policy!==UNIFIED_QUERY_POLICY || !a.approved || !a.costAccepted || a.revoked || grant.revoked || config.mutationPending || config.provider!==EmbeddingProvider.SiliconFlow || config.modelId!=='BAAI/bge-m3' || a.actual.length===0 || a.scopeHash.length!==64 || a.spaceId.length===0 || grant.spaceId!==a.spaceId || grant.sessionId!==a.session || grant.configFingerprint!==a.configBinding || grant.credentialRevision!==a.credentialRevision || grant.inputHashes.length!==1 || a.inputHash!==grant.inputHashes[0] || a.configBinding!==embeddingConfigBinding(config) || a.credentialRevision!==config.credentialRevision || grant.issuedAt<=0 || grant.expiresAt<=Date.now() || grant.issuedAt>Date.now() || grant.proof.role!=='query' || grant.proof.policyVersion!==UNIFIED_QUERY_POLICY || grant.proof.textHash!==a.inputHash || grant.proof.bindingHash!==a.proofBinding || !grant.proof.profileBoundProven || grant.proof.localState!=='SafeUnderPinnedProfile' || grant.proof.upperBound<1 || grant.proof.upperBound>8192) { throw new KnowledgeFailure('NoRequestUnifiedQueryGrant','egress-grant'); } return;
+  }
   if (config.mutationPending || grant.revoked || grant.purpose !== purpose || grant.provider !== config.provider || grant.configFingerprint !== embeddingFingerprint(config) || grant.credentialRevision !== config.credentialRevision || grant.free !== EmbeddingFreeEligibility.Confirmed || grant.issuedAt <= 0 || grant.expiresAt <= Date.now() || grant.issuedAt > Date.now()) { throw new KnowledgeFailure('NoRequest', 'egress-grant'); }
   if (purpose !== EmbeddingPurpose.Models && config.modelId.trim().length === 0) { throw new KnowledgeFailure('ModelMissing', 'embedding'); }
-  if (purpose === EmbeddingPurpose.Corpus || purpose === EmbeddingPurpose.ImageCorpus || purpose === EmbeddingPurpose.Query) {
+  if (purpose === EmbeddingPurpose.Corpus || purpose === EmbeddingPurpose.ImageCorpus || purpose === EmbeddingPurpose.DocxCorpus || purpose === EmbeddingPurpose.Query) {
     if (config.provider !== EmbeddingProvider.SiliconFlow || config.modelId !== 'BAAI/bge-m3' || grant.spaceId.length === 0 || grant.sessionId.length === 0 || grant.inputHashes.length === 0 || grant.inputEvidence.length !== grant.inputHashes.length || grant.inputEvidence.some((evidence, index: number): boolean => !embeddingLocalEligible(evidence,config) || evidence.modelId !== config.modelId || evidence.textHash !== grant.inputHashes[index] || evidence.role !== (purpose === EmbeddingPurpose.Query ? 'query' : 'document') || evidence.applicableScope.length === 0 || !Number.isSafeInteger(evidence.upperBound) || evidence.upperBound < 1 || evidence.contextLimit !== 8192 || evidence.upperBound > evidence.contextLimit)) { throw new KnowledgeFailure('InputLimitUnverified','embedding'); }
   }
   if (grant.trialId.length > 0 && (purpose !== EmbeddingPurpose.Query || grant.trialSetHash.length !== 64 || grant.documentId.length === 0 || grant.generation.length === 0 || grant.snapshotHash.length !== 64 || grant.inputHashes.length !== 1 || grant.scopeChunkIds.length !== 3 || new Set<string>(grant.scopeChunkIds).size !== 3 || grant.scopeInputHashes.length !== 3)) { throw new KnowledgeFailure('TrialQueryScopeGrantInvalid','egress-grant'); }

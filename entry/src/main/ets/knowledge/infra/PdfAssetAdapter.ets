@@ -14,6 +14,10 @@ import { pdfEncodeNodeWorker, pdfHydrateHeaderWorker, pdfHydrateNodeWorker } fro
 import { PdfWorkerResult } from '../domain/PdfWorkerModels';
 import { pdfWorkerPayload, pdfWorkerReadNode, pdfWorkerReadSnapshot, pdfWorkerRejected } from '../pipeline/PdfWorkerPolicy';
 import { pdfWorkerAwait } from './PdfWorkerSupport';
+import { PdfImagePayloadExporter } from './PdfImagePayload';
+import { ParsedImageAsset } from '../domain/ParsedDocumentModels';
+import { ParsedAssetPort } from '../domain/ParsedDocumentPorts';
+import { KnowledgeIdentityPort } from '../domain/KnowledgePorts';
 
 export interface PdfAssetLedgerPort {
   reserveAsset(id: string, generation: string, bytes: number): Promise<void>;
@@ -30,6 +34,8 @@ export interface PdfAssetLedgerPort {
   snapshotAssets(generation: string): Promise<string[]>;
 }
 export class PdfAssetAdapter implements PdfAssetPort, KnowledgeDerivedCleanupPort {
+  private cleanupGuard: ((assets: string[], action: () => Promise<void>) => Promise<void>) | undefined;
+  attachCleanupGuard(guard: (assets: string[], action: () => Promise<void>) => Promise<void>): void { this.cleanupGuard = guard; }
   private filesRoot: string; private cacheRoot: string; private ledger: PdfAssetLedgerPort;
   private scope: KnowledgeStorageScope; private fault: string = '';
   private async encodeNode(node: PdfContentNode, cancel: KnowledgeCancellation): Promise<Uint8Array> {
@@ -277,6 +283,9 @@ export class PdfAssetAdapter implements PdfAssetPort, KnowledgeDerivedCleanupPor
     } return snapshot;
   }
   async readImage(derived: PdfDerivedImage, generation: string, cancel: KnowledgeCancellation): Promise<Uint8Array> { return this.readImageBytes(derived.id,generation,derived.sha256,derived.bytes,cancel); }
+  async exportImage(derived: PdfDerivedImage, oldGeneration: string, document: string, generation: string, id: string, target: ParsedAssetPort, identity: KnowledgeIdentityPort, cancel: KnowledgeCancellation): Promise<ParsedImageAsset> {
+    return new PdfImagePayloadExporter(this.filesRoot,this.ledger,identity).export(derived,oldGeneration,document,generation,id,target,cancel);
+  }
   private async readImageBytes(id: string, generation: string, hash: string, expectedBytes: number, cancel: KnowledgeCancellation): Promise<Uint8Array> {
       this.safeId(id); const imageRoot: string = `${this.filesRoot}/${id}`; const descriptor: PdfAssetDescriptor = await this.ledger.assetDescriptor(id);
       if (descriptor.generation !== generation || expectedBytes < 1 || expectedBytes > PdfBudget.memberBytes) { throw new KnowledgeFailure('ImageOwnerMismatch','pdf-assets'); }
@@ -303,6 +312,11 @@ export class PdfAssetAdapter implements PdfAssetPort, KnowledgeDerivedCleanupPor
       if (total !== expectedBytes || documentDigestHex((await digest.digest()).data) !== hash) { throw new KnowledgeFailure('ImageReadbackHash','pdf-assets'); } return output;
   }
   async remove(claim: KnowledgeCleanupIntent): Promise<void> {
+    const guard = this.cleanupGuard;
+    if (guard !== undefined) { await guard(claim.assets,async (): Promise<void> => { await this.removeOwned(claim); }); }
+    else { await this.removeOwned(claim); }
+  }
+  private async removeOwned(claim: KnowledgeCleanupIntent): Promise<void> {
     if (claim.claim.length === 0) { throw new KnowledgeFailure('CleanupClaimMissing','pdf-assets'); }
     for (const id of claim.assets) {
       this.safeId(id);

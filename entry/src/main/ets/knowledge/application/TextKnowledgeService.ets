@@ -21,6 +21,10 @@ export class TextKnowledgeService {
   private detailEpoch: number = 0;
   private queryEpoch: number = 0;
   private indexTimer: number = -1;
+  private beforeCleanup: (() => Promise<void>) | undefined;
+  attachBeforeCleanup(action: () => Promise<void>): void { this.beforeCleanup = action; }
+  private unifiedImport: (() => Promise<void>) | undefined;
+  attachUnifiedImport(action: () => Promise<void>): void { this.unifiedImport = action; }
   constructor(selection: TextSelectionPort, assets: TextAssetPort, processor: TextProcessingPort, repository: TextRepositoryPort) {
     this.selection = selection; this.assets = assets; this.processor = processor; this.repository = repository;
   }
@@ -31,8 +35,16 @@ export class TextKnowledgeService {
   private message(error: Object): string {
     return error instanceof TextFailure ? `${error.category} / ${error.stage}：${error.message}` : '本机操作失败，已保存资料与旧索引保留';
   }
-  async initialize(): Promise<void> {
-    await this.repository.open(); await this.repository.reconcile(); await this.retryCleanup();
+  async initialize(deferRecovery: boolean = false): Promise<void> {
+    await this.repository.open();
+    if (this.beforeCleanup !== undefined) {
+      try { await this.beforeCleanup(); }
+      catch { this.state.message = '统一引用保护未就绪，已暂停旧资产清理；资料保留'; await this.refresh(); this.emit(); return; }
+    }
+    if (deferRecovery) { await this.refresh(); } else { await this.recoverLocal(); }
+  }
+  async recoverLocal(): Promise<void> {
+    await this.repository.reconcile(); await this.retryCleanup();
     try { await this.assets.reconcile(await this.repository.assetIds()); }
     catch { this.state.message = '启动资产对账未完成，可重试；已有资料保留'; }
     await this.refresh();
@@ -82,6 +94,7 @@ export class TextKnowledgeService {
     this.emit(); return true;
   }
   async importFiles(): Promise<void> {
+    if (this.unifiedImport !== undefined) { await this.unifiedImport(); return; }
     if (this.state.busy || this.closing) { return; }
     this.batchCanceled = false;
     this.state.busy = true; this.state.message = ''; this.emit();

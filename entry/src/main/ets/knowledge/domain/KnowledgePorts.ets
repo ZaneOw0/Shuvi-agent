@@ -12,6 +12,7 @@ import { TextQueryInput } from './TextKnowledgeModels';
 import { PdfPageIdentityEvidence, ResultPageReference } from './PdfLocalModels';
 import { KnowledgeScopeReceipt } from './ImageKnowledgeModels';
 import { QueryConsentSnapshot } from './EmbeddingModels';
+import { ParsedIdentityPort } from './ParsedDocumentPorts';
 
 export class KnowledgeSourceScan { kind: string = ''; revision: string = ''; count: number = 0; complete: boolean = false; hits: KnowledgeHit[] = []; }
 export interface KnowledgeSearchSourcePort {
@@ -47,7 +48,7 @@ export class KnowledgeCallbackListener implements KnowledgeStateListener {
   constructor(callback: () => void) { this.callback = callback; }
   changed(): void { this.callback(); }
 }
-export interface KnowledgeIdentityPort { id(): string; hash(bytes: Uint8Array): Promise<string>; }
+export interface KnowledgeIdentityPort extends ParsedIdentityPort { id(): string; hash(bytes: Uint8Array): Promise<string>; }
 export interface KnowledgeRangeReader { length: number; read(offset: number, length: number, cancel: KnowledgeCancellation): Promise<Uint8Array>; close(): Promise<void>; }
 export interface PdfArchivePort {
   capability(): string;
