@@ -66,8 +66,8 @@ exports.changedEts = [
   ,'infra/KnowledgeSourceReaders','infra/DocxSourceReader'
   ,'pipeline/UnifiedProcessingPresentation','ui/DocumentParseView'
   ,'domain/UnifiedQueryModels','domain/UnifiedQueryPorts','infra/UnifiedQueryRepository','application/UnifiedQueryService','application/KnowledgeQuerySession','infra/UnifiedKnowledgeHistoryRepository','pipeline/UnifiedHistoryCodec',
-   'pipeline/KnowledgeRetrievalPolicy','pipeline/KnowledgeMatchPolicy','application/QueryConsentSession','application/KnowledgeSearchService','infra/KnowledgeSourceRegistry','pipeline/EmbeddingPolicy','ui/UnifiedKnowledgeView','ui/KnowledgeView','ui/KnowledgeResultCard','domain/KnowledgeSearchModels','domain/ParsedLifecyclePorts'
-].map(n => 'entry/src/main/ets/knowledge/'+n+'.ets').concat(['entry/src/main/ets/pages/Index.ets','entry/src/main/ets/entryability/EntryAbility.ets']);
+   'pipeline/KnowledgeRetrievalPolicy','pipeline/KnowledgeMatchPolicy','application/QueryConsentSession','application/KnowledgeSearchService','infra/KnowledgeSourceRegistry','pipeline/EmbeddingPolicy','ui/UnifiedKnowledgeView','ui/KnowledgeView','ui/KnowledgeResultCard','ui/KnowledgeVisuals','domain/KnowledgeSearchModels','domain/ParsedLifecyclePorts'
+].map(n => 'entry/src/main/ets/knowledge/'+n+'.ets').concat(['entry/src/main/ets/pages/Index.ets','entry/src/main/ets/entryability/EntryAbility.ets','entry/src/main/ets/components/FeaturePages.ets']);
 exports.harness = () => {
   const ts = require(path.join(process.env.DEVECO_SDK_HOME || '/Applications/DevEco-Studio.app/Contents/sdk',
     'default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));

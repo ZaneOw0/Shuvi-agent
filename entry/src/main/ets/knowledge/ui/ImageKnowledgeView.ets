@@ -1,3 +1,4 @@
+import { Theme } from '../../components/Theme';
 import { ImageKnowledgeService } from '../application/ImageKnowledgeService';
 import { ParsedDocumentIngestionService } from '../application/ParsedDocumentIngestionService';
 import { UnifiedProcessingQueue } from '../application/UnifiedProcessingQueue';
@@ -39,25 +40,25 @@ export struct ImageKnowledgeView {
   }
   build() {
     Column({space:12}) {
-      Row() { Button('返回').id('upd-image-back').onClick(this.onBack); Text('图片知识').fontSize(20).layoutWeight(1) }.width('100%')
-      Text(this.message).id('upd-image-status').fontSize(13).width('100%')
+      Row() { Button('返回').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-image-back').onClick(this.onBack); Text('图片详情').fontColor(Theme.ink).fontSize(20).layoutWeight(1) }.width('100%')
+      Text(this.message).fontColor(Theme.ink).id('upd-image-status').fontSize(13).width('100%')
       if (this.selected.occurrenceId.length === 0) {
-      Row() { Button('上一页').enabled(this.page>0).onClick((): void=> { this.page--; this.refresh(); }); Button('下一页').enabled((this.page+1)*12<this.total).onClick((): void=> { this.page++; this.refresh(); }) }.width('100%')
-      ForEach(this.records,(r: UnifiedImageRecord)=> { Button(`${r.title} · ${r.effectiveId==='None'?'待标注':'已标注'}`).id('upd-image-detail-'+r.occurrenceId).width('100%').onClick((): void=> { this.open(r); }) },(r: UnifiedImageRecord): string=>r.occurrenceId)
+      Row() { Button('上一页').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).enabled(this.page>0).onClick((): void=> { this.page--; this.refresh(); }); Button('下一页').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).enabled((this.page+1)*12<this.total).onClick((): void=> { this.page++; this.refresh(); }) }.width('100%')
+      ForEach(this.records,(r: UnifiedImageRecord)=> { Button(`${r.title} · ${r.effectiveId==='None'?'待标注':'已标注'}`).fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-image-detail-'+r.occurrenceId).width('100%').onClick((): void=> { this.open(r); }) },(r: UnifiedImageRecord): string=>r.occurrenceId)
       }
       if (this.selected.occurrenceId.length>0) {
-        if (this.previewPath.length>0) { Image(this.previewPath).objectFit(ImageFit.Contain).width('100%').height(240) }
-        Text(this.parents).fontSize(12).width('100%')
-        Text('OCR').fontSize(15).width('100%'); Text(this.selected.ocr || '未识别到文字').width('100%')
-        if (this.selected.caption.length > 0) { Text(this.selected.caption).fontSize(14).width('100%') }
-        if (this.annotation.description.length > 0) { Text('图片描述').fontSize(15).width('100%'); Text(this.annotation.description).width('100%') }
-        if (this.annotation.tags.length > 0) { Text(this.annotation.tags.join(' · ')).fontSize(14).width('100%') }
-        Button(this.editing ? '取消编辑' : '编辑描述与标签').id('upd-image-edit').enabled(this.sourceCurrent).onClick((): void => { this.editing = !this.editing; })
+        if (this.previewPath.length>0) { Image(this.previewPath).objectFit(ImageFit.Contain).width('100%').height(260).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line }) }
+        Text(this.parents).fontColor(Theme.ink).fontSize(12).width('100%')
+        Text('图片文字').fontColor(Theme.ink).fontSize(15).width('100%'); Text(this.selected.ocr || '未识别到文字').fontColor(Theme.ink).width('100%')
+        if (this.selected.caption.length > 0) { Text(this.selected.caption).fontColor(Theme.ink).fontSize(14).width('100%') }
+        if (this.annotation.description.length > 0) { Text('图片描述').fontColor(Theme.ink).fontSize(15).width('100%'); Text(this.annotation.description).fontColor(Theme.ink).lineHeight(26).width('100%').padding(16).backgroundColor(Theme.surface).borderRadius(16) }
+        if (this.annotation.tags.length > 0) { Text(this.annotation.tags.join(' · ')).fontColor(Theme.ink).fontSize(14).fontColor(Theme.accent).lineHeight(24).width('100%').padding(14).backgroundColor(Theme.soft).borderRadius(14) }
+        Button(this.editing ? '取消编辑' : '编辑描述与标签').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-image-edit').enabled(this.sourceCurrent).onClick((): void => { this.editing = !this.editing; })
         if (this.editing) {
-        TextArea({text:this.descriptionInput,placeholder:'描述，可删空'}).id('upd-image-description').maxLength(4000).onChange((v: string): void=> { this.descriptionInput=v; })
-        TextArea({text:this.tagsInput,placeholder:'每行一个标签；移除行即删除标签'}).id('upd-image-tags').maxLength(3000).onChange((v: string): void=> { this.tagsInput=v; })
-        Button('保存修正').id('upd-image-save').enabled(this.sourceCurrent).onClick((): void=> { this.save(); })
-        Button('删除描述与标签').id('upd-image-delete-annotation').enabled(this.sourceCurrent).onClick((): void=> { this.save(true); })
+        TextArea({text:this.descriptionInput,placeholder:'描述，可删空'}).fontColor(Theme.ink).backgroundColor(Theme.inputSurface).borderRadius(12).border({ width: 1, color: Theme.line }).id('upd-image-description').maxLength(4000).onChange((v: string): void=> { this.descriptionInput=v; })
+        TextArea({text:this.tagsInput,placeholder:'每行一个标签；移除行即删除标签'}).fontColor(Theme.ink).backgroundColor(Theme.inputSurface).borderRadius(12).border({ width: 1, color: Theme.line }).id('upd-image-tags').maxLength(3000).onChange((v: string): void=> { this.tagsInput=v; })
+        Button('保存修正').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-image-save').enabled(this.sourceCurrent).onClick((): void=> { this.save(); })
+        Button('删除描述与标签').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-image-delete-annotation').enabled(this.sourceCurrent).onClick((): void=> { this.save(true); })
         }
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({top:12,bottom:20})

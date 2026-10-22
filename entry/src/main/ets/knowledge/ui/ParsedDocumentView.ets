@@ -1,10 +1,12 @@
+import { AppIcon } from '../../components/AppIcon';
+import { FeatureRow } from '../../components/FeaturePages';
 import { ParsedDocumentIngestionService } from '../application/ParsedDocumentIngestionService';
 import { ParsedDocumentImportAdapter } from '../infra/ParsedDocumentImportAdapter';
 import { ParsedDocumentRecord, ParsedBlock, ParsedInline, ParsedImageOccurrence, ParsedTextChunk, ParsedImageAsset, ParsedFailure } from '../domain/ParsedDocumentModels';
 import { DocumentParseService } from '../application/DocumentParseService';
 import { DocumentOriginal, DocumentParseResultEnvelope, DocumentParseFormat, DocumentParseTask, DocumentTestAcknowledgement, DocumentParseStateListener, DocumentParseStage } from '../domain/DocumentParseModels';
 import { UnifiedProcessingJob } from '../domain/UnifiedKnowledgeModels';
-import { processingStageName, processingStateName, processingCanRetry, processingCurrentJobs, processingDocumentStatus, processingFailureText } from '../pipeline/UnifiedProcessingPresentation';
+import { processingStageName, processingJobStateName, processingCanRetry, processingCurrentJobs, processingDocumentStatus, processingFailureText } from '../pipeline/UnifiedProcessingPresentation';
 import { Theme } from '../../components/Theme';
 import { ParsedDocumentLifecycle } from '../application/KnowledgeLifecycleService';
 import { UnifiedProcessingQueue } from '../application/UnifiedProcessingQueue';
@@ -26,6 +28,7 @@ export struct ParsedDocumentView {
   onRetry: () => void = (): void => {};
   onBack: () => void = (): void => {};
   onParseTasks: () => void = (): void => {};
+  initialImportOpen: boolean = false;
   initialDocument: string = '';
   onNavigate: () => void = (): void => {};
   private filterController: TextInputController = new TextInputController();
@@ -88,7 +91,7 @@ export struct ParsedDocumentView {
     if (this.boundParse !== this.parse) { this.boundParse?.unsubscribe(this.parseListener); this.boundParse = this.parse; this.boundParse?.subscribe(this.parseListener); }
     this.refreshView();
   }
-  aboutToAppear(): void { this.alive = true; this.queue?.subscribe(this.resourceListener); this.bindServices(); this.reload(); this.refreshResources().catch((): void=> { this.message='处理进度读取未完成，可重试打开资料'; }); if (this.initialDocument.length > 0) { this.open(this.initialDocument); } }
+  aboutToAppear(): void { this.importOpen = this.initialImportOpen; this.alive = true; this.queue?.subscribe(this.resourceListener); this.bindServices(); this.reload(); this.refreshResources().catch((): void=> { this.message='处理进度读取未完成，可重试打开资料'; }); if (this.initialDocument.length > 0) { this.open(this.initialDocument); } }
   aboutToDisappear(): void { this.openSequence++; this.alive = false; this.queue?.unsubscribe(this.resourceListener); this.boundService?.unsubscribe(this.listener); this.boundParse?.unsubscribe(this.parseListener); this.boundService?.closePreview().catch((): void => {}); this.boundService = undefined; this.boundParse = undefined; this.parseConsent = ''; this.fullFile = false; this.freeEligible = false; }
   private refreshView(): void {
     if (!this.alive || this.service === undefined) { return; }
@@ -190,7 +193,7 @@ export struct ParsedDocumentView {
     } catch { if (sequence===this.openSequence) { this.clearContent(); this.message='当前文件内容读取失败，原件保留，请重试打开内容'; } }
     finally { if (sequence===this.openSequence) { this.contentLoading=false; } }
   }
-  private selectedJobs(): UnifiedProcessingJob[] { const record=this.selectedRecord(); const jobs=record===undefined?[]:processingCurrentJobs(this.processingJobs,record); return this.processingExpanded?jobs:jobs.slice(0,5); }
+  private selectedJobs(): UnifiedProcessingJob[] { const record=this.selectedRecord(); const jobs=record===undefined?[]:processingCurrentJobs(this.processingJobs,record); return this.processingExpanded?jobs:jobs.filter((j: UnifiedProcessingJob): boolean=>j.state!=='Complete').slice(0,3); }
   private selectedJobCount(): number { const record=this.selectedRecord(); return record===undefined?0:processingCurrentJobs(this.processingJobs,record).length; }
   private selectedProcessingStatus(): string { const record=this.selectedRecord(); return record===undefined?'':processingDocumentStatus(this.processingJobs,record); }
   private async retryProcessingJob(): Promise<void> {
@@ -244,110 +247,122 @@ export struct ParsedDocumentView {
   build() {
     Column({ space: 14 }) {
       Row({ space: 12 }) {
-        Button('返回').id('upd-back').enabled(!this.localBusy).onClick((): void => { if (this.selectedDocument.length > 0 || this.selectedOriginal.length > 0) { this.backToList(); } else { this.onBack(); } })
-        Text(this.selectedDocument.length > 0 || this.selectedOriginal.length > 0 ? '资料详情' : '我的资料').fontSize(22).fontWeight(FontWeight.Medium).layoutWeight(1)
+        Button('返回').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-back').enabled(!this.localBusy).onClick((): void => { if (this.selectedDocument.length > 0 || this.selectedOriginal.length > 0) { this.backToList(); } else { this.onBack(); } })
+        Text(this.selectedDocument.length > 0 || this.selectedOriginal.length > 0 ? '资料详情' : '我的资料').fontColor(Theme.ink).fontSize(22).fontWeight(FontWeight.Medium).layoutWeight(1)
       }.width('100%')
-      if (this.entryFailure.length > 0 || this.message.length > 0) { Text(this.entryFailure || this.message).id('upd-status').fontSize(14).width('100%') }
-      if (this.contentLoading) { LoadingProgress().width(28).height(28); Text('正在读取当前文件…').id('upd-content-loading') }
-      if (this.localBusy || (this.service?.state.busy ?? false)) { LoadingProgress().width(28).height(28); Text('正在处理，请稍候…').fontSize(14); Button('暂停处理').id('upd-processing-pause').onClick((): void => { this.service?.pause(); this.parse?.pause(); }) }
-      if (this.entryFailure.length > 0 || this.service === undefined) { Button('重试打开').id('upd-retry-open').onClick(this.onRetry) }
+      if (this.entryFailure.length > 0 || this.message.length > 0) { Text(this.entryFailure || this.message).fontColor(Theme.ink).id('upd-status').fontSize(14).width('100%') }
+      if (this.contentLoading) { LoadingProgress().width(28).height(28); Text('正在读取当前文件…').fontColor(Theme.ink).id('upd-content-loading') }
+      if (this.localBusy || (this.service?.state.busy ?? false)) { LoadingProgress().width(28).height(28); Text('正在处理，请稍候…').fontColor(Theme.ink).fontSize(14); Button('暂停处理').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-processing-pause').onClick((): void => { this.service?.pause(); this.parse?.pause(); }) }
+      if (this.entryFailure.length > 0 || this.service === undefined) { Button('重试打开').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-retry-open').onClick(this.onRetry) }
       if (this.selectedDocument.length === 0 && this.selectedOriginal.length === 0) {
-        Button('＋ 导入文件').id('upd-import').width('100%').constraintSize({ minHeight: 48 }).enabled(!this.localBusy && this.service !== undefined).onClick((): void => { this.importOpen = !this.importOpen; })
+        Button(this.importOpen ? '收起导入选项' : '＋ 导入文件').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-import').width('100%').constraintSize({ minHeight: 48 }).enabled(!this.localBusy && this.service !== undefined).onClick((): void => { this.importOpen = !this.importOpen; })
         if (this.importOpen) {
-          Text('选择文件类型').fontSize(16).width('100%')
-          Button('文本文档（TXT / Markdown）').id('upd-select-text').width('100%').enabled(!this.localBusy).onClick((): void => { this.select('Text'); })
-          Button('PDF 文档').id('upd-select-pdf').width('100%').enabled(!this.localBusy && this.parse !== undefined).onClick((): void => { this.select('Pdf'); })
-          Button('图片（JPG / PNG / WebP）').id('upd-select-image').width('100%').enabled(!this.localBusy && this.parse !== undefined).onClick((): void => { this.select('Image'); })
-          Button('Word 文档（DOCX）').id('upd-select-docx').width('100%').enabled(!this.localBusy && this.parse !== undefined).onClick((): void => { this.select('Docx'); })
-          Button('取消').onClick((): void => { this.importOpen = false; })
+          Text('选择文件类型').fontColor(Theme.ink).fontSize(16).width('100%')
+          FeatureRow({ title: '文本文档', description: 'TXT / Markdown · 本机解析', icon: $r('app.media.ui_document'), id: 'upd-select-text', available: !this.localBusy, onOpen: (): void => { this.select('Text'); } })
+          FeatureRow({ title: 'PDF 文档', description: '解析正文与内嵌图片', icon: $r('app.media.chat_book'), id: 'upd-select-pdf', available: !this.localBusy && this.parse !== undefined, onOpen: (): void => { this.select('Pdf'); } })
+          FeatureRow({ title: '图片', description: 'JPG / PNG / WebP · 图片与文字', icon: $r('app.media.chat_book'), id: 'upd-select-image', available: !this.localBusy && this.parse !== undefined, onOpen: (): void => { this.select('Image'); } })
+          FeatureRow({ title: 'Word 文档', description: 'DOCX · 正文与内嵌图片', icon: $r('app.media.ui_document'), id: 'upd-select-docx', available: !this.localBusy && this.parse !== undefined, onOpen: (): void => { this.select('Docx'); } })
+          Button('取消').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).onClick((): void => { this.importOpen = false; })
         }
-        TextInput({ text: this.filterText, placeholder: '按文件名查找资料', controller: this.filterController }).id('upd-library-filter').onChange((v: string): void => { this.filterText = v; this.refreshLibrary(); })
+        TextInput({ text: this.filterText, placeholder: '按文件名查找资料', controller: this.filterController }).fontColor(Theme.ink).backgroundColor(Theme.inputSurface).borderRadius(12).border({ width: 1, color: Theme.line }).id('upd-library-filter').onChange((v: string): void => { this.filterText = v; this.refreshLibrary(); })
         Row() {
-          Button(this.includeArchived ? '隐藏归档' : '查看归档').id('upd-library-archived').onClick((): void => { this.includeArchived = !this.includeArchived; this.refreshLibrary(); })
-          Button('解析设置').id('upd-parse-tasks').onClick(this.onParseTasks)
+          Button(this.includeArchived ? '隐藏归档' : '查看归档').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-library-archived').onClick((): void => { this.includeArchived = !this.includeArchived; this.refreshLibrary(); })
+          Button('解析设置').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-parse-tasks').onClick(this.onParseTasks)
         }.width('100%')
-        if (this.library.length === 0) { Text(this.filterText.length > 0 ? '没有找到这份资料' : '还没有资料，点击上方导入文件').fontSize(15).fontColor(Theme.muted).padding(20) }
+        if (this.library.length === 0) { Text(this.filterText.length > 0 ? '没有找到这份资料' : '还没有资料，点击上方导入文件').fontColor(Theme.ink).fontSize(15).fontColor(Theme.muted).padding(20) }
         ForEach(this.library, (item: ParsedLibraryItem) => {
           Column({ space: 8 }) {
-            Text(item.title).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
-            Text(item.status + '  ›').fontSize(13).fontColor(Theme.muted).width('100%')
-          }.id('upd-file-' + item.id).width('100%').padding(16).backgroundColor(Theme.surface).borderRadius(10).alignItems(HorizontalAlign.Start).onClick((): void => { this.openItem(item); })
+            Row({ space: 12 }) {
+              Stack() { AppIcon({ source: $r('app.media.ui_document'), size: 22 }) }.width(42).height(42).backgroundColor(Theme.soft).borderRadius(12)
+              Column({ space: 6 }) {
+                Text(item.title).fontColor(Theme.ink).fontSize(16).fontWeight(FontWeight.Medium).fontColor(Theme.ink).width('100%')
+                Text(item.status).fontColor(Theme.ink).fontSize(12).fontColor(Theme.muted).lineHeight(19).width('100%')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              AppIcon({ source: $r('app.media.ui_chevron_right'), size: 18 })
+            }.width('100%')
+          }.id('upd-file-' + item.id).width('100%').padding(16).backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line }).alignItems(HorizontalAlign.Start).onClick((): void => { this.openItem(item); }).accessibilityText(item.title+'，'+item.status).accessibilityGroup(true)
         }, (item: ParsedLibraryItem): string => item.id+'|'+item.status)
       } else {
-        Text(this.title).fontSize(20).fontWeight(FontWeight.Medium).width('100%')
+        Text(this.title).fontColor(Theme.ink).fontSize(24).fontWeight(FontWeight.Medium).width('100%')
         if (this.selectedOriginal.length > 0) {
-          Text(this.selectedStatus()).id('upd-file-status').fontSize(14).width('100%')
+          Text(this.selectedStatus()).fontColor(Theme.ink).id('upd-file-status').fontSize(14).width('100%')
           if (this.selectedResult() !== undefined && (this.selectedDocument.length === 0 || this.parsedEngine !== 'MinerU')) {
-            Button('保存到知识库').id('upd-save-result').enabled(!this.localBusy).onClick((): void => { this.saveSelected(); })
+            Button('保存到知识库').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-save-result').enabled(!this.localBusy).onClick((): void => { this.saveSelected(); })
           } else if (this.selectedResult() === undefined && !this.parseInterrupted()) {
-            Button('解析文件').id('upd-parse-selected').enabled(!this.localBusy).onClick((): void => { this.parseConsent = this.selectedOriginal; })
+            Button('解析文件').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-parse-selected').enabled(!this.localBusy).onClick((): void => { this.parseConsent = this.selectedOriginal; })
           }
         }
         if (this.parseInterrupted()) {
-          Text('云端上传/解析尚未完成，原件与上次任务保留。').fontSize(13).width('100%')
-          Button('核对并恢复原云任务').id('upd-resume-parse').enabled(!this.localBusy).onClick((): void=> { this.parseConsent='resume'; })
+          Text('云端上传/解析尚未完成，原件与上次任务保留。').fontColor(Theme.ink).fontSize(13).width('100%')
+          Button('核对并恢复原云任务').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-resume-parse').enabled(!this.localBusy).onClick((): void=> { this.parseConsent='resume'; })
         }
         if (this.parseConsent === 'resume') {
-          Text('确认仍使用先前同一账号。先查询原任务；服务明确仍待文件时，核验同一原件与租约后最多补传一次。失败结果包最多显式重取两次；可能产生流量或费用，不新建解析任务。').fontSize(13).width('100%')
-          Button('确认恢复原任务').id('upd-confirm-resume-parse').onClick((): void=> { this.resumeParse(); })
-          Button('取消').onClick((): void=> { this.parseConsent=''; })
+          Text('确认仍使用先前同一账号。先查询原任务；服务明确仍待文件时，核验同一原件与租约后最多补传一次。失败结果包最多显式重取两次；可能产生流量或费用，不新建解析任务。').fontColor(Theme.ink).fontSize(13).width('100%')
+          Button('确认恢复原任务').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-confirm-resume-parse').onClick((): void=> { this.resumeParse(); })
+          Button('取消').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).onClick((): void=> { this.parseConsent=''; })
         } else if (this.parseConsent.length > 0) {
-          Text('解析将把这份完整文件（含图片及元数据）发送给 MinerU。请确认文件不含敏感信息，且当前账号具有本件免费解析资格；服务可能留存文件。').fontSize(14).width('100%')
-          Button('同意发送并确认免费解析').id('upd-confirm-parse').enabled(!this.localBusy).onClick((): void => { this.fullFile = true; this.freeEligible = true; this.requestParse(); })
-          Button('取消').onClick((): void => { this.parseConsent = ''; })
+          Text('解析将把这份完整文件（含图片及元数据）发送给 MinerU。请确认文件不含敏感信息，且当前账号具有本件免费解析资格；服务可能留存文件。').fontColor(Theme.ink).fontSize(14).width('100%')
+          Button('同意发送并确认免费解析').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-confirm-parse').enabled(!this.localBusy).onClick((): void => { this.fullFile = true; this.freeEligible = true; this.requestParse(); })
+          Button('取消').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).onClick((): void => { this.parseConsent = ''; })
         }
         if (this.selectedDocument.length > 0) {
-          Text(this.selectedProcessingStatus()).id('upd-processing-status').fontSize(14).width('100%')
-          Text(this.selectedOriginal.length>0 && this.parsedEngine!=='MinerU' && this.blocks.length===0?'原图已保存，尚无解析正文/OCR；图片描述与向量处理见下方任务。':'本机正文/OCR可检索；未完成的向量任务完成后才可语义召回。').fontSize(12).fontColor(Theme.muted).width('100%')
+          Text('处理进度').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).fontColor(Theme.ink).width('100%')
+          Text(this.selectedProcessingStatus()).fontColor(Theme.ink).id('upd-processing-status').fontSize(14).width('100%')
+          Text(this.selectedOriginal.length>0 && this.parsedEngine!=='MinerU' && this.blocks.length===0?'原图已保存，尚无解析正文/OCR；图片描述与向量处理见下方任务。':'本机正文/OCR可检索；未完成的向量任务完成后才可语义召回。').fontColor(Theme.ink).fontSize(12).fontColor(Theme.muted).width('100%')
           ForEach(this.selectedJobs(),(job: UnifiedProcessingJob)=> {
             Column({space:6}) {
-              Text(`${processingStageName(job.stage)} · ${processingStateName(job.state)} · ${job.completed}/${job.expected}`).fontSize(13).width('100%')
-              if (job.failure.length>0) { Text(processingFailureText(job)).fontSize(13).width('100%') }
-              if (processingCanRetry(job)) { Button('重试'+processingStageName(job.stage)).id('upd-retry-job-'+job.id).enabled(!this.processingBusy).onClick((): void=> { this.retryJobId=job.id; }) }
+              Text(`${processingStageName(job.stage)} · ${processingJobStateName(job)} · ${job.completed}/${job.expected}`).fontColor(Theme.ink).fontSize(13).width('100%')
+              if (processingFailureText(job).length>0) { Text(processingFailureText(job)).fontColor(Theme.ink).fontSize(13).width('100%') }
+              if (processingCanRetry(job)) { Button('重试'+processingStageName(job.stage)).fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-retry-job-'+job.id).enabled(!this.processingBusy).onClick((): void=> { this.retryJobId=job.id; }) }
               if (this.retryJobId===job.id) {
-                Text('仅重新排队上述任务，已成功且身份一致的进度会复用。结果未知的请求可能重复计费。').fontSize(13).width('100%')
-                Button('接受可能费用，重试此任务').id('upd-retry-job-confirm').enabled(!this.processingBusy).onClick((): void=> { this.retryProcessingJob(); })
-                Button('取消').onClick((): void=> { this.retryJobId=''; })
+                Text('仅重新排队上述任务，已成功且身份一致的进度会复用。结果未知的请求可能重复计费。').fontColor(Theme.ink).fontSize(13).width('100%')
+                Button('接受可能费用，重试此任务').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-retry-job-confirm').enabled(!this.processingBusy).onClick((): void=> { this.retryProcessingJob(); })
+                Button('取消').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).onClick((): void=> { this.retryJobId=''; })
               }
-            }.width('100%')
+            }.width('100%').padding(16).backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
           },(job: UnifiedProcessingJob): string=>job.id+'|'+job.state+'|'+String(job.completed)+'|'+job.failure)
-          if (this.selectedJobCount()>5) { Button(this.processingExpanded?'收起处理任务':`查看全部处理任务（${this.selectedJobCount()}）`).id('upd-processing-expand').onClick((): void=> { this.processingExpanded=!this.processingExpanded; }) }
-          if (!this.contentLoading && this.blocks.length===0 && this.message.length>0) { Button('重试打开内容').id('upd-content-retry').onClick((): void=> { this.open(this.selectedDocument); }) }
+          if (this.selectedJobCount()>0 && (this.processingExpanded || this.selectedJobCount()>this.selectedJobs().length)) { Button(this.processingExpanded?'收起处理任务':`查看全部处理任务（${this.selectedJobCount()}）`).fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-processing-expand').onClick((): void=> { this.processingExpanded=!this.processingExpanded; }) }
+          if (!this.contentLoading && this.blocks.length===0 && this.message.length>0) { Button('重试打开内容').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-content-retry').onClick((): void=> { this.open(this.selectedDocument); }) }
+          Column({ space: 16 }) {
+          Text('正文预览').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).fontColor(Theme.ink).width('100%')
+          if (this.blockCount === 0 && !this.contentLoading) { Text('当前文件暂无正文，可查看图片或处理进度。').fontColor(Theme.ink).fontSize(14).fontColor(Theme.muted).width('100%') }
           ForEach(this.blocks, (b: ParsedBlock) => {
             Column({ space: 5 }) {
-              if (b.evidenceType !== 'SourceContextOnly' && b.text.length > 0 && b.inlines.length === 0) { Text(b.text).fontSize(16).copyOption(CopyOptions.LocalDevice).width('100%') }
-              if (b.kind === 'Formula') { Text(b.formula.text || b.formula.latex || b.formula.unsupportedReason).width('100%') }
-              if (b.limitation.length > 0) { Text(b.limitation).fontSize(13).fontColor(Theme.muted).width('100%') }
-              ForEach(b.inlines, (r: ParsedInline) => { if (r.kind !== 'Text' || b.evidenceType !== 'SourceContextOnly') { Text(r.kind === 'Text' ? r.text : r.kind === 'Formula' ? r.formula.text || r.formula.latex || r.formula.unsupportedReason : r.kind === 'Image' ? '〔图片〕' : r.limitation).fontSize(16).width('100%') } }, (r: ParsedInline): string => this.selectedDocument+'|'+this.contentGeneration+'|'+b.id+'|'+r.id)
+              if (b.evidenceType !== 'SourceContextOnly' && b.text.length > 0 && b.inlines.length === 0) { Text(b.text).fontColor(Theme.ink).lineHeight(27).fontSize(16).copyOption(CopyOptions.LocalDevice).width('100%') }
+              if (b.kind === 'Formula') { Text(b.formula.text || b.formula.latex || b.formula.unsupportedReason).fontColor(Theme.ink).width('100%') }
+              if (b.limitation.length > 0) { Text(b.limitation).fontColor(Theme.ink).fontSize(13).fontColor(Theme.muted).width('100%') }
+              ForEach(b.inlines, (r: ParsedInline) => { if (r.kind !== 'Text' || b.evidenceType !== 'SourceContextOnly') { Text(r.kind === 'Text' ? r.text : r.kind === 'Formula' ? r.formula.text || r.formula.latex || r.formula.unsupportedReason : r.kind === 'Image' ? '〔图片〕' : r.limitation).fontColor(Theme.ink).fontSize(16).width('100%') } }, (r: ParsedInline): string => this.selectedDocument+'|'+this.contentGeneration+'|'+b.id+'|'+r.id)
             }.width('100%').alignItems(HorizontalAlign.Start)
           }, (b: ParsedBlock): string => this.selectedDocument+'|'+this.contentGeneration+'|'+b.id)
           if (this.blockCount > 12) {
-            Row() { Button('上一页').enabled(this.page > 0).onClick((): void => { this.pageBy(-1); }); Text(`${this.page + 1} / ${Math.ceil(this.blockCount / 12)}`).layoutWeight(1); Button('下一页').enabled((this.page + 1) * 12 < this.blockCount).onClick((): void => { this.pageBy(1); }) }.width('100%')
+            Row() { Button('上一页').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).enabled(this.page > 0).onClick((): void => { this.pageBy(-1); }); Text(`${this.page + 1} / ${Math.ceil(this.blockCount / 12)}`).fontColor(Theme.ink).layoutWeight(1); Button('下一页').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).enabled((this.page + 1) * 12 < this.blockCount).onClick((): void => { this.pageBy(1); }) }.width('100%')
           }
+          }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
+          if (this.images.length > 0) { Text('文件中的图片').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).fontColor(Theme.ink).width('100%') }
           ForEach(this.images, (a: ParsedImageAsset) => {
             Column() {
-              Button(a.state === 'Ready' ? '查看图片' : '图片暂不可用').id('upd-preview-' + a.id).enabled(a.state === 'Ready').onClick((): void => { this.preview(a.id); })
+              Button(a.state === 'Ready' ? '查看图片' : '图片暂不可用').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-preview-' + a.id).enabled(a.state === 'Ready').onClick((): void => { this.preview(a.id); })
               if (this.previewId === a.id && this.previewPath.length > 0) { Image(this.previewPath).objectFit(ImageFit.Contain).width('100%').height(220).onError((): void => { this.message = '图片暂时无法预览'; }) }
             }.width('100%')
           }, (a: ParsedImageAsset): string => this.selectedDocument+'|'+this.contentGeneration+'|'+a.id)
-          if (this.imageCount > 12) { Row() { Button('上一组图片').enabled(this.imagePage > 0).onClick((): void => { this.imagePage--; this.refreshView(); }); Button('下一组图片').enabled((this.imagePage + 1) * 12 < this.imageCount).onClick((): void => { this.imagePage++; this.refreshView(); }) } }
-          Button(this.selectedRecord()?.archived ? '恢复资料' : '归档资料').id('upd-archive-selected').enabled(!this.localBusy).onClick((): void => { this.archive(this.selectedDocument, !(this.selectedRecord()?.archived ?? false)); })
+          if (this.imageCount > 12) { Row() { Button('上一组图片').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).enabled(this.imagePage > 0).onClick((): void => { this.imagePage--; this.refreshView(); }); Button('下一组图片').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).enabled((this.imagePage + 1) * 12 < this.imageCount).onClick((): void => { this.imagePage++; this.refreshView(); }) } }
+          Button(this.selectedRecord()?.archived ? '恢复资料' : '归档资料').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-archive-selected').enabled(!this.localBusy).onClick((): void => { this.archive(this.selectedDocument, !(this.selectedRecord()?.archived ?? false)); })
         }
-        Button(this.detailsOpen ? '收起处理详情' : '处理详情').id('upd-details-toggle').onClick((): void => { this.detailsOpen = !this.detailsOpen; })
+        Button(this.detailsOpen ? '收起处理详情' : '处理详情').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-details-toggle').onClick((): void => { this.detailsOpen = !this.detailsOpen; })
         if (this.detailsOpen) {
-          if (this.selectedOriginal.length > 0) { Text(this.parseUsage()).id('upd-parse-usage').fontSize(12).width('100%') }
-          if (this.selectedDocument.length > 0) { Text(this.coverageText).fontSize(12).width('100%'); Text(this.identityText).fontSize(11).wordBreak(WordBreak.BREAK_ALL).width('100%') }
-          if (this.selectedResult() !== undefined) { Button('从已接收结果重新入库').id('upd-rebuild-selected').enabled(!this.localBusy).onClick((): void => { this.consume(this.selectedResult()?.assetId ?? '', true); }) }
-          if (this.taskStage === 'Failed' || this.taskStage === 'Paused') { Button('重试保存内容').id('upd-retry-local').onClick((): void => { this.retryLocal(); }) }
-          Button('暂停自动处理').id('upd-queue-pause').onClick((): void => { this.queue?.pause(); })
-          Button('继续自动处理').id('upd-queue-resume').onClick((): void => { this.queue?.resume(); })
-          Button('重试文件清理').id('upd-cleanup-retry').onClick((): void => { this.cleanup(); })
+          if (this.selectedOriginal.length > 0) { Text(this.parseUsage()).fontColor(Theme.ink).id('upd-parse-usage').fontSize(12).width('100%') }
+          if (this.selectedDocument.length > 0) { Text(this.coverageText).fontColor(Theme.ink).fontSize(12).width('100%'); Text(this.identityText).fontColor(Theme.ink).fontSize(11).wordBreak(WordBreak.BREAK_ALL).width('100%') }
+          if (this.selectedResult() !== undefined) { Button('从已接收结果重新入库').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-rebuild-selected').enabled(!this.localBusy).onClick((): void => { this.consume(this.selectedResult()?.assetId ?? '', true); }) }
+          if (this.taskStage === 'Failed' || this.taskStage === 'Paused') { Button('重试保存内容').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-retry-local').onClick((): void => { this.retryLocal(); }) }
+          Button('暂停自动处理').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-queue-pause').onClick((): void => { this.queue?.pause(); })
+          Button('继续自动处理').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-queue-resume').onClick((): void => { this.queue?.resume(); })
+          Button('重试文件清理').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-cleanup-retry').onClick((): void => { this.cleanup(); })
         }
-        Button('删除资料').id('upd-delete-selected').enabled(!this.localBusy).onClick((): void => { this.deleteId = 'selected'; })
+        Button('删除资料').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-delete-selected').enabled(!this.localBusy).onClick((): void => { this.deleteId = 'selected'; })
         if (this.deleteId.length > 0) {
-          Text('删除这份资料及其本机解析内容？共享图片仍由其他资料保留。').fontSize(14).width('100%')
-          Button('确认删除').id('upd-delete-confirm').onClick((): void => { this.deleteId = ''; this.removeSelected(); })
-          Button('取消').onClick((): void => { this.deleteId = ''; })
+          Text('删除这份资料及其本机解析内容？共享图片仍由其他资料保留。').fontColor(Theme.ink).fontSize(14).width('100%')
+          Button('确认删除').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-delete-confirm').onClick((): void => { this.deleteId = ''; this.removeSelected(); })
+          Button('取消').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).onClick((): void => { this.deleteId = ''; })
         }
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 12, bottom: 20 })

@@ -36,6 +36,9 @@ import { PdfSourceView } from '../knowledge/ui/PdfSourceView';
 import { PdfSourceBinding, PdfLocator, PdfKnowledgeDocument } from '../knowledge/domain/PdfKnowledgeModels';
 import { KnowledgeDerivedLifecycle } from '../knowledge/application/KnowledgeLifecycleService';
 import { KnowledgeDocumentListPort } from '../knowledge/domain/KnowledgePorts';
+import { AssistantWelcome, CalendarDraftCard } from '../components/ChatVisuals';
+import { AppIcon } from '../components/AppIcon';
+import { BrandAvatar } from '../components/BrandAvatar';
 import {
   AssistantService, CalendarDraft, ChatMessage, DEMO_SCENARIOS, DemoScenario,
   OperationResult, OperationState, RequestState
@@ -69,6 +72,7 @@ import { VisionSettingsView } from '../knowledge/ui/VisionSettingsView';
 import { ImageKnowledgeView } from '../knowledge/ui/ImageKnowledgeView';
 import { KnowledgeMigrationView } from '../knowledge/ui/KnowledgeMigrationView';
 import { UnifiedSearchCard } from '../knowledge/domain/UnifiedQueryModels';
+import { FloatingAssistantPlacement } from '../model/FloatingAssistantPlacement';
 
 @Entry
 @Component
@@ -77,7 +81,12 @@ struct Index {
   @State visionSettingsOpen: boolean=false;
   @State imageKnowledgeOpen: boolean=false;
   @State imageKnowledgeOccurrence: string='';
+  @State parsedImportOpen: boolean = false;
+  @State developerToolsOpen: boolean = false;
   @State parsedOpen: boolean = false;
+  @State knowledgeOpening: boolean = false;
+  @State knowledgeMessage: string = '';
+  private knowledgeLoad: Promise<void> | undefined = undefined;
   @State knowledgeReady: boolean = false;
   @State parsedDocumentId: string = '';
   @State parsedOpening: boolean = false;
@@ -96,8 +105,6 @@ struct Index {
   @State requestState: RequestState = RequestState.Unsupported;
   @State scenario: DemoScenario = DemoScenario.Normal;
   @State showScenarios: boolean = false;
-  @State noticeTitle: string = '';
-  @State noticeText: string = '';
   @State knowledgeState: TextViewState = new TextViewState();
   private knowledgeService: TextKnowledgeService | undefined = undefined;
   private knowledgeAssembly: TextKnowledgeAssembly | undefined = undefined;
@@ -129,6 +136,13 @@ struct Index {
   private sharedKnowledge: KnowledgeAssembly | undefined = undefined;
   private knowledgeListener: () => void=(): void=> { if (this.alive && this.knowledgeAssembly!==undefined) { this.knowledgeState=this.knowledgeAssembly.service.viewState(); } };
   private parseAssembly: DocumentParseAssembly | undefined = undefined;
+  @State drawerOpen: boolean = false;
+  @State floatingAssistantEnabled: boolean = true;
+  @State floatingPlacement: FloatingAssistantPlacement = new FloatingAssistantPlacement();
+  @State contentHeight: number = 0;
+  private floatingHostWidth: number = 0;
+  private floatingHostHeight: number = 0;
+  private floatingHeaderHeight: number = 68;
   private service: AssistantService = new MockAssistantService();
   private requestId: string = '';
   private operationId: string = '';
@@ -136,7 +150,9 @@ struct Index {
   private scroller: Scroller = new Scroller();
   private inputController: TextAreaController = new TextAreaController();
   private tabNames: string[] = ['助手', '工作台', '知识库', '我的'];
-  private tabMarks: string[] = ['休', '办', '知', '我'];
+  private tabIcons: Resource[] = [
+    $r('app.media.chat_chat'), $r('app.media.chat_grid'), $r('app.media.chat_book'), $r('app.media.chat_user')
+  ];
 
   aboutToAppear(): void {
     this.alive = true;
@@ -158,6 +174,10 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (this.drawerOpen) {
+      this.drawerOpen = false;
+      return true;
+    }
     if (this.migrationOpen) { this.migrationOpen=false; return true; }
     if (this.visionSettingsOpen) { this.visionSettingsOpen=false; return true; }
     if (this.imageKnowledgeOpen) { this.imageKnowledgeOpen=false; return true; }
@@ -172,10 +192,6 @@ struct Index {
     if (this.embeddingOpen) { this.closeEmbedding(); return true; }
     if (this.parseOpen) { this.closeParse(); return true; }
     if (this.tab === 2 && this.knowledgeService?.back()) { return true; }
-    if (this.noticeTitle.length > 0) {
-      this.noticeTitle = '';
-      return true;
-    }
     if (this.showScenarios) {
       this.showScenarios = false;
       return true;
@@ -193,12 +209,14 @@ struct Index {
 
   private notice(title: string, message: string): void {
     this.inputController.stopEditing();
-    this.noticeTitle = title;
-    this.noticeText = message;
-    this.scroller.scrollEdge(Edge.Top);
+    this.getUIContext().showAlertDialog({
+      title: title, message: message,
+      primaryButton: { value: '知道了', action: () => {} }
+    });
   }
 
   private changeTab(index: number): void {
+    this.floatingPlacement.cancelDrag();
     if (index!==this.tab) { this.migrationOpen=false; }
     if (index!==this.tab) { this.visionSettingsOpen=false; this.imageKnowledgeOpen=false; }
     if (index !== this.tab) { this.parsedOpen = false; }
@@ -215,20 +233,29 @@ struct Index {
     if (index === 2) { this.openKnowledge(); }
     this.calendarOpen = false;
     this.showScenarios = false;
-    this.noticeTitle = '';
+    this.drawerOpen = false;
     this.scroller.scrollEdge(Edge.Top);
   }
 
   private async openKnowledge(): Promise<void> {
+    const pending: Promise<void> | undefined = this.knowledgeLoad;
+    if (pending !== undefined) { return pending; }
+    this.knowledgeOpening = true; this.knowledgeMessage = '';
+    const operation: Promise<void> = this.loadKnowledge(); this.knowledgeLoad = operation;
+    try { await operation; }
+    catch (error) { this.knowledgeMessage = '资料库打开未完成，资料保留。原因：' + (error instanceof KnowledgeFailure || error instanceof DocxFailure ? error.category : 'LocalInitializationFailed'); }
+    finally { this.knowledgeLoad = undefined; this.knowledgeOpening = false; }
+  }
+  private async loadKnowledge(): Promise<void> {
     if (this.knowledgeAssembly !== undefined) {
       const shared = this.sharedKnowledge;
       if (shared !== undefined && !shared.unified.ready()) { await shared.retryUnifiedInitialization(); }
       this.knowledgeReady = shared?.unified.ready() ?? false; return;
     }
     const context = this.getUIContext().getHostContext();
-    if (context === undefined) { this.knowledgeState.message = '本机上下文不可用，资料未修改'; return; }
+    if (context === undefined) { this.knowledgeMessage = '本机上下文不可用，资料未修改'; return; }
     const shared: KnowledgeAssembly = this.sharedKnowledge ?? KnowledgeAssembly.forContext(context);
-    if (this.sharedKnowledge === undefined) { this.sharedKnowledge = shared; try { await shared.acquire(); } catch { this.sharedKnowledge = undefined; this.knowledgeState.message = '用户库打开失败，资料保留'; return; } }
+    if (this.sharedKnowledge === undefined) { this.sharedKnowledge = shared; try { await shared.acquire(); } catch { this.sharedKnowledge = undefined; this.knowledgeMessage = '用户库打开失败，资料保留'; return; } }
     const assembly: TextKnowledgeAssembly = shared.text;
     shared.subscribe(this.knowledgeListener);
     this.knowledgeAssembly = assembly;
@@ -239,11 +266,11 @@ struct Index {
        this.embeddingService = shared.repository.ready() ? shared.embedding : undefined;
       this.derivedLifecycle = shared.derivedLifecycle; this.pdfDocumentsPort = shared.repository;
       this.knowledgeReady = shared.unified.ready();
-      if (!this.knowledgeReady) { this.knowledgeState.message = shared.unifiedMessage || '资料库暂时不可用，请重试打开'; }
+      if (!this.knowledgeReady) { this.knowledgeMessage = shared.unifiedMessage || '资料库暂时不可用，请重试打开'; }
     }
     catch {
       this.knowledgeAssembly = undefined; this.knowledgeService = undefined;
-      this.knowledgeState = assembly.service.viewState(); this.knowledgeState.message = '用户知识库打开失败，资料保留，可重试';
+      this.knowledgeState = assembly.service.viewState(); this.knowledgeMessage = '用户知识库打开失败，资料保留，可重试';
     }
   }
   private async openKnowledgeHit(hit: KnowledgeHit): Promise<void> {
@@ -279,10 +306,11 @@ struct Index {
     try { if (this.pdfPageAdapter !== undefined) { await this.sharedKnowledge.sources.release(this.pdfPageAdapter); } this.sharedKnowledge.sources.adopt(adapter); this.pdfPageAdapter = adapter; this.pdfSourceOpen = true; } catch { this.knowledgeState.message = '原件读租约释放待确认，请重试释放'; }
   }
   private closeParse(): void {
-    this.parseService?.clearInput(); this.parseOpen = false;
+    this.parseService?.clearInput(); this.parseOpen = false; this.scroller.scrollEdge(Edge.Top);
   }
   private async openImages(): Promise<void> { await this.openParsed(); }
-  private async openParsed(): Promise<void> {
+  private async openParsed(importNow: boolean = false): Promise<void> {
+    this.parsedImportOpen = importNow;
     if (this.parsedOpening) { return; } this.parsedOpen = true; this.parsedOpening = true; this.parsedMessage = ''; this.scroller.scrollEdge(Edge.Top);
     try {
       await this.openKnowledge(); const shared = this.sharedKnowledge;
@@ -307,7 +335,7 @@ struct Index {
     await this.openKnowledge(); if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
     const context = this.getUIContext().getHostContext(); const shared = this.sharedKnowledge;
     if (context === undefined || shared === undefined || this.parseService === undefined || !shared.images.ready()) { this.knowledgeState.message = '图片准备区不可用，原件未修改'; return; }
-    if (this.imageIngestionService === undefined) { this.imageIngestionService = new ImageIngestionService(this.parseService,shared.images,new ImageOriginalAdapter(context.filesDir),new ImageProcessingAdapter(),new KnowledgePlatformIdentity(),KnowledgeStorageScope.production()); const metadata = shared.vectorMetadata; if (metadata instanceof ImageVectorRepository) { this.imageIngestionService.attachVectorCleanup(async (id: string): Promise<void> => { await metadata.cleanupDeleted(id,shared.vectors); }); } await this.imageIngestionService.initialize(); }
+    if (this.imageIngestionService === undefined) { this.imageIngestionService = new ImageIngestionService(this.parseService,shared.images,new ImageOriginalAdapter(context.filesDir),new ImageProcessingAdapter(),new KnowledgePlatformIdentity(),KnowledgeStorageScope.production()); const metadata = shared.vectorMetadata; if (metadata instanceof ImageVectorRepository) { this.imageIngestionService.attachVectorCleanup(async (id: string): Promise<void> => { const cleanup: Promise<void> = metadata.cleanupDeleted(id,shared.vectors); await cleanup; }); } await this.imageIngestionService.initialize(); }
     this.imageIngestionService.attachResults(new ImageResultReader(context.filesDir,this.parseService));
     this.imageIngestionService.attachVectorSync(async (id: string): Promise<void> => { await shared.workflow.sync(id); });
     await this.imageIngestionService.adoptPrepared();
@@ -355,9 +383,9 @@ struct Index {
     try { if (this.parseService !== undefined && this.parsedImports !== undefined) { await this.parsedImports.consume(this.parseService,id); } }
     catch (error) { this.parsedMessage = error instanceof Error ? error.message : '统一产物未完成，原件/ZIP保留'; }
   }
-  private closeEmbedding(): void { this.embeddingClearEpoch++; this.embeddingService?.clearInput(); this.embeddingOpen = false; }
+  private closeEmbedding(): void { this.embeddingClearEpoch++; this.embeddingService?.clearInput(); this.embeddingOpen = false; this.scroller.scrollEdge(Edge.Top); }
   private async openEmbedding(): Promise<void> {
-    this.embeddingOpen = true;
+    this.embeddingOpen = true; this.scroller.scrollEdge(Edge.Top);
     if (this.sharedKnowledge !== undefined) { this.embeddingService = this.sharedKnowledge.repository.ready() ? this.sharedKnowledge.embedding : undefined; return; }
     const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
     const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
@@ -386,6 +414,12 @@ struct Index {
     catch { await assembly.close(); this.parseAssembly = undefined; this.parseService = undefined; this.parseState = assembly.service.viewState(); }
   }
 
+  private resizeFloatingHost(width: number, height: number): void {
+    this.floatingHostWidth = width;
+    this.floatingHostHeight = height;
+    this.floatingPlacement.resize(width, height, this.floatingHeaderHeight);
+  }
+
   private addMessage(text: string, isUser: boolean = false): void {
     const message: ChatMessage = { id: this.service.nextId('message'), isUser: isUser, text: text };
     this.messages = this.messages.concat([message]);
@@ -396,6 +430,9 @@ struct Index {
   }
 
   private useSample(): void {
+    if (this.blocked()) {
+      return;
+    }
     this.input = this.service.sampleText;
     this.scroller.scrollEdge(Edge.Bottom);
   }
@@ -445,14 +482,68 @@ struct Index {
     this.addMessage('已取消生成，没有创建日程。');
   }
 
-  private cancelDraft(): void {
+  private cancelDraft(rephrase: boolean = false): void {
     if (this.draft && !this.executing) {
       this.service.discard(this.draft.draftId);
       this.draft = undefined;
       this.result = undefined;
       this.operationId = '';
+      if (!rephrase) {
+        this.input = '';
+      }
       this.addMessage('已取消草稿，没有新增演示日程。你可以修改输入后重新发送。');
     }
+  }
+
+  private openScenarios(): void {
+    if (this.generating || this.executing) {
+      return;
+    }
+    this.drawerOpen = false;
+    this.inputController.stopEditing();
+    this.showScenarios = !this.showScenarios;
+    this.scroller.scrollEdge(Edge.Top);
+  }
+
+  private newConversation(): void {
+    if (this.blocked()) {
+      return;
+    }
+    this.inputController.stopEditing();
+    if (this.messages.length === 0 && this.input.length === 0) {
+      this.resetConversation();
+      return;
+    }
+    this.getUIContext().showAlertDialog({
+      title: '开始新对话？',
+      message: '将清空当前对话和未发送文字，已确认的演示日程会保留。',
+      primaryButton: { value: '继续当前对话', action: () => {} },
+      secondaryButton: { value: '开始新对话', action: () => this.resetConversation() }
+    });
+  }
+
+  private resetConversation(): void {
+    if (this.blocked()) {
+      return;
+    }
+    this.service.cancel(this.requestId);
+    this.requestId = '';
+    this.operationId = '';
+    this.messages = [];
+    this.input = '';
+    this.result = undefined;
+    this.requestState = RequestState.Unsupported;
+    this.scenario = DemoScenario.Normal;
+    this.changeTab(0);
+  }
+
+  private attachments(): void {
+    this.inputController.stopEditing();
+    this.getUIContext().showAlertDialog({
+      title: '添加内容', message: '图片与文件输入待接入，本次不会读取设备内容。',
+      primaryButton: { value: '图片 · 待接入', action: () => this.notice('图片输入待接入', '本次不会打开相册或读取图片。') },
+      secondaryButton: { value: '文件 · 待接入', action: () => this.notice('文件输入待接入', '本次不会打开文件选择器或读取文件。') }
+    });
   }
 
   private async confirm(): Promise<void> {
@@ -506,60 +597,87 @@ struct Index {
     }
   }
 
+
   @Builder
   header() {
-    Row({ space: 12 }) {
-      Text('休').fontSize(22).fontWeight(FontWeight.Bold).fontColor(Theme.accent)
-        .width(44).height(44).textAlign(TextAlign.Center).borderRadius(14).backgroundColor(Theme.soft)
-      Column({ space: 3 }) {
-        Text(this.tab === 0 ? 'Shuvi 休比' : this.tabNames[this.tab])
-          .fontSize(20).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
-        Text('让想法，成为行动').fontSize(11).fontColor(Theme.muted)
-      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Text('演示模式').fontSize(11).fontColor(Theme.amber).padding({ left: 10, right: 10, top: 6, bottom: 6 })
-        .backgroundColor(Theme.warning).borderRadius(8)
-    }.width('100%').padding({ left: 20, right: 20, top: 12, bottom: 16 })
+    Stack() {
+      Column({ space: 2 }) {
+        if (this.tab !== 0) {
+          Text(this.tabNames[this.tab]).fontSize(14).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
+        }
+        Text(this.tab === 2 || this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen ? '本机资料 · 未同步' : '演示模式').fontSize(11).fontColor(Theme.muted)
+          .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
+      }.width('34%')
+      Row() {
+        Button({ type: ButtonType.Circle }) {
+          AppIcon({ source: $r('app.media.chat_menu'), size: 24 })
+        }.width(44).height(44).backgroundColor(Theme.surface)
+          .shadow({ radius: 16, color: Theme.shadow, offsetY: 3 })
+          .accessibilityText('打开导航菜单').id('chat-menu')
+          .onClick(() => {
+            this.inputController.stopEditing();
+            this.drawerOpen = true;
+          })
+        Blank()
+        if (this.tab === 0) {
+        Row() {
+          Button({ type: ButtonType.Circle }) {
+            AppIcon({ source: $r('app.media.chat_sliders') })
+          }.width(44).height(44).backgroundColor(Color.Transparent)
+            .accessibilityText(`演示场景设置，当前${this.scenario}`).id('chat-scenarios')
+            .enabled(!this.generating && !this.executing).onClick(() => this.openScenarios())
+          Button({ type: ButtonType.Circle }) {
+            AppIcon({ source: $r('app.media.chat_newchat') })
+          }.width(44).height(44).backgroundColor(Color.Transparent)
+            .accessibilityText(this.blocked() ? '开始新对话，请先处理当前任务' : '开始新对话')
+            .id('chat-new').enabled(!this.blocked()).opacity(this.blocked() ? 0.4 : 1)
+            .onClick(() => this.newConversation())
+        }.padding({ left: 3, right: 3 }).borderRadius(28).backgroundColor(Theme.surface)
+          .shadow({ radius: 16, color: Theme.shadow, offsetY: 3 })
+        }
+      }.width('100%')
+    }.width('100%').constraintSize({ minHeight: 68 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
+      .onAreaChange((_oldArea: Area, area: Area) => {
+        this.floatingHeaderHeight = Number(area.height);
+        this.floatingPlacement.resize(this.floatingHostWidth, this.floatingHostHeight, this.floatingHeaderHeight);
+      })
   }
 
   @Builder
   assistant() {
     Column({ space: 16 }) {
-      if (this.messages.length === 0) {
-        Column({ space: 14 }) {
-          Text('今天，有什么\n想一起完成？').fontSize(30).fontWeight(FontWeight.Bold)
-            .fontColor(Theme.ink).lineHeight(42).width('100%')
-          Text('安排日程、整理资料，或记下一闪而过的想法。')
-            .fontSize(14).fontColor(Theme.muted).lineHeight(23)
-          Button({ type: ButtonType.Normal }) {
-            Column({ space: 8 }) {
-              Text('从一场会议开始  ↗').fontSize(16).fontWeight(FontWeight.Medium).fontColor(Theme.accent)
-              Text('试试创建日程 · 固定样例').fontSize(12).fontColor(Theme.muted)
-              Text('10 月 20 日  15:00—16:00').fontSize(14).fontColor(Theme.ink)
-            }.alignItems(HorizontalAlign.Start).padding(20).width('100%')
-          }.backgroundColor(Theme.soft).borderRadius(18).width('100%').onClick(() => this.useSample())
-          Text('可以从工作台了解各项功能。当前不连接真实模型，请使用样例体验。')
-            .fontSize(12).fontColor(Theme.muted).lineHeight(20)
-        }.alignItems(HorizontalAlign.Start).padding({ top: 28, bottom: 8 }).width('100%')
-      }
       ForEach(this.messages, (message: ChatMessage) => {
-        Column({ space: 6 }) {
-          Text(message.isUser ? '你' : '休比 · 演示').fontSize(11).fontColor(Theme.muted)
-          Text(message.text).fontSize(15).fontColor(Theme.ink).lineHeight(24)
-            .padding(16).backgroundColor(message.isUser ? Theme.soft : Theme.surface).borderRadius(16)
-        }.width('100%').alignItems(message.isUser ? HorizontalAlign.End : HorizontalAlign.Start)
+        if (message.isUser) {
+          Row() {
+            Blank().width('8%')
+            Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
+              .backgroundColor(Theme.bubble).borderRadius({ topLeft: 20, topRight: 20, bottomLeft: 20, bottomRight: 6 })
+              .constraintSize({ maxWidth: '92%' }).accessibilityText(`你：${message.text}`)
+          }.width('100%').justifyContent(FlexAlign.End)
+        } else {
+          Row({ space: 8 }) {
+            BrandAvatar({ size: 28 })
+            Text(message.text).fontSize(14).fontColor(Theme.ink).layoutWeight(1)
+              .accessibilityText(`休比：${message.text}`)
+          }.width('100%').alignItems(VerticalAlign.Top)
+        }
       }, (message: ChatMessage) => message.id)
       if (this.generating) {
-        Row({ space: 12 }) {
-          LoadingProgress().width(24).height(24).color(Theme.accent)
+        Row({ space: 10 }) {
+          LoadingProgress().width(22).height(22).color(Theme.accent)
           Text('正在生成演示草稿…').fontSize(14).fontColor(Theme.muted).layoutWeight(1)
-          Button('取消').fontSize(13).backgroundColor(Theme.soft).fontColor(Theme.accent)
-            .onClick(() => this.cancelGeneration())
+          Button('取消').fontSize(13).constraintSize({ minHeight: 44 })
+            .backgroundColor(Theme.soft).fontColor(Theme.accent).onClick(() => this.cancelGeneration())
         }.width('100%')
       }
-      if (this.draft) {
-        this.draftCard(this.draft)
+      if (this.result && !this.result.calendarCreated) {
+        this.resultCard(this.result)
       }
-      if (this.result) {
+      if (this.draft) {
+        CalendarDraftCard({ draft: this.draft, executing: this.executing,
+          failed: this.result !== undefined && !this.result.calendarCreated })
+      }
+      if (this.result && this.result.calendarCreated) {
         this.resultCard(this.result)
       }
       if (!this.blocked() && this.requestState === RequestState.Failed) {
@@ -573,12 +691,12 @@ struct Index {
             this.useSample();
           })
       }
-    }.width('100%').alignItems(HorizontalAlign.Start).padding({ bottom: 20 })
+    }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 14, bottom: 20 })
   }
 
   @Builder
   draftDetails(draft: CalendarDraft) {
-    Text(draft.title).fontSize(22).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
+    Text(draft.title).fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
     Text(`${draft.startAt.substring(0, 10)}  ${draft.startAt.substring(11, 16)}—${draft.endAt.substring(11, 16)}`)
       .fontSize(15).fontColor(Theme.ink)
     Text(`${draft.timeZone} · 提前 ${draft.reminderMinutesBefore} 分钟提醒`)
@@ -586,25 +704,25 @@ struct Index {
   }
 
   @Builder
-  draftCard(draft: CalendarDraft) {
-    Column({ space: 12 }) {
-      Text(this.executing ? '正在模拟执行' : '日程草稿 · 尚未创建')
-        .fontSize(12).fontColor(Theme.accent).fontWeight(FontWeight.Medium)
-      this.draftDetails(draft)
-      Divider().color(Theme.line)
-      Text('确认后仅添加至演示列表，不会写入系统或实际提醒。').fontSize(12).fontColor(Theme.muted).lineHeight(20)
-      Button(this.executing ? '处理中…' : '确认（演示）', { type: ButtonType.Normal })
-        .width('100%').constraintSize({ minHeight: 44 }).borderRadius(12)
-        .fontColor(Color.White).backgroundColor(Theme.accent).enabled(!this.executing)
-        .onClick(() => this.confirm())
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
-        Button('取消草稿').fontSize(13).fontColor(Theme.muted).backgroundColor(Color.Transparent)
+  confirmationDock() {
+    Column({ space: 8 }) {
+      Text(this.executing ? '正在模拟执行，请稍候' : '请先确认或取消，再继续对话')
+        .fontSize(11).fontColor(Theme.muted).textAlign(TextAlign.Center).width('100%')
+      Button(this.executing ? '处理中…' : (this.result ? '重试创建（演示）' : '确认（演示）'), { type: ButtonType.Normal })
+        .width('100%').constraintSize({ minHeight: 48 }).padding(12).borderRadius(16)
+        .fontSize(15).fontColor(Color.White).backgroundColor(Theme.accent).enabled(!this.executing)
+        .id('chat-confirm').onClick(() => this.confirm())
+      Row() {
+        Button('取消草稿', { type: ButtonType.Normal }).fontSize(13).fontColor(Theme.muted)
+          .layoutWeight(1).constraintSize({ minHeight: 44 }).backgroundColor(Color.Transparent)
           .enabled(!this.executing).onClick(() => this.cancelDraft())
-        Button('重新描述').fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
-          .enabled(!this.executing).onClick(() => this.cancelDraft())
+        Divider().vertical(true).height(14).color(Theme.line)
+        Button('重新描述', { type: ButtonType.Normal }).fontSize(13).fontColor(Theme.accent)
+          .layoutWeight(1).constraintSize({ minHeight: 44 }).backgroundColor(Color.Transparent)
+          .enabled(!this.executing).onClick(() => this.cancelDraft(true))
       }.width('100%')
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(20)
-      .backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
+    }.width('100%').padding({ left: 20, right: 20, top: 12, bottom: 8 })
+      .backgroundColor(Theme.surface).border({ width: { top: 1 }, color: Theme.line })
   }
 
   @Builder
@@ -613,6 +731,9 @@ struct Index {
       Text(result.state === OperationState.Success ? '演示完成' :
         (result.state === OperationState.Partial ? '部分完成 · 提醒待重试' : '本次未完成'))
         .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
+      if (result.calendarCreated && !this.calendarOpen) {
+        this.draftDetails(result.draft)
+      }
       Text(result.message).fontSize(13).lineHeight(21).fontColor(Theme.muted)
       Text(`日程：${result.calendarCreated ? '已模拟创建' : '未创建'}\n提醒：${result.reminderRegistered ? '已模拟注册，不会送达' : '未注册'}`)
         .fontSize(12).lineHeight(21).fontColor(Theme.muted)
@@ -663,34 +784,6 @@ struct Index {
   }
 
   @Builder
-  composer() {
-    Column({ space: 8 }) {
-      Row({ space: 8 }) {
-        Button('图片').fontSize(12).fontColor(Theme.muted).backgroundColor(Theme.paper)
-          .onClick(() => this.notice('图片输入', '图片选择与理解待接入，本次不会打开相册。'))
-        Button('语音').fontSize(12).fontColor(Theme.muted).backgroundColor(Theme.paper)
-          .onClick(() => this.notice('语音输入', '语音录制与识别待接入，本次不会开启麦克风。'))
-        Blank()
-        Button('使用样例').fontSize(12).fontColor(Theme.accent).backgroundColor(Theme.soft)
-          .enabled(!this.blocked()).onClick(() => this.useSample())
-      }.width('100%')
-      Row({ space: 10 }) {
-        TextArea({ text: this.input, placeholder: '写下想做的事…', controller: this.inputController })
-          .fontSize(15).fontColor(Theme.ink).placeholderColor(Theme.muted).backgroundColor(Theme.paper)
-          .height(72).layoutWeight(1).borderRadius(12).enabled(!this.blocked())
-          .onChange((value: string) => this.input = value)
-        Button('发送', { type: ButtonType.Normal }).fontSize(14).fontColor(Color.White)
-          .backgroundColor(Theme.accent).borderRadius(12).width(62).constraintSize({ minHeight: 48 })
-          .enabled(!this.blocked() && this.input.trim().length > 0 && this.input.length <= 500)
-          .onClick(() => this.send())
-      }.width('100%')
-      if (this.input.length > 500) {
-        Text(`已输入 ${this.input.length} 字，最多 500 字，请缩短后发送。`).fontSize(12).fontColor(Theme.danger)
-      }
-    }.padding({ left: 20, right: 20, top: 12, bottom: 12 }).width('100%').backgroundColor(Theme.surface)
-  }
-
-  @Builder
   scenarioPanel() {
     Column({ space: 10 }) {
       Text('选择下一次演示场景').fontSize(17).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
@@ -712,46 +805,155 @@ struct Index {
   }
 
   @Builder
-  navigation() {
-    Row() {
-      ForEach(this.tabNames, (name: string, index: number) => {
-        Button({ type: ButtonType.Normal }) {
-          Column({ space: 4 }) {
-            Text(this.tabMarks[index]).fontSize(18).fontWeight(FontWeight.Medium)
-              .fontColor(this.tab === index ? Theme.accent : Theme.muted)
-              .width(40).height(28).textAlign(TextAlign.Center).borderRadius(8)
-              .backgroundColor(this.tab === index ? Theme.soft : Color.Transparent)
-            Text(name).fontSize(11).fontColor(this.tab === index ? Theme.accent : Theme.muted)
-          }.padding({ top: 8, bottom: 8 })
-        }.layoutWeight(1).backgroundColor(Theme.surface).onClick(() => this.changeTab(index))
-          .accessibilityText(`${name}${this.tab === index ? '，已选中' : ''}`)
-      }, (name: string) => name)
-    }.width('100%').backgroundColor(Theme.surface).border({ width: { top: 1 }, color: Theme.line })
+  composer() {
+    Column({ space: 8 }) {
+      Column({ space: 8 }) {
+        TextArea({ text: this.input, placeholder: '发消息，或说说你的想法…', controller: this.inputController })
+          .fontSize(15).fontColor(Theme.ink).placeholderColor(Theme.muted).backgroundColor(Color.Transparent)
+          .height(64).width('100%').padding({ left: 6, right: 6, top: 4, bottom: 4 })
+          .enabled(!this.blocked()).onChange((value: string) => this.input = value)
+          .accessibilityText('写下想做的事，最多 500 字').id('chat-input')
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center }) {
+          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 4 }) {
+                AppIcon({ source: $r('app.media.chat_calendar'), size: 16})
+                Text('日程样例').fontSize(12).fontColor(Theme.accent)
+              }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
+            }.borderRadius(22).backgroundColor(Theme.soft).border({ width: 1, color: Theme.line })
+              .margin({ right: 4, bottom: 4 }).enabled(!this.blocked()).onClick(() => this.useSample())
+              .id('chat-sample').accessibilityText('日程样例，填入固定演示文字')
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 4 }) {
+                AppIcon({ source: $r('app.media.chat_globe'), size: 16})
+                Text('搜索').fontSize(12).fontColor(Theme.muted)
+              }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
+            }.borderRadius(22).backgroundColor(Color.Transparent).border({ width: 1, color: Theme.line })
+              .margin({ bottom: 4 }).accessibilityText('联网搜索，待接入')
+              .onClick(() => this.notice('联网搜索待接入', '本次不会发起网络请求。请使用日程样例体验确认流程。'))
+          }
+          Row() {
+            Button({ type: ButtonType.Circle }) {
+              AppIcon({ source: $r('app.media.chat_plus'), size: 26 })
+            }.width(44).height(44).backgroundColor(Color.Transparent).onClick(() => this.attachments())
+              .accessibilityText('添加图片或文件，待接入')
+            if (this.input.trim().length > 0) {
+              Button({ type: ButtonType.Circle }) {
+                AppIcon({ source: $r('app.media.chat_up'), size: 22})
+              }.width(44).height(44).backgroundColor(Theme.accent).accessibilityText('发送消息').id('chat-send')
+                .enabled(!this.blocked() && this.input.length <= 500).onClick(() => this.send())
+            } else {
+              Button({ type: ButtonType.Circle }) {
+                AppIcon({ source: $r('app.media.chat_wave'), size: 26 })
+              }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('语音输入，待接入')
+                .onClick(() => this.notice('语音输入待接入', '本次不会开启麦克风或录音。请使用日程样例体验确认流程。'))
+            }
+          }.margin({ bottom: 4 })
+        }.width('100%')
+        if (this.input.length >= 400) {
+          Text(`${this.input.length} / 500`).fontSize(11)
+            .fontColor(this.input.length > 500 ? Theme.danger : Theme.muted).width('100%').textAlign(TextAlign.End)
+        }
+      }.width('100%').padding({ left: 10, right: 10, top: 12, bottom: 6 })
+        .backgroundColor(Theme.inputSurface).borderRadius(26)
+        .border({ width: 1, color: this.input.length > 500 ? Theme.danger : Theme.line })
+      if (this.input.length > 500) {
+        Text('最多 500 字，请缩短后发送。').fontSize(12).fontColor(Theme.danger).width('100%')
+      }
+      Text('演示数据 · 重启后重置 · 图片与语音待接入').fontSize(10).fontColor(Theme.muted)
+        .textAlign(TextAlign.Center).width('100%')
+    }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%').backgroundColor(Theme.surface)
   }
 
-  build() {
+  @Builder
+  navigationDrawer() {
     Column() {
-      if (this.tab !== 2) {
-      this.header()
-      Row() {
-        Text(this.tab === 2 || this.parseOpen ? '本机真实资料 · 重启后保留 · 未同步' : '演示数据 · 重启后重置')
-          .fontSize(11).fontColor(Theme.muted).layoutWeight(1)
-        Button(`演示场景：${this.scenario}`, { type: ButtonType.Normal }).fontSize(11)
-          .fontColor(Theme.accent).backgroundColor(Color.Transparent).constraintSize({ minHeight: 36 })
-          .enabled(this.tab !== 2 && !this.generating && !this.executing)
-          .onClick(() => {
-            this.inputController.stopEditing();
-            this.showScenarios = !this.showScenarios;
-            this.scroller.scrollEdge(Edge.Top);
+      Row({ space: 8 }) {
+        Column({ space: 6 }) {
+          Text('Shuvi 休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
+          Text('个人助理 · 演示模式').fontSize(12).fontColor(Theme.muted)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Button({ type: ButtonType.Circle }) {
+          AppIcon({ source: $r('app.media.ui_close'), size: 22 })
+        }.width(44).height(44)
+          .backgroundColor(Color.Transparent).accessibilityText('关闭导航菜单')
+          .onClick(() => this.drawerOpen = false)
+      }.width('100%').padding({ bottom: 24 })
+      Scroll() {
+        Column({ space: 8 }) {
+          ForEach(this.tabNames, (name: string, index: number) => {
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 12 }) {
+                AppIcon({ source: this.tabIcons[index]})
+                Text(name).fontSize(16).fontColor(this.tab === index ? Theme.accent : Theme.muted).layoutWeight(1)
+                if (index === 0 && this.draft !== undefined) {
+                  Text(this.executing ? '处理中' : '待确认').fontSize(11).fontColor(Theme.amber)
+                }
+                if (index === 1 && this.records.length > 0) {
+                  Text(`${this.records.length}`).fontSize(12).fontColor(Theme.accent)
+                    .accessibilityText(`${this.records.length} 条演示日程`)
+                }
+              }.width('100%').padding(14).constraintSize({ minHeight: 52 })
+            }.width('100%').borderRadius(15).backgroundColor(this.tab === index ? Theme.soft : Color.Transparent)
+              .accessibilityText(`${name}${this.tab === index ? '，已选中' : ''}`).onClick(() => this.changeTab(index))
+          }, (name: string) => name)
+        }.width('100%')
+      }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
+      Button('演示场景设置  ›', { type: ButtonType.Normal }).width('100%').constraintSize({ minHeight: 44 })
+        .fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
+        .enabled(!this.generating && !this.executing).onClick(() => this.openScenarios())
+      Text('助手日程为演示功能\n知识库资料保存在本机').fontSize(11).fontColor(Theme.muted)
+        .width('100%').padding({ top: 16 })
+    }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
+      .backgroundColor(Theme.inputSurface).borderRadius({ topRight: 26, bottomRight: 26 })
+  }
+
+  @Builder
+  floatingAssistant() {
+    Button({ type: ButtonType.Circle }) {
+      BrandAvatar({ size: 48 })
+    }.width(FloatingAssistantPlacement.size).height(FloatingAssistantPlacement.size).backgroundColor(Theme.surface)
+      .border({ width: 1, color: Theme.line })
+      .shadow({ radius: 12, color: Theme.shadow, offsetY: 3 })
+      .position({ x: this.floatingPlacement.x, y: this.floatingPlacement.y })
+      .accessibilityText('回到助手')
+      .accessibilityDescription('返回当前对话，保留已输入内容、消息和待确认草稿。可拖动调整位置。')
+      .id('floating-assistant')
+      .onClick(() => this.changeTab(0))
+      .priorityGesture(
+        PanGesture({ fingers: 1, direction: PanDirection.All, distance: 8 })
+          .onActionStart((event: GestureEvent) => {
+            this.floatingPlacement.beginDrag();
+            this.floatingPlacement.moveDrag(event.offsetX, event.offsetY);
           })
-      }.padding({ left: 20, right: 12 }).width('100%')
+          .onActionUpdate((event: GestureEvent) => {
+            this.floatingPlacement.moveDrag(event.offsetX, event.offsetY);
+          })
+          .onActionEnd((event: GestureEvent) => {
+            this.floatingPlacement.moveDrag(event.offsetX, event.offsetY);
+            this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => {
+              this.floatingPlacement.finishDrag();
+            });
+          })
+          .onActionCancel(() => this.floatingPlacement.cancelDrag())
+      )
+      .onDisAppear(() => this.floatingPlacement.cancelDrag())
+  }
+
+  @Builder
+  pageContent() {
+    Column() {
+      this.header()
+      if (this.tab === 0 && this.scenario !== DemoScenario.Normal) {
+        Text(`下一次演示：${this.scenario}`).fontSize(12).fontColor(Theme.amber)
+          .width('100%').textAlign(TextAlign.Center).padding({ left: 16, right: 16, bottom: 8 })
       }
       Scroll(this.scroller) {
         Column() {
             if (this.migrationOpen) {
               KnowledgeMigrationView({migration:this.sharedKnowledge?.migration,queue:this.sharedKnowledge?.unifiedQueue,vectors:this.sharedKnowledge?.unifiedVectors,onBack:(): void=> { this.migrationOpen=false; }})
             } else if (this.visionSettingsOpen) {
-              VisionSettingsView({service:this.sharedKnowledge?.unifiedSettings,queue:this.sharedKnowledge?.unifiedQueue,onBack:(): void=> { this.visionSettingsOpen=false; }})
+              VisionSettingsView({service:this.sharedKnowledge?.unifiedSettings,queue:this.sharedKnowledge?.unifiedQueue,onBack:(): void=> { this.visionSettingsOpen=false; this.scroller.scrollEdge(Edge.Top); }})
             } else if (this.imageKnowledgeOpen) {
               ImageKnowledgeView({service:this.sharedKnowledge?.imageKnowledge,previewService:this.parsedService,queue:this.sharedKnowledge?.unifiedQueue,initialOccurrence:this.imageKnowledgeOccurrence,onBack:(): void=> { this.imageKnowledgeOpen=false; this.imageKnowledgeOccurrence=''; }})
             } else if (this.parsedOpen) {
@@ -760,7 +962,7 @@ struct Index {
                 Text('正在打开资料…').padding(16)
               } else {
                 ParsedDocumentView({ service: this.parsedService, imports: this.parsedImports, parse: this.parseService, lifecycle: this.sharedKnowledge?.unifiedLifecycle, queue: this.sharedKnowledge?.unifiedQueue,
-                  initialDocument: this.parsedDocumentId, onNavigate: (): void => { this.scroller.scrollEdge(Edge.Top); },
+                  initialImportOpen: this.parsedImportOpen, initialDocument: this.parsedDocumentId, onNavigate: (): void => { this.scroller.scrollEdge(Edge.Top); },
                   onRetryProcessing: (): void => { this.sharedKnowledge?.retryUnifiedProcessing().catch((): void => { this.parsedMessage = '自动处理暂不可用，请重试'; }); },
                   entryFailure: this.parsedMessage, onRetry: (): void => { this.openParsed(); },
                   onBack: (): void => { this.parsedOpen = false; this.parsedDocumentId = ''; },
@@ -784,17 +986,9 @@ struct Index {
              ImageSourceView({ session: this.sharedKnowledge?.imageSources, onBack: (): void => { this.imageSourceOpen = false; this.sharedKnowledge?.imageSources.close().catch((): void => {}); } })
            } else if (this.imageIngestionOpen) {
               ImageIngestionView({ service: this.imageIngestionService, embedding: this.embeddingService, onBack: (): void => { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); }, onOriginal: (document: ImageDocument): void => { this.openImageOriginal(document); },
-                onParseSettings: (): void => { this.imageIngestionOpen = false; this.openParse(true); }, onEmbeddingSettings: (): void => { this.imageIngestionOpen = false; this.openEmbedding(); } })
+               onParseSettings: (): void => { this.imageIngestionOpen = false; this.openParse(true); }, onEmbeddingSettings: (): void => { this.imageIngestionOpen = false; this.openEmbedding(); } })
            } else if (this.platformDiagnosticsOpen) {
               KnowledgePlatformDiagnostics({ onBack: (): void => { this.platformDiagnosticsOpen = false; }, onImageHappyPath: (): void => { this.platformDiagnosticsOpen = false; this.openImages(); } })
-           } else if (this.noticeTitle.length > 0) {
-            Column({ space: 16 }) {
-              Text(this.noticeTitle).fontSize(24).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
-              Text(this.noticeText).fontSize(15).fontColor(Theme.muted).lineHeight(25)
-              Button('知道了，返回').fontColor(Color.White).backgroundColor(Theme.accent)
-                .onClick(() => this.noticeTitle = '')
-            }.alignItems(HorizontalAlign.Start).padding(24).width('100%')
-              .backgroundColor(Theme.surface).borderRadius(18).margin({ top: 16, bottom: 20 })
           } else if (this.showScenarios) {
             this.scenarioPanel()
            } else if (this.pdfSourceOpen) {
@@ -824,41 +1018,83 @@ struct Index {
                }.width('100%').padding(20)
              }
            } else if (this.tab === 0) {
-            this.assistant()
+            if (this.messages.length === 0) { AssistantWelcome() } else { this.assistant() }
           } else if (this.tab === 1) {
             if (this.calendarOpen) {
               this.calendar()
             } else {
               WorkbenchPage({ recordCount: this.records.length,
+                onDocuments: (): void => { this.changeTab(2); this.parsedDocumentId = ''; this.openParsed(); },
                 onCalendar: () => this.calendarOpen = true,
                 onNotice: (title: string, message: string) => this.notice(title, message) })
             }
            } else if (this.tab === 2) {
              if (this.knowledgeReady) {
                UnifiedKnowledgeView({ session: this.sharedKnowledge?.querySession, history: this.sharedKnowledge?.unifiedHistory,
+                 onImport: (): void => { this.parsedDocumentId = ''; this.openParsed(true); },
                  onDocuments: (): void => { this.parsedDocumentId = ''; this.openParsed(); },
                  onOpen: (card: UnifiedSearchCard): void => { this.openUnifiedCard(card); } })
             } else {
               Column({ space: 12 }) {
-                Text(this.knowledgeState.message.length > 0 ? this.knowledgeState.message : '正在打开本机知识库…')
+                Text(this.knowledgeMessage || '正在打开本机知识库…')
                   .fontSize(15).fontColor(Theme.muted).width('100%')
-                Button('重试打开', { type: ButtonType.Normal }).constraintSize({ minHeight: 44 })
+                Button(this.knowledgeOpening ? '正在打开…' : '重试打开', { type: ButtonType.Normal }).id('upd-open-retry').enabled(!this.knowledgeOpening).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 })
                   .onClick((): void => { this.openKnowledge(); })
               }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 20, bottom: 20 })
             }
            } else {
-              Button('ROUND2 Native Diagnostics').id('r2-open-diagnostics').onClick((): void => { this.platformDiagnosticsOpen = true; })
-               Button('嵌入模型设置').id('r2-open-embedding').onClick((): void => { this.openEmbedding(); })
-               Button('图片理解设置').id('upd-profile-vision').onClick((): void=> { this.openVisionSettings(); })
-             ProfilePage({ onNotice: (title: string, message: string) => this.notice(title, message),
+              if (this.developerToolsOpen) { Button('本机能力诊断').id('r2-open-diagnostics').onClick((): void => { this.platformDiagnosticsOpen = true; })
+              }
+
+             ProfilePage({ floatingAssistantEnabled: this.floatingAssistantEnabled,
+               onFloatingAssistantChange: (enabled: boolean): void => { this.floatingAssistantEnabled = enabled; }, onNotice: (title: string, message: string) => this.notice(title, message),
+               onVisionSettings: (): void => { this.openVisionSettings(); },
                onParseSettings: (): void => { this.openParse(true); }, onEmbeddingSettings: (): void => { this.openEmbedding(); } })
+             Button(this.developerToolsOpen ? '收起高级诊断' : '高级诊断', { type: ButtonType.Normal }).fontSize(13).fontColor(Theme.muted).backgroundColor(Color.Transparent).constraintSize({ minHeight: 44 }).onClick((): void => { this.developerToolsOpen = !this.developerToolsOpen; })
           }
-        }.width('100%').constraintSize({ maxWidth: this.tab === 2 ? 1200 : 640 }).padding({ left: 20, right: 20 })
+        }.width('100%').constraintSize({ maxWidth: 640,
+          minHeight: this.tab === 0 && this.messages.length === 0 && !this.showScenarios ? this.contentHeight : 0 })
+          .justifyContent(FlexAlign.Center)
+          // 让末尾内容可以完整滚动到悬浮入口上方；菜单打开时保持内容尺寸。
+          .padding({ left: 20, right: 20,
+            bottom: this.floatingAssistantEnabled && this.tab !== 0 && !this.showScenarios ? 100 : 0 })
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
-      if (this.tab === 0 && !this.showScenarios && this.noticeTitle.length === 0) {
-        this.composer()
+        .onAreaChange((_oldArea: Area, area: Area) => this.contentHeight = Number(area.height))
+      if (this.tab === 0 && !this.showScenarios) {
+        if (this.draft) {
+          this.confirmationDock()
+        } else {
+          this.composer()
+        }
       }
-      this.navigation()
     }.width('100%').height('100%').backgroundColor(Theme.paper)
+  }
+
+  build() {
+    SideBarContainer(SideBarContainerType.Overlay) {
+      Column() {
+        this.navigationDrawer()
+      }
+      Stack({ alignContent: Alignment.TopStart }) {
+        Column() {
+          this.pageContent()
+        }.width('100%').height('100%').enabled(!this.drawerOpen)
+          .accessibilityLevel(this.drawerOpen ? 'no-hide-descendants' : 'auto')
+        if (this.floatingAssistantEnabled && this.floatingPlacement.canPlace &&
+          this.tab !== 0 && !this.showScenarios && !this.drawerOpen) {
+          this.floatingAssistant()
+        }
+        if (this.drawerOpen) {
+          Button({ type: ButtonType.Normal }) {
+            Row().width('100%').height('100%')
+          }.width('100%').height('100%').backgroundColor(Theme.overlay).borderRadius(0)
+            .accessibilityText('关闭导航菜单').onClick(() => this.drawerOpen = false)
+        }
+      }.width('100%').height('100%')
+        .onAreaChange((_oldArea: Area, area: Area) => this.resizeFloatingHost(Number(area.width), Number(area.height)))
+    }.width('100%').height('100%').showSideBar(this.drawerOpen).showControlButton(false)
+      .sideBarWidth('84%').minSideBarWidth(200).maxSideBarWidth(320).minContentWidth(0)
+      .divider({ strokeWidth: 0 }).onChange((visible: boolean) => this.drawerOpen = visible)
+      .backgroundColor(Theme.paper)
   }
 }

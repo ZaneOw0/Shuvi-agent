@@ -20,18 +20,18 @@ export struct KnowledgeResultCard {
   private canOpen(): boolean { return this.hit.referenceState === KnowledgeReferenceState.Current && (this.hit.sourceKind !== KnowledgeSourceKind.Pdf || this.hit.pages.state === PdfPageReferenceState.Verified); }
   build() {
     Column({ space: 8 }) {
-      Text(`${this.hit.sourceKind === KnowledgeSourceKind.Image ? this.hit.actualFormat : this.hit.sourceKind} · ${this.hit.title}`).fontSize(15).fontWeight(FontWeight.Medium).width('100%')
-      Text(this.label()).fontSize(12).fontColor(Theme.muted).width('100%')
+      Text(`${this.hit.sourceKind === KnowledgeSourceKind.Image ? this.hit.actualFormat : this.hit.sourceKind} · ${this.hit.title}`).fontColor(Theme.ink).fontSize(15).fontWeight(FontWeight.Medium).width('100%')
+      Text(this.label()).fontColor(Theme.ink).fontSize(12).fontColor(Theme.muted).width('100%')
       Text() {
         ForEach(knowledgeSegments(this.hit),(segment: KnowledgeResultSegment): void => {
-          Span(segment.text).fontColor(segment.matched ? '#965000' : Theme.ink).fontWeight(segment.matched ? FontWeight.Bold : FontWeight.Normal)
+          Span(segment.text).fontColor(segment.matched ? Theme.accent : Theme.ink).fontWeight(segment.matched ? FontWeight.Bold : FontWeight.Normal)
         },(segment: KnowledgeResultSegment): string => segment.id)
       }.fontSize(14).width('100%').textAlign(TextAlign.Start)
-      Text(this.pageLabel()).fontSize(13).fontColor(Theme.muted).width('100%')
-      if (this.hit.match.compatibility) { Text('旧历史兼容重建 · 按保存输入').fontSize(12).fontColor(Theme.muted).width('100%') }
-      if (this.hit.referenceState !== KnowledgeReferenceState.Current) { Text('来源已失效或为旧版本 · 仅保留快照').fontSize(12).fontColor(Theme.muted).width('100%') }
-      Button('查看来源').id('knowledge-source-'+this.hit.chunkId).enabled(this.canOpen()).onClick((): void => { if (this.canOpen()) { this.onOpenHit(this.hit); } })
-    }.width('100%').padding(12).alignItems(HorizontalAlign.Start).backgroundColor(Theme.surface).borderRadius(8)
+      Text(this.pageLabel()).fontColor(Theme.ink).fontSize(13).fontColor(Theme.muted).width('100%')
+      if (this.hit.match.compatibility) { Text('旧历史兼容重建 · 按保存输入').fontColor(Theme.ink).fontSize(12).fontColor(Theme.muted).width('100%') }
+      if (this.hit.referenceState !== KnowledgeReferenceState.Current) { Text('来源已失效或为旧版本 · 仅保留快照').fontColor(Theme.ink).fontSize(12).fontColor(Theme.muted).width('100%') }
+      Button('查看来源').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('knowledge-source-'+this.hit.chunkId).enabled(this.canOpen()).onClick((): void => { if (this.canOpen()) { this.onOpenHit(this.hit); } })
+    }.width('100%').padding(12).alignItems(HorizontalAlign.Start).backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
   }
 }
 @Component
@@ -41,16 +41,16 @@ export struct UnifiedKnowledgeResultCard {
   private segments(reason: UnifiedSearchReason): KnowledgeResultSegment[] { const hit: KnowledgeHit=new KnowledgeHit(); hit.text=reason.text; if (reason.route==='BodyDirect' || reason.route==='OcrDirect') { hit.match.kind=KnowledgeMatchKind.Direct; for (const source of reason.ranges) { const range: KnowledgeResultRange=new KnowledgeResultRange(); range.start=source.start; range.end=source.end; hit.match.ranges.push(range); } } return knowledgeSegments(hit); }
   build() {
     Column({space:7}) {
-      Text(`${this.card.kind==='Image'?'图片':'正文'} · ${this.card.title}`).fontSize(15).fontWeight(FontWeight.Medium).width('100%')
-      if (!this.card.current) { Text('来源为旧版或已失效').fontSize(12).width('100%') }
+      Text(`${this.card.kind==='Image'?'图片':'正文'} · ${this.card.title}`).fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
+      if (!this.card.current) { Text('来源为旧版或已失效').fontColor(Theme.ink).fontSize(12).width('100%') }
       ForEach(this.card.reasons,(r: UnifiedSearchReason)=> {
         Column({space:4}) {
-          Text(r.route==='BodyDirect'?'正文直接命中':r.route==='OcrDirect'?'OCR直接命中':r.route==='Tag'?'本机标签':r.route==='Vector'?'语义相关':r.route).fontSize(12).fontColor(Theme.muted).width('100%')
-          Text() { ForEach(this.segments(r),(s: KnowledgeResultSegment)=> { Span(s.text).fontColor(s.matched?'#965000':Theme.ink).fontWeight(s.matched?FontWeight.Bold:FontWeight.Normal) },(s: KnowledgeResultSegment): string=>s.id) }.fontSize(14).maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+          Text(r.route==='BodyDirect'?'正文直接命中':r.route==='OcrDirect'?'OCR直接命中':r.route==='Tag'?'本机标签':r.route==='Vector'?'语义相关':r.route).fontColor(Theme.ink).fontSize(12).fontColor(Theme.muted).width('100%')
+          Text() { ForEach(this.segments(r),(s: KnowledgeResultSegment)=> { Span(s.text).fontColor(s.matched?Theme.accent:Theme.ink).fontWeight(s.matched?FontWeight.Bold:FontWeight.Normal) },(s: KnowledgeResultSegment): string=>s.id) }.fontSize(14).maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         }.width('100%')
       },(r: UnifiedSearchReason): string=>r.id)
-      ForEach(this.card.parents,(p: UnifiedSearchParent)=> { Text('来源：' + p.title).fontSize(11).fontColor(Theme.muted).width('100%') },(p: UnifiedSearchParent): string=>p.documentKey+'|'+p.generation+'|'+p.occurrenceId)
-      Button('查看来源').id('upd-card-source-'+this.card.key).enabled(this.card.current && this.card.kind!=='Legacy').onClick((): void=> { this.onOpen(this.card); })
-    }.width('100%').padding(12).backgroundColor(Theme.surface).borderRadius(8).alignItems(HorizontalAlign.Start)
+      ForEach(this.card.parents,(p: UnifiedSearchParent)=> { Text('来源：' + p.title).fontColor(Theme.ink).fontSize(11).fontColor(Theme.muted).width('100%') },(p: UnifiedSearchParent): string=>p.documentKey+'|'+p.generation+'|'+p.occurrenceId)
+      Button('查看来源').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-card-source-'+this.card.key).enabled(this.card.current && this.card.kind!=='Legacy').onClick((): void=> { this.onOpen(this.card); })
+    }.width('100%').padding(12).backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line }).alignItems(HorizontalAlign.Start)
   }
 }
