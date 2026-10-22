@@ -1,8 +1,7 @@
 import { common } from '@kit.AbilityKit';
-import { cryptoFramework } from '@kit.CryptoArchitectureKit';
-import { KnowledgeIdentityPort } from '../domain/KnowledgePorts';
+import { KnowledgePlatformIdentity } from './KnowledgeIdentity';
 import { KnowledgeReadLease } from '../domain/PdfKnowledgeModels';
-import { documentDigestHex, documentAssetPath, documentHashFile } from './DocumentFileOperations';
+import { documentAssetPath, documentHashFile } from './DocumentFileOperations';
 import { DocumentParseCancellation } from '../domain/DocumentParseModels';
 import { KnowledgeCancellation, PdfSourceBinding, KnowledgeFailure } from '../domain/PdfKnowledgeModels';
 import { PdfPageReferenceService } from '../application/PdfPageReferenceService';
@@ -46,7 +45,6 @@ import { DocumentOriginal, DocumentParseResultEnvelope, DocumentParseCleanup } f
 import { ParsedDocumentRepository } from './ParsedDocumentRepository';
 import { ParsedDocumentAssets } from './ParsedDocumentAssets';
 import { ParsedCancellation, ParsedDocument } from '../domain/ParsedDocumentModels';
-import { ParsedIdentityPort } from '../domain/ParsedDocumentPorts';
 import { ParsedDocumentIngestionService } from '../application/ParsedDocumentIngestionService';
 import { ParsedDocumentImportAdapter } from './ParsedDocumentImportAdapter';
 import { VisionCredentialStore } from './VisionCredentialStore';
@@ -65,13 +63,7 @@ import { UnifiedQueryService } from '../application/UnifiedQueryService';
 import { KnowledgeQuerySession } from '../application/KnowledgeQuerySession';
 import { UnifiedKnowledgeHistoryRepository } from './UnifiedKnowledgeHistoryRepository';
 
-export class KnowledgePlatformIdentity implements KnowledgeIdentityPort, ParsedIdentityPort {
-  id(): string { return 'kb-' + documentDigestHex(cryptoFramework.createRandom().generateRandomSync(16).data); }
-  async hash(bytes: Uint8Array): Promise<string> {
-    const digest: cryptoFramework.Md = cryptoFramework.createMd('SHA256'); const blob: cryptoFramework.DataBlob = { data: bytes };
-    await digest.update(blob); return documentDigestHex((await digest.digest()).data);
-  }
-}
+export { KnowledgePlatformIdentity } from './KnowledgeIdentity';
 class UnifiedAssemblyEmbeddingConfig implements UnifiedEmbeddingConfigPort {
   private service: EmbeddingService;
   constructor(service: EmbeddingService) { this.service=service; }

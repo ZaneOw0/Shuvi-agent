@@ -36,7 +36,7 @@ exports.changedEts=[
   'application/DocumentParseService','infra/DocumentFileAdapter','infra/DocumentFileOperations','infra/MineruTransportAdapter','domain/DocumentParsePorts','pipeline/DocumentParsePolicy','infra/KnowledgeDerivedBudget',
   'domain/KnowledgeSearchModels','domain/EmbeddingModels','infra/DocxVectorRepository','infra/DocxSourceReader','infra/DocxSourceSession',
   'infra/KnowledgePublicationBudget','infra/TextRdbRepository','infra/KnowledgeReadDispatcher','infra/ImageVectorRepository','infra/KnowledgeSourceRegistry',
-  'infra/EmbeddingTransportAdapter','infra/KnowledgeAssembly','application/EmbeddingWorkflow','application/KnowledgeLifecycleService',
+  'infra/EmbeddingTransportAdapter','infra/KnowledgeAssembly','infra/KnowledgeIdentity','application/EmbeddingWorkflow','application/KnowledgeLifecycleService',
    'pipeline/EmbeddingPolicy','pipeline/KnowledgeMatchPolicy','ui/DocxSourceView','ui/DocumentParseView','ui/KnowledgeResultCard','ui/KnowledgeView','platformtests/DocxPlatformCases','infra/DocxXmlReader'
 ].map(n=>'entry/src/main/ets/knowledge/'+n+'.ets').concat(['entry/src/main/ets/pages/Index.ets','entry/src/main/ets/entryability/EntryAbility.ets']);
 function harness(){

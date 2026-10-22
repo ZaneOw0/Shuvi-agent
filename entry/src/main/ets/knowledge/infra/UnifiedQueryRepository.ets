@@ -34,7 +34,7 @@ export class UnifiedQueryRepository implements UnifiedQueryScopePort, UnifiedQue
       if (count>30000 || scope.images.length>30000) { throw new ParsedFailure('UnifiedQueryInputBudget','query-local'); }
       for (const source of scope.texts) { const binding=await this.repository.binding('upd-body',source.document.id); if (binding?.state!==UnifiedBindingState.Synced || binding.version!==source.document.activeGeneration) { scope.unupgraded++; } }
       for (const image of scope.images) { const binding=await this.repository.binding('upd-image',image.record.lineage); if (binding?.state!==UnifiedBindingState.Synced || binding.version!==image.record.effectiveId) { scope.unupgraded++; } }
-      scope.unupgraded+=await this.legacyUnupgraded(); scope.hash=scope.localHash; scope.complete=true; return scope;
+      scope.hash=scope.localHash; scope.complete=true; return scope;
     }
     const settings=await this.repository.settings('Embedding'); const jobs: UnifiedProcessingJob[]=await this.repository.jobs(); let numericReady: boolean=false;
     try { await this.vectors.open(); numericReady=true; } catch { projection.push('NumericUnavailable'); }
@@ -59,18 +59,7 @@ export class UnifiedQueryRepository implements UnifiedQueryScopePort, UnifiedQue
       count+=job.inputs.length; for (const input of job.inputs) { const target=this.target(input,job,binding); target.qualification.spaceId=scope.space.id; scope.targets.push(target); } projection.push(JSON.stringify(binding));
     }
     if (count>30000 || scope.targets.length>30000) { throw new ParsedFailure('UnifiedQueryInputBudget','query-scope'); }
-    const old=await this.host.requireStore().querySql("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('text_doc','kb_document','kb_image_document','kb_docx_document')"); const oldNames: string[]=[]; try { while (old.goToNextRow()) { oldNames.push(old.getString(0)); } } finally { old.close(); }
-    for (const name of oldNames) { const namespace: string=name==='text_doc'?'Text':name==='kb_document'?'Pdf':name==='kb_image_document'?'Image':'Docx'; const rows=await this.host.requireStore().querySql(`SELECT count(*) FROM ${name} old WHERE `+(name==='text_doc'?'1=1':'old.tombstone=0')+" AND NOT EXISTS(SELECT 1 FROM upd_legacy_link l JOIN upd_document d ON d.id=l.doc AND d.active=l.generation WHERE l.namespace=? AND l.legacy_id=old.id AND l.state='Committed')",[namespace]); try { if (!rows.goToNextRow()) { throw new ParsedFailure('LegacyCoverageUnavailable','query-scope'); } scope.unupgraded+=rows.getLong(0); } finally { rows.close(); } }
     projection.push(JSON.stringify(settings),embeddingConfigBinding(config),scope.space?.id ?? 'NoUnifiedSpace',String(scope.unupgraded)); scope.hash=await this.identity.hash(parsedUtf8(projection.join('\n'))); scope.complete=true; return scope;
-  }
-  private async legacyUnupgraded(): Promise<number> {
-    const tables=await this.host.requireStore().querySql("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('text_doc','kb_document','kb_image_document','kb_docx_document')"); const names: string[]=[];
-    try { while (tables.goToNextRow()) { names.push(tables.getString(0)); } } finally { tables.close(); } let total: number=0;
-    for (const name of names) {
-      const namespace: string=name==='text_doc'?'Text':name==='kb_document'?'Pdf':name==='kb_image_document'?'Image':'Docx';
-      const rows=await this.host.requireStore().querySql(`SELECT count(*) FROM ${name} old WHERE `+(name==='text_doc'?'1=1':'old.tombstone=0')+" AND NOT EXISTS(SELECT 1 FROM upd_legacy_link l JOIN upd_document d ON d.id=l.doc AND d.active=l.generation WHERE l.namespace=? AND l.legacy_id=old.id AND l.state='Committed')",[namespace]);
-      try { if (!rows.goToNextRow()) { throw new ParsedFailure('LegacyCoverageUnavailable','query-local'); } total+=rows.getLong(0); } finally { rows.close(); }
-    } return total;
   }
   private target(input: UnifiedTextInput, job: UnifiedProcessingJob, binding: UnifiedIndexBinding): UnifiedQueryTarget {
     const t: UnifiedQueryTarget=new UnifiedQueryTarget(); t.input=input; t.binding=binding; t.qualification.documentId=`upd:${job.stage==='ImageEmbedding'?'image':'body'}:${job.ownerId}`; t.qualification.contentGeneration=input.version; t.qualification.vectorGeneration=job.id; t.qualification.epoch=job.epoch; t.qualification.chunkIds=[input.id]; t.qualification.inputHash=input.inputHash; return t;

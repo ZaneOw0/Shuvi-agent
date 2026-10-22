@@ -13,6 +13,8 @@ export struct VisionSettingsView {
   @State automaticOn: boolean=false;
   @State costConsent: boolean=false;
   @State message: string='';
+  @State jobPage: number=0;
+  @State jobTotal: number=0;
   @State jobs: UnifiedProcessingJob[]=[];
   @State busy: boolean=false;
   @State retryId: string='';
@@ -20,7 +22,7 @@ export struct VisionSettingsView {
   aboutToAppear(): void { this.queue?.subscribe(this.listener); this.refresh(); }
   aboutToDisappear(): void { this.secretInput=''; this.costConsent=false; this.queue?.unsubscribe(this.listener); }
   private async refresh(): Promise<void> {
-    try { const state=await this.service?.setting('Vision'); this.automaticOn=state?.enabled ?? false; const credential=await this.service?.credentialStatus(); this.credential=credential?.present?'Configured':credential?.failure || 'Missing'; this.jobs=(await this.queue?.jobs() ?? []).slice(0,50); }
+    try { const state=await this.service?.setting('Vision'); this.automaticOn=state?.enabled ?? false; const credential=await this.service?.credentialStatus(); this.credential=credential?.present?'Configured':credential?.failure || 'Missing'; const jobs=await this.queue?.jobs() ?? []; this.jobTotal=jobs.length; this.jobPage=Math.min(this.jobPage,Math.max(0,Math.ceil(this.jobTotal/10)-1)); this.jobs=jobs.slice(this.jobPage*10,this.jobPage*10+10); }
     catch { this.message='设置或队列读取失败，外发未开启'; }
   }
   private async saveKey(remove: boolean=false): Promise<void> {
@@ -44,13 +46,15 @@ export struct VisionSettingsView {
       Button(this.automaticOn?'关闭自动图片理解':'启用自动图片理解').id('upd-vision-enable').enabled(!this.busy && (this.automaticOn || this.costConsent)).onClick((): void=> { this.saveEnabled(); })
       Row() { Button('暂停队列').id('upd-queue-pause').onClick((): void=> { this.queue?.pause(); }); Button('恢复队列').id('upd-queue-resume').onClick((): void=> { this.queue?.resume(); }) }.width('100%')
       Text(this.message || this.queue?.message || '').fontSize(13).width('100%')
+      Text('文件级进度与重试也可在「知识库 → 我的资料 → 资料详情」查看。').fontSize(13).width('100%')
+      if (this.jobTotal>10) { Row() { Button('上一组任务').id('upd-jobs-prev').enabled(this.jobPage>0).onClick((): void=> { this.jobPage--; this.refresh(); }); Text(`${this.jobPage+1}/${Math.ceil(this.jobTotal/10)}`); Button('下一组任务').id('upd-jobs-next').enabled((this.jobPage+1)*10<this.jobTotal).onClick((): void=> { this.jobPage++; this.refresh(); }) } }
       ForEach(this.jobs,(j: UnifiedProcessingJob)=> {
         Column() {
           Text(`${j.stage} · ${j.origin} · ${j.state} · ${j.completed}/${j.expected}`).fontSize(13).width('100%')
-          Text(j.failure).fontSize(12).width('100%')
+          Text(j.failure==='Http:401'?'视觉服务鉴权失败（HTTP 401），请更新独立 DeepSeek Key 后再重试。':j.failure==='Http:403'?'视觉服务拒绝访问（HTTP 403），请核对账号与模型权限。':j.failure).fontSize(12).width('100%')
           if (j.state==='Unknown' || j.state==='Failed' || j.state==='Paused') { Button('重试').id('upd-job-retry-'+j.id).onClick((): void=> { this.retryId=j.id; }) }
         }.width('100%')
-      },(j: UnifiedProcessingJob): string=>j.id)
+      },(j: UnifiedProcessingJob): string=>j.id+'|'+j.state+'|'+String(j.completed)+'|'+j.failure)
       if (this.retryId.length>0) {
         Text('先前请求结果可能未知。重试可能重复计费，仅对选中作业重试。').fontSize(13).width('100%')
         Button('接受可能费用并重试').id('upd-job-retry-confirm').onClick((): void=> { this.queue?.retry(this.retryId,true).catch((): void=> { this.message='重试未保存'; }); this.retryId=''; })

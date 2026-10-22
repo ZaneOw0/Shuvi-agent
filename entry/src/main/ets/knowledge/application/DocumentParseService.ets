@@ -103,8 +103,8 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
   capabilitySummary(): string { return '四格式仅原件准备与转发；服务产物结构/原生定位未验证，不索引，不提供完整PDF预览或高亮'; }
   async initialize(): Promise<void> {
     await this.repository.open(); this.state.snapshot = await this.repository.load();
-    for (const grant of this.state.snapshot.grants) { if (grant.format === DocumentParseFormat.Docx) { grant.revoked = true; } }
     this.state.credential = await this.credential.status();
+    for (const grant of this.state.snapshot.grants) { if (grant.format===DocumentParseFormat.Docx && !this.state.snapshot.tasks.some((t: DocumentParseTask): boolean=>t.grantId===grant.id && t.originalId===grant.originalId)) { grant.revoked=true; } }
     for (const task of this.state.snapshot.tasks) {
       if (task.stage === DocumentParseStage.Allocation) { task.stage = DocumentParseStage.Uncertain; }
       else if (task.stage === DocumentParseStage.Uploading) { task.stage = DocumentParseStage.UploadUnknown; }
@@ -223,26 +223,26 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     if (prior === undefined) { this.state.snapshot.docxPermits.push(p); } this.state.snapshot.grants.push(g);
     try { await this.repository.save(this.state.snapshot); } catch { g.revoked = true; throw new DocumentParseFailure('DOCX许可持久化失败','DOCX许可'); } this.emit();
   }
-  private async consumeDocx(action: DocumentParseAction, purpose: string): Promise<void> {
+  private async consumeDocx(action: DocumentParseAction, purpose: string, recovery: boolean=false): Promise<void> {
     if (action.original.format !== DocumentParseFormat.Docx) { return; }
     const p: DocxParsePermit | undefined = this.state.snapshot.docxPermits.find((permit: DocxParsePermit): boolean => permit.originalId === action.original.id);
     if (p === undefined || p.hash !== action.original.hash || p.version !== action.original.version || p.actualFormat !== DocumentParseFormat.Docx || p.credentialRevision !== action.task.credentialRevision || p.parameters !== action.grant.parameters || !p.fullFile || !p.freeEligible || p.stoppedReason.length > 0 || !documentGrantMatches(action.original,action.grant,this.state.snapshot.config.credentialRevision) || p.taskId.length > 0 && p.taskId !== action.task.id) { throw new DocumentParseFailure('DOCX许可或原任务不当前','请求计数'); }
     if (purpose === 'POST') { if (p.usage.allocation >= 1) { throw new DocumentParseFailure('DOCX已申请，禁止重建','请求计数'); } p.usage.allocation++; p.taskId = action.task.id; }
-    else if (purpose === 'PUT') { if (p.usage.put >= 1) { throw new DocumentParseFailure('DOCX已尝试上传，禁止补传','请求计数'); } p.usage.put++; }
+    else if (purpose === 'PUT') { if (p.usage.put >= 2 || p.usage.put>=1 && !recovery) { throw new DocumentParseFailure('DOCX补传需明确恢复且最多一次','请求计数'); } p.usage.put++; }
     else if (purpose === 'QUERY') { if (p.usage.query >= 90) { throw new DocumentParseFailure('DOCX累计查询已达90次','请求计数'); } p.usage.query++; }
-    else if (purpose === 'ZIP') { if (p.usage.download >= 1) { throw new DocumentParseFailure('DOCX已请求ZIP，仅可读缓存','请求计数'); } p.usage.download++; }
+    else if (purpose === 'ZIP') { if (p.usage.download >= (recovery?3:1)) { throw new DocumentParseFailure('DOCX结果包重取需明确恢复，最多三次接收尝试','请求计数'); } p.usage.download++; }
     else { throw new DocumentParseFailure('请求用途未知','请求计数'); }
     action.task.usage = p.usage; await this.repository.save(this.state.snapshot); this.check(action);
   }
-  private async consumeImage(action: DocumentParseAction, purpose: string): Promise<void> {
-    await this.consumeDocx(action,purpose);
+  private async consumeImage(action: DocumentParseAction, purpose: string, recovery: boolean=false): Promise<void> {
+    await this.consumeDocx(action,purpose,recovery);
     if (!documentIsImage(action.original.format)) { return; }
     const p = this.state.snapshot.imagePermits.find((permit: ImageParsePermit): boolean => permit.originalId === action.original.id && permit.hash === action.original.hash && permit.version === action.original.version && permit.fullFile && permit.freeEligible);
     if (p === undefined || p.actualFormat !== action.original.format || p.testInputId !== imagePermitInputId(action.original) || action.grant.policy !== imagePermitPolicy(p) || !documentGrantMatches(action.original,action.grant,this.state.snapshot.config.credentialRevision) || p.taskId.length > 0 && p.taskId !== action.task.id) { throw new DocumentParseFailure('图片许可身份不符','请求计数'); }
     if (purpose === 'POST') { if (p.usage.allocation >= 1) { throw new DocumentParseFailure('本件申请额度已消费','请求计数'); } p.usage.allocation++; p.taskId = action.task.id; }
-    else if (purpose === 'PUT') { if (p.usage.put >= 1) { throw new DocumentParseFailure('本件PUT已消费，禁止补传','请求计数'); } p.usage.put++; }
+    else if (purpose === 'PUT') { if (p.usage.put >= (imagePermitPolicy(p)===ImageParsePermit.productionPolicy?2:1) || p.usage.put>=1 && !recovery) { throw new DocumentParseFailure('图片补传需明确恢复且最多一次','请求计数'); } p.usage.put++; }
     else if (purpose === 'QUERY') { if (p.usage.query >= 90) { throw new DocumentParseFailure('本件累计查询90次已用完','请求计数'); } p.usage.query++; }
-    else if (purpose === 'ZIP') { if (p.usage.download >= 1) { throw new DocumentParseFailure('本件ZIP请求已消费，仅可本机读缓存','请求计数'); } p.usage.download++; }
+    else if (purpose === 'ZIP') { if (p.usage.download >= (recovery && imagePermitPolicy(p)===ImageParsePermit.productionPolicy?3:1)) { throw new DocumentParseFailure('图片结果包重取需明确恢复，最多三次接收尝试','请求计数'); } p.usage.download++; }
     action.task.usage = p.usage; await this.repository.save(this.state.snapshot); this.check(action);
   }
   async saveToken(input: string, replace: boolean): Promise<void> {
@@ -335,7 +335,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
       if (recovery && (action.task.remote !== DocumentRemoteState.Waiting || action.task.recoveryUploadUsed)) { throw new DocumentParseFailure('本次未确认waiting-file或补传已用', '上传前复核'); }
       // Durable intent precedes SDK fetch. Crash at this boundary is conservative, never an automatic retry.
       if (recovery) { action.task.recoveryUploadUsed = true; }
-      await this.consumeImage(action,'PUT');
+      await this.consumeImage(action,'PUT',recovery);
       action.task.uploadAttempted = true; action.task.uploadRequestStarted = false; action.task.uploadBytes = 0;
       await this.checkpoint(action, DocumentParseStage.Uploading);
     };
@@ -430,7 +430,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
         await this.repository.save(this.state.snapshot); return;
       }
       if (inspected.state === DocumentRemoteState.Waiting && !action.task.uploaded && recovery) {
-        if (documentIsImage(action.original.format) || action.original.format === DocumentParseFormat.Docx) { await this.checkpoint(action,DocumentParseStage.Paused); this.state.message = '同任务仍待文件；本轮禁止补传或重建'; return; }
+        if (documentIsImage(action.original.format) && !imagePermitInputId(action.original).startsWith('image-')) { await this.checkpoint(action,DocumentParseStage.Paused); this.state.message = '旧测试许可禁止补传，原任务保留'; this.emit(); return; }
         await this.checkpoint(action, DocumentParseStage.Waiting);
         await this.assets?.verify(action.original, action.cancel); this.check(action);
         await this.uploadOriginal(action, action.task.uploadAttempted);
@@ -448,7 +448,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
         this.state.snapshot.cleanup.push(pending); await this.repository.save(this.state.snapshot); this.check(action);
         // Own reservation is excluded from the receive call, but stays in the durable ledger until publication.
         const usage: DocumentParseUsage = documentUsage(this.state.snapshot); usage.resultBytes -= pending.resultBytes;
-        await this.consumeImage(action,'ZIP');
+        await this.consumeImage(action,'ZIP',recovery);
         const result: DocumentParseResultEnvelope = await this.requireNetwork().receive(action, usage);
         try { this.check(action); } catch { await this.retryCleanup(); throw new DocumentParseFailure('晚到包未发布', '接收'); }
         if (result.taskId !== action.task.id || result.dataId !== action.task.dataId || result.originalHash !== action.task.hash || result.version !== action.task.version ||
@@ -470,7 +470,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     await this.checkpoint(action, DocumentParseStage.Paused); this.state.message = '前台等待窗口耗尽，云任务可能继续；可手动查询现有批次';
   }
   pauseImmediate(): void {
-    for (const grant of this.state.snapshot.grants) { if (grant.format === DocumentParseFormat.Docx) { grant.revoked = true; } }
+    for (const grant of this.state.snapshot.grants) { if (grant.format===DocumentParseFormat.Docx && !this.state.snapshot.tasks.some((t: DocumentParseTask): boolean=>t.grantId===grant.id && t.originalId===grant.originalId)) { grant.revoked=true; } }
     this.assets?.cancelLocal(); this.preflight?.cancelLocal();
     if (this.localCancel !== undefined) { this.localCancel.invalid = true; }
     if (this.activeAction !== undefined) {

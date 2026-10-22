@@ -18,8 +18,13 @@ export struct DocumentParseView {
   @State private tokenInput: string = '';
   @State private credentialFeedback: string = '';
   @State private resumeId: string = '';
+  @State private deleteFeedback: string = '';
+  @State private deletingCopy: boolean = false;
   @State private deleteId: string = '';
   @State private slotConfirm: boolean = false;
+  @State private copyManager: boolean=false;
+  @State private copyFilter: string='';
+  private copyController: TextInputController=new TextInputController();
   @State private showSettings: boolean = true;
   @State private taskRows: DocumentParseTaskPresentation[] = [];
   private tokenController: TextInputController = new TextInputController();
@@ -51,6 +56,16 @@ export struct DocumentParseView {
     } catch { this.credentialFeedback = '安全配置动作失败，未确认保存；请重新打开设置查看状态'; }
     finally { input = ''; this.clearSecret(); }
   }
+  private async deleteLocalCopy(): Promise<void> {
+    if (this.service===undefined || this.deletingCopy || this.parseState.busy) { return; }
+    const id: string=this.deleteId; this.deletingCopy=true; this.deleteFeedback='正在核对本机引用并删除…';
+    try {
+      await this.service.deleteOriginal(id); const current=this.service.viewState();
+      if (current.snapshot.originals.some((o: DocumentOriginal): boolean=>o.id===id)) { this.deleteFeedback='未删除：'+current.message+'。若资料已入库，请先在「我的资料」删除对应资料以释放引用。'; }
+      else { this.deleteFeedback='本机副本已删除。'+(current.snapshot.cleanup.length>0?'物理文件仍待清理，可重试本机清理。':''); this.deleteId=''; }
+    } catch { this.deleteFeedback='本机副本删除未确认，原记录保留，请重试。'; }
+    finally { this.deletingCopy=false; }
+  }
   private isPdfResult(result: DocumentParseResultEnvelope): boolean {
     const task: DocumentParseTask | undefined = this.parseState.snapshot.tasks.find((item: DocumentParseTask): boolean => item.id === result.taskId);
     return this.parseState.snapshot.originals.some((original: DocumentOriginal): boolean => original.id === task?.originalId && original.format === DocumentParseFormat.Pdf);
@@ -70,14 +85,15 @@ export struct DocumentParseView {
         Text('MinerU 精准 · vlm').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
       }.width('100%')
       Row({ space: 12 }) {
-        Button('引擎设置', { type: ButtonType.Normal }).onClick((): void => { this.clearSecret(); this.service?.clearInput(); this.showSettings = true; })
-        Button('解析准备 / 任务', { type: ButtonType.Normal }).onClick((): void => { this.clearSecret(); this.service?.clearInput(); this.showSettings = false; })
+        Button('设置', { type: ButtonType.Normal }).layoutWeight(1).onClick((): void => { this.clearSecret(); this.service?.clearInput(); this.copyManager=false; this.showSettings = true; })
+        Button('解析任务', { type: ButtonType.Normal }).layoutWeight(1).onClick((): void => { this.clearSecret(); this.service?.clearInput(); this.copyManager=false; this.showSettings = false; })
+        Button('本机副本', { type: ButtonType.Normal }).id('parse-open-copies').layoutWeight(1).onClick((): void=> { this.clearSecret(); this.showSettings=false; this.copyManager=true; })
       }.width('100%')
       Text(this.parseState.message).fontSize(13).fontColor(Theme.muted).width('100%')
       if (this.credentialFeedback.length > 0) {
         Text(this.credentialFeedback).fontSize(13).fontColor(Theme.amber).width('100%')
       }
-      Button('DOCX解析与入库').id('parse-open-docx').onClick(this.onOpenDocx)
+      if (!this.copyManager) { Button('DOCX解析与入库').id('parse-open-docx').onClick(this.onOpenDocx) }
       if (this.showSettings) {
       Text(this.parseState.credential).fontColor(Theme.muted).width('100%')
       TextInput({ text: this.tokenInput, placeholder: '输入 Token', controller: this.tokenController })
@@ -91,6 +107,7 @@ export struct DocumentParseView {
           .onClick((): void => { this.clearSecret(); this.service?.removeToken(); })
       }.width('100%')
       }
+      if (!this.copyManager) {
       Text(this.parseState.limitation).fontSize(13).fontColor(Theme.muted).width('100%')
       Text(this.service?.capabilitySummary() ?? '解析能力不可用').fontSize(13).fontColor(Theme.muted).width('100%')
       Row({ space: 12 }) {
@@ -100,7 +117,8 @@ export struct DocumentParseView {
       }.width('100%')
       Text('PDF/Office 保持逐件非敏感免费测试许可；普通图片在“图片解析与入库”逐图确认完整文件、元数据与免费资格。保存不代表同意上传。')
         .fontSize(13).fontColor(Theme.muted).width('100%')
-      if (!this.showSettings) {
+      }
+      if (!this.showSettings && !this.copyManager) {
       Text('解析任务').fontSize(16).fontWeight(FontWeight.Medium).width('100%')
       if (this.parseState.busy) {
         Row({ space: 8 }) {
@@ -152,13 +170,8 @@ export struct DocumentParseView {
             submitBlockReason: this.service?.submitReason(original) ?? '解析能力不可用' })
         }
       }, (original: DocumentOriginal): string => original.id)
-      Text('本机副本管理').fontSize(16).fontWeight(FontWeight.Medium).width('100%')
-      ForEach(this.parseState.snapshot.originals, (saved: DocumentOriginal) => {
-        Button(`删除本机副本：${saved.title}`, { type: ButtonType.Normal }).width('100%')
-          .onClick((): void => { this.deleteId = saved.id; })
-      }, (saved: DocumentOriginal): string => `delete-${saved.id}`)
       if (this.resumeId.length > 0 || this.slotConfirm) {
-         Text('确认当前凭据为先前同账号，查询同一测试任务，不申请新批次。图片禁止补传；旧PDF/Office仅原有许可内对同一对象最多补传一次，凭据已变只能复核占用。').fontSize(13).width('100%')
+         Text('确认当前凭据为先前同账号，先查询原批次。明确待文件时最多补传同一原件一次；失败结果包最多显式重取两次，可能产生流量或费用。旧固定测试许可不扩展，凭据已变只能复核占用。').fontSize(13).width('100%')
         Row({ space: 12 }) {
           Button('确认继续').onClick((): void => {
             if (this.slotConfirm) { this.service?.inspectOccupancy(true); } else { this.service?.resume(this.resumeId, true); }
@@ -167,17 +180,26 @@ export struct DocumentParseView {
           Button('取消').onClick((): void => { this.resumeId = ''; this.slotConfirm = false; })
         }
       }
+      }
+      if (this.copyManager) {
+      Text('本机副本管理').fontSize(16).fontWeight(FontWeight.Medium).width('100%')
+      TextInput({text:this.copyFilter,placeholder:'按文件名筛选副本',controller:this.copyController}).id('parse-copy-filter').onChange((v: string): void=> { this.copyFilter=v; })
+      ForEach(this.parseState.snapshot.originals.filter((o: DocumentOriginal): boolean=>o.title.toLowerCase().includes(this.copyFilter.trim().toLowerCase())), (saved: DocumentOriginal) => {
+        Button(`删除本机副本：${saved.title}`, { type: ButtonType.Normal }).width('100%')
+          .id('parse-delete-copy-'+saved.id).enabled(!this.parseState.busy && !this.deletingCopy).onClick((): void => { this.copyController.stopEditing(); this.deleteId = saved.id; this.deleteFeedback=''; })
+      }, (saved: DocumentOriginal): string => `delete-${saved.id}`)
+      }
       if (this.deleteId.length > 0) {
         Text('仅删除本轮解析原件与包的本机副本，不影响 txt/md 资料，不保证删除云端数据；未决云占用保留。').fontSize(13).width('100%')
         Row({ space: 12 }) {
-          Button('确认本机删除').onClick((): void => { this.service?.deleteOriginal(this.deleteId); this.deleteId = ''; })
+          Button('确认本机删除').id('parse-confirm-delete-copy').enabled(!this.parseState.busy && !this.deletingCopy).onClick((): void => { this.deleteLocalCopy(); })
           Button('取消').onClick((): void => { this.deleteId = ''; })
         }
       }
+      if (this.deleteFeedback.length>0) { Text(this.deleteFeedback).id('parse-delete-copy-feedback').fontSize(14).fontColor(Theme.amber).width('100%') }
       if (this.parseState.snapshot.cleanup.length > 0) {
         Text('本轮资产待清理，仍计入磁盘预算').fontSize(13).fontColor(Theme.amber)
         Button('重试本机清理').enabled(!this.parseState.busy).onClick((): void => { this.service?.retryCleanup(); })
-      }
       }
     }.padding(20).width('100%').alignItems(HorizontalAlign.Start)
   }
@@ -200,7 +222,7 @@ class DocumentParseTaskPresentation {
     this.downloadText = `ZIP 本次实际写入 ${task.downloadBytes} 字节${task.downloadTotal > 0 ? ' / HTTP 长度 ' + task.downloadTotal : ' · 总长度未知'}`;
     this.pageText = task.totalPages > 0 ? `服务报告 ${task.extractedPages}/${task.totalPages} 页` : '服务未报告页进度';
     this.lastActionText = `${task.lastAction || task.checkpoint} · 同对象补传${task.recoveryUploadUsed ? '已耗用' : '未耗用'}`;
-    this.failureText = task.failure; this.failureDetail = task.failureStage.length > 0 ? `失败阶段 ${task.failureStage}\n${parseFailureSummary(task.failureDetail)}\n${task.stage === DocumentParseStage.Received ? '云结果已收，仅本机处理恢复' : task.batchId.length > 0 ? '只查询原任务；图片不补传或新建' : '身份未知，停止待核，不新建任务'}` : '';
+    this.failureText = task.failure; this.failureDetail = task.failureStage.length > 0 ? `失败阶段 ${task.failureStage}\n${parseFailureSummary(task.failureDetail)}\n${task.stage === DocumentParseStage.Received ? '云结果已收，仅本机处理恢复' : task.batchId.length > 0 ? '先核对原任务；仅在身份与许可一致且服务明确待文件时允许一次补传，不新建任务' : '身份未知，停止待核，不新建任务'}` : '';
   }
 }
 

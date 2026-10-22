@@ -16,8 +16,16 @@ export class UnifiedQueryService implements UnifiedQueryEnginePort {
   constructor(scope: UnifiedQueryScopePort, persistent: UnifiedQueryPersistentPort, repository: UnifiedProcessingRepositoryPort, numeric: UnifiedQueryNumericPort, config: UnifiedEmbeddingConfigPort, counter: UnifiedQueryTokenPort, transport: UnifiedQueryTransportPort, identity: ParsedIdentityPort) { this.scope=scope; this.persistent=persistent; this.repository=repository; this.numeric=numeric; this.config=config; this.counter=counter; this.transport=transport; this.identity=identity; }
   async review(actual: string, session: string, epoch: number, archived: boolean, cancel: ParsedCancellation): Promise<UnifiedQueryApproval> {
     if (actual!==prepareTextQuery(actual).actualInput) { throw new ParsedFailure('ActualQuestionRequired','query-review'); }
-    const config: EmbeddingConfig=this.config.currentConfig(); const scope=await this.scope.capture(config,archived,cancel); const setting=await this.repository.settings('Embedding');
-    if (!scope.complete || scope.space===undefined || scope.targets.length===0 || setting.configBinding!==embeddingConfigBinding(config) || !setting.enabled || !setting.costAcknowledged || setting.paused) { throw new ParsedFailure('UnifiedSpaceOrCostUnavailable','query-review'); }
+    const config: EmbeddingConfig=this.config.currentConfig(); const setting=await this.repository.settings('Embedding');
+    if (!setting.enabled) { throw new ParsedFailure('UnifiedEmbeddingDisabled','query-review'); }
+    if (!setting.costAcknowledged) { throw new ParsedFailure('UnifiedEmbeddingCostRequired','query-review'); }
+    if (setting.paused) { throw new ParsedFailure('UnifiedEmbeddingPaused','query-review'); }
+    if (!setting.baselineAccepted) { throw new ParsedFailure('UnifiedEmbeddingBaselineRequired','query-review'); }
+    if (setting.configBinding!==embeddingConfigBinding(config)) { throw new ParsedFailure('UnifiedEmbeddingConfigChanged','query-review'); }
+    const scope=await this.scope.capture(config,archived,cancel);
+    if (!scope.complete) { throw new ParsedFailure('UnifiedScopeIncomplete','query-review'); }
+    if (scope.space===undefined) { throw new ParsedFailure('UnifiedSpaceMissing','query-review'); }
+    if (scope.targets.length===0) { throw new ParsedFailure('UnifiedTargetsMissing','query-review'); }
     const a: UnifiedQueryApproval=new UnifiedQueryApproval(); a.id=this.identity.id(); a.session=session; a.epoch=epoch; a.actual=actual; a.inputHash=await this.identity.hash(parsedUtf8(actual));
     const proof=await this.counter.unifiedQueryEvidence(config,actual,a.inputHash); if (!unifiedQueryEligible(proof,config,setting)) { throw new ParsedFailure('UnifiedQueryCountOrBaseline','query-review'); }
     a.proofBinding=proof.bindingHash; a.configBinding=embeddingConfigBinding(config); a.credentialRevision=config.credentialRevision; a.settingsRevision=setting.revision; a.costRevision=setting.costRevision; a.scopeHash=scope.hash; a.spaceId=scope.space.id; a.includeArchived=archived;

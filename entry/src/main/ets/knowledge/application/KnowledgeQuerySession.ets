@@ -41,7 +41,7 @@ export class KnowledgeQuerySession {
       for (const card of this.directCandidates) { if (card.kind==='Image') { this.directImages.add(card.key); } this.upsert(card); }
       this.relatedCandidates=this.fuse(tags,[]); for (const card of this.relatedCandidates) { this.upsert(card); }
       this.state.direct.busy=false; this.state.related.busy=false; await this.page('Direct','0'); await this.page('Related','0'); this.emit();
-    } catch (error) { if (this.current(epoch,cancel)) { this.state.direct.error='LocalBodyScopeUnavailable'; this.state.related.error='LocalTagsScopeUnavailable'; this.state.direct.busy=false; this.state.related.busy=false; this.emit(); } }
+    } catch (error) { if (this.current(epoch,cancel)) { const reason: string=error instanceof ParsedFailure ? error.category+' / '+error.stage : error instanceof Error ? error.message.slice(0,160) : 'LocalStoreReadFailed'; this.state.direct.error='LocalBodyScopeUnavailable · '+reason; this.state.related.error='LocalTagsScopeUnavailable · '+reason; this.state.direct.busy=false; this.state.related.busy=false; this.emit(); } }
   }
   private upsert(card: UnifiedSearchCard): UnifiedSearchCard { const prior=this.registry.get(card.key); if (prior!==undefined) { unifiedMergeCard(prior,card); return prior; } this.registry.set(card.key,card); return card; }
   private fuse(tags: UnifiedSearchCard[], vectors: UnifiedSearchCard[]): UnifiedSearchCard[] {
@@ -72,7 +72,7 @@ export class KnowledgeQuerySession {
     if (this.local!==undefined) { await this.local; } const cancel=this.cancel; const epoch=this.state.epoch;
     if (cancel===undefined || this.scope===undefined || !this.scope.complete) { throw new ParsedFailure('CurrentLocalScopeRequired','query-review'); }
     if (this.scopePort.captureLocal!==undefined) { const current=await this.scopePort.captureLocal(this.config.currentConfig(),this.state.includeArchived,cancel); if (current.localHash!==this.scope.localHash || !this.current(epoch,cancel)) { throw new ParsedFailure('LocalMembershipChangedStartNewSession','query-review'); } }
-    if (this.state.review!==undefined) { this.state.review.revoked=true; await this.engine.revoke(this.state.review.session,this.state.review.epoch); }
+    if (this.state.review!==undefined) { this.state.review.revoked=true; await this.engine.revoke(this.state.review.session,this.state.review.epoch); this.state.review=undefined; this.emit(); }
     const approval=await this.engine.review(this.state.question,this.state.session,epoch,this.state.includeArchived,cancel); if (!this.current(epoch,cancel)) { await this.engine.revoke(approval.session,approval.epoch); throw new ParsedFailure('StaleReview','query'); }
     if (this.scopePort.captureLocal!==undefined) { const current=await this.scopePort.captureLocal(this.config.currentConfig(),this.state.includeArchived,cancel); if (current.localHash!==this.scope.localHash) { await this.engine.revoke(approval.session,approval.epoch); throw new ParsedFailure('LocalMembershipChangedStartNewSession','query-review'); } }
     this.state.review=approval; this.emit(); return approval;

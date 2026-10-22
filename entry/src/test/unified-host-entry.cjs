@@ -20,7 +20,7 @@ const allowed = [
   'pipeline/Chunker', 'pipeline/QueryPreparation',
   'infra/ParsedDocumentStoreLayout', 'infra/ParsedDocumentRepository', 'infra/ParsedDocumentAssets',
   'infra/ImageStoreLayout', 'infra/DocxStoreLayout',
-  'infra/KnowledgeStoreHost', 'infra/KnowledgeDerivedBudget', 'application/TextKnowledgeService',
+  'infra/KnowledgeStoreHost', 'infra/KnowledgeIdentity', 'infra/KnowledgeDerivedBudget', 'application/TextKnowledgeService',
   'application/KnowledgeLifecycleService'
   ,'pipeline/ParsedOutputDecoder','pipeline/ParsedDocumentChunker','pipeline/PdfTableDecoder',
   'infra/ParsedDocumentAdapters','application/ParsedDocumentIngestionService','infra/PdfImagePayload',
@@ -40,6 +40,7 @@ const allowed = [
   ,'domain/ParsedMigrationModels','pipeline/ParsedMigrationCodec','infra/ParsedMigrationStore','infra/LegacyParsedDocumentReader','infra/PdfLegacySnapshotFiles','application/ParsedDocumentMigrationService','ui/KnowledgeMigrationView'
   ,'domain/UnifiedQueryModels','domain/UnifiedQueryPorts','infra/UnifiedQueryRepository','application/UnifiedQueryService','application/KnowledgeQuerySession','infra/UnifiedKnowledgeHistoryRepository','pipeline/UnifiedHistoryCodec',
   'pipeline/KnowledgeRetrievalPolicy','pipeline/KnowledgeMatchPolicy','application/QueryConsentSession','application/KnowledgeSearchService','application/KnowledgeDeadline'
+  ,'pipeline/UnifiedProcessingPresentation','ui/DocumentParseView','application/DocumentParseService','domain/DocumentParsePorts','pipeline/ParseFailurePolicy'
   ,'ui/UnifiedKnowledgeView'
   ,'domain/ParsedLifecyclePorts'
 ];
@@ -63,6 +64,7 @@ exports.changedEts = [
   'ui/VisionSettingsView','ui/ImageKnowledgeView','ui/EmbeddingSettingsView',
   'domain/ParsedMigrationModels','pipeline/ParsedMigrationCodec','infra/ParsedMigrationStore','infra/LegacyParsedDocumentReader','infra/PdfLegacySnapshotFiles','application/ParsedDocumentMigrationService','ui/KnowledgeMigrationView'
   ,'infra/KnowledgeSourceReaders','infra/DocxSourceReader'
+  ,'pipeline/UnifiedProcessingPresentation','ui/DocumentParseView'
   ,'domain/UnifiedQueryModels','domain/UnifiedQueryPorts','infra/UnifiedQueryRepository','application/UnifiedQueryService','application/KnowledgeQuerySession','infra/UnifiedKnowledgeHistoryRepository','pipeline/UnifiedHistoryCodec',
    'pipeline/KnowledgeRetrievalPolicy','pipeline/KnowledgeMatchPolicy','application/QueryConsentSession','application/KnowledgeSearchService','infra/KnowledgeSourceRegistry','pipeline/EmbeddingPolicy','ui/UnifiedKnowledgeView','ui/KnowledgeView','ui/KnowledgeResultCard','domain/KnowledgeSearchModels','domain/ParsedLifecyclePorts'
 ].map(n => 'entry/src/main/ets/knowledge/'+n+'.ets').concat(['entry/src/main/ets/pages/Index.ets','entry/src/main/ets/entryability/EntryAbility.ets']);
@@ -112,7 +114,7 @@ exports.harness = () => {
       picker:{DocumentSelectMode:{FILE:0},DocumentSelectOptions:class{},DocumentViewPicker:class{async select(){return selection.slice();}}},fileUri:{FileUri:class{constructor(uri){this.name=uri.split('/').pop();}isRemoteUri(){return false;}}} }],
     ['@kit.ArkData', { relationalStore: { SecurityLevel: { S3:3 }, Tokenizer: { CUSTOM_TOKENIZER:1, NONE_TOKENIZER:0 }, isTokenizerSupported: () => false,
       getRdbStore: async (ctx,cfg) => { const k=ctx.filesDir+'|'+cfg.name; if (!stores.has(k)) stores.set(k,new Store()); return stores.get(k); } } }],
-    ['@kit.CryptoArchitectureKit',{cryptoFramework:{createMd:()=>{const hash=crypto.createHash('sha256');return {update:async b=>hash.update(b.data),digest:async()=>({data:new Uint8Array(hash.digest())})};}}}],
+    ['@kit.CryptoArchitectureKit',{cryptoFramework:{createMd:()=>{const hash=crypto.createHash('sha256');return {update:async b=>{if(b.data.length===0)throw Error('update failed');hash.update(b.data);},digest:async()=>({data:new Uint8Array(hash.digest())})};}}}],
     ['@kit.BasicServicesKit',{zlib:{createChecksum:async()=>({crc32:async(seed,bytes)=>{if(seed!==0)throw Error('SyntheticStoredMemberSingleBlockOnly');return crc32(Buffer.from(bytes));}})}}],
     ['@kit.AssetStoreKit',{asset:{Tag:{ALIAS:1,SECRET:2,RETURN_TYPE:3,ACCESSIBILITY:4,SYNC_TYPE:5,CONFLICT_RESOLUTION:6},ReturnType:{ATTRIBUTES:1,ALL:2},Accessibility:{DEVICE_UNLOCKED:2},SyncType:{NEVER:0},ConflictResolution:{THROW_ERROR:0},query:async q=>{assetCalls.push(['query',q.get(3)]);const row=assetRows.get(Buffer.from(q.get(1)).toString());if(!row)return [];const copy=new Map(row);if(q.get(3)===1)copy.delete(2);else if(copy.has(2))copy.set(2,new Uint8Array(copy.get(2)));return [copy];},add:async a=>{assetCalls.push(['add']);const copy=new Map(a);copy.set(2,new Uint8Array(a.get(2)));assetRows.set(Buffer.from(a.get(1)).toString(),copy);},update:async(q,a)=>{assetCalls.push(['update']);const row=assetRows.get(Buffer.from(q.get(1)).toString());row.set(2,new Uint8Array(a.get(2)));},remove:async q=>assetRows.delete(Buffer.from(q.get(1)).toString())}}],
     ['@kit.RemoteCommunicationKit',{rcp:{Request:class{constructor(url,method){this.url=url;this.method=method;}},createSession:cfg=>({fetch:async req=>{if(!fetchHandler)throw Error('HostNetworkDenied');return fetchHandler(req,cfg);},cancel(){},close(){}})}}],
@@ -130,10 +132,11 @@ exports.harness = () => {
       const start=source.indexOf('\n  build() {'),end=source.indexOf('\nclass ParsedViewParseListener');if(start<0||end<0)throw Error('UPD_UI_METHOD_SHAPE');
       source=(source.slice(0,start)+'\n}\n'+source.slice(end)).replace('@Component\nexport struct ParsedDocumentView','export class ParsedDocumentView').replace(/@(State|Prop)(?:\s+@Watch\('[^']+'\))?\s+/g,'');
     }
-    if(relative==='ui/VisionSettingsView'||relative==='ui/ImageKnowledgeView'||relative==='ui/KnowledgeMigrationView'||relative==='ui/UnifiedKnowledgeView'){
+    if(relative==='ui/DocumentParseView'||relative==='ui/VisionSettingsView'||relative==='ui/ImageKnowledgeView'||relative==='ui/KnowledgeMigrationView'||relative==='ui/UnifiedKnowledgeView'){
       const name=relative.split('/').pop(),start=source.indexOf('\n  build() {');if(start<0)throw Error('UPD_UI_METHOD_SHAPE');
-      source=(source.slice(0,start)+'\n}').replace('@Component\nexport struct '+name,'export class '+name).replace(/@(State|Prop)\s+/g,'');
+      source=(source.slice(0,start)+'\n}').replace('@Component\nexport struct '+name,'export class '+name).replace(/@(State|Prop|Link)(?:\s+@Watch\('[^']+'\))?\s+/g,'');
     }
+    if (relative.startsWith('ui/')) source='class TextInputController { stopEditing() {} }\n'+source;
     mod._compile(ts.transpileModule(source, { fileName:file.replace(/\.ets$/,'.ts'),
       compilerOptions:{ target:ts.ScriptTarget.ES2020, module:ts.ModuleKind.CommonJS } }).outputText,file); return mod.exports;
   }
@@ -145,14 +148,14 @@ exports.run = async () => {
   if (process.env.CAPTURE_SAFE_HOST !== '1' || process.env.CAPTURE_HOST_ONLY !== '1') throw Error('CaptureHostBoundaryRequired');
   const h=exports.harness(); let passed=0, failed=0;
   if (new Set(allowed).size!==allowed.length || new Set(exports.changedEts).size!==exports.changedEts.length) throw Error('DuplicateCanonicalInput');
-  for (const [id,run] of require('./unified-store-host-cases.cjs').cases(h).concat(require('./unified-parsing-host-cases.cjs').cases(h),require('./unified-automation-host-cases.cjs').cases(h),require('./unified-migration-host-cases.cjs').cases(h),require('./unified-search-host-cases.cjs').cases(h),require('./unified-lifecycle-host-cases.cjs').cases(h))) {
+  for (const [id,run] of require('./unified-store-host-cases.cjs').cases(h).concat(require('./unified-parsing-host-cases.cjs').cases(h),require('./unified-automation-host-cases.cjs').cases(h),require('./unified-migration-host-cases.cjs').cases(h),require('./unified-search-host-cases.cjs').cases(h),require('./unified-lifecycle-host-cases.cjs').cases(h),require('./unified-interruption-host-cases.cjs').cases(h))) {
     let watchdog;
     try { await Promise.race([run(),new Promise((resolve,reject)=>{watchdog=setTimeout(()=>reject(Error('HostCaseTimeout')),15000);})]); passed++; console.log(`UPD_HOST PASS case=${id}`); }
     catch (error) { failed++; console.log(`UPD_HOST FAIL case=${id} category=${error?.constructor?.name || 'Error'}`); }
     finally { clearTimeout(watchdog); }
   }
   for (const [ordinal,name] of allowed.entries()) { const file=path.join(root,name+'.ets'); if (fs.existsSync(file)) console.log(`UPD_SOURCE_HASH ordinal=${ordinal} sha256=${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`); }
-  for (const name of ['unified-host-entry.cjs','unified-store-host-cases.cjs','unified-parsing-host-cases.cjs','unified-automation-host-cases.cjs','unified-migration-host-cases.cjs','unified-search-host-cases.cjs','unified-lifecycle-host-cases.cjs','unified-fixtures.cjs']) console.log(`UPD_TEST_HASH file=${name} sha256=${crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname,name))).digest('hex')}`);
+  for (const name of ['unified-host-entry.cjs','unified-store-host-cases.cjs','unified-parsing-host-cases.cjs','unified-automation-host-cases.cjs','unified-migration-host-cases.cjs','unified-search-host-cases.cjs','unified-lifecycle-host-cases.cjs','unified-interruption-host-cases.cjs','unified-fixtures.cjs']) console.log(`UPD_TEST_HASH file=${name} sha256=${crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname,name))).digest('hex')}`);
   for (const [ordinal,name] of exports.changedEts.entries()) console.log(`UPD_CHANGED_ETS_HASH ordinal=${ordinal} sha256=${crypto.createHash('sha256').update(fs.readFileSync(path.join(project,name))).digest('hex')}`);
   console.log(`UPD_CHECKER_LIST_HASH sha256=${crypto.createHash('sha256').update(exports.changedEts.join('\n')+'\n').digest('hex')}`);
   console.log(`UPD_CHANGED_SOURCE_SET_HASH sha256=${crypto.createHash('sha256').update(exports.changedEts.map(name=>name+'\t'+crypto.createHash('sha256').update(fs.readFileSync(path.join(project,name))).digest('hex')).join('\n')+'\n').digest('hex')}`);

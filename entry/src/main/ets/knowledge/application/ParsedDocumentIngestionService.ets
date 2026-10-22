@@ -10,6 +10,7 @@ export class ParsedDocumentIngestionService {
   private cancel: ParsedCancellation | undefined; private listeners: Array<() => void> = [];
   private preview: ParsedAssetPreview | undefined;
   private previewEpoch: number = 0;
+  private openEpoch: number = 0;
   private published: ((document: ParsedDocument) => Promise<void>) | undefined;
   attachPublished(callback: (document: ParsedDocument) => Promise<void>): void { this.published=callback; }
   constructor(repository: ParsedRepositoryPort, assets: ParsedAssetPort, identity: ParsedIdentityPort) { this.repository = repository; this.assets = assets; this.identity = identity; }
@@ -34,14 +35,17 @@ export class ParsedDocumentIngestionService {
     if (this.published!==undefined) { try { await this.published(this.state.document); this.state.enhancement='QueuedOrAwaitingConfig'; } catch { this.state.enhancement='QueueCheckpointFailed'; } this.emit(); }
   }
   async open(id: string): Promise<void> {
-    await this.closePreview();
+    const epoch: number=++this.openEpoch; await this.closePreview();
     const record: ParsedDocumentRecord | undefined = await this.repository.get(id);
     if (record === undefined || record.tombstone || record.activeGeneration.length === 0) { throw new ParsedFailure('DocumentUnavailable','open'); }
-    this.state.document = await this.assets.readSnapshot(`${record.activeGeneration}-manifest`,new ParsedCancellation()); this.state.chunks = await this.repository.chunks(id); this.state.stage = 'Published'; this.state.message = ''; this.emit();
+    const document: ParsedDocument=await this.assets.readSnapshot(`${record.activeGeneration}-manifest`,new ParsedCancellation());
+    const chunks: ParsedTextChunk[]=await this.repository.chunks(id);
+    if (epoch!==this.openEpoch) { return; }
+    this.state.document=document; this.state.chunks=chunks; this.state.stage='Published'; this.state.message=''; this.emit();
   }
   async ingest(request: ParsedImportRequest, producer: ParsedProducerPort, rebuild: boolean = false): Promise<void> {
     if (this.state.busy) { throw new ParsedFailure('ImportBusy','ingest'); }
-    const cancel: ParsedCancellation = new ParsedCancellation(); this.cancel = cancel; this.state.busy = true; this.state.stage = 'Preparing'; this.state.message = ''; this.emit();
+    this.openEpoch++; const cancel: ParsedCancellation = new ParsedCancellation(); this.cancel = cancel; this.state.busy = true; this.state.stage = 'Preparing'; this.state.message = ''; this.emit();
     try {
       if (!parsedHash(request.sourceHash) || request.namespace.length === 0 || request.sourceId.length === 0 || request.sourceVersion < 1) { throw new ParsedFailure('SourceIdentity','ingest'); }
       const id: string = 'upd-'+(await this.identity.hash(parsedUtf8(`${request.namespace}\n${request.sourceId}`))).slice(0,32);

@@ -45,12 +45,11 @@ export struct UnifiedKnowledgeResultCard {
       if (!this.card.current) { Text('来源为旧版或已失效').fontSize(12).width('100%') }
       ForEach(this.card.reasons,(r: UnifiedSearchReason)=> {
         Column({space:4}) {
-          Text(r.route==='BodyDirect'?'正文直接命中':r.route==='OcrDirect'?'OCR直接命中':r.route==='Tag'?'本机标签':r.route==='Vector'?`统一语义候选 · ${r.distance ?? ''}`:r.route).fontSize(12).fontColor(Theme.muted).width('100%')
-          if (r.savedReason.length>0) { Text(r.savedReason).fontSize(11).width('100%') }
-          Text() { ForEach(this.segments(r),(s: KnowledgeResultSegment)=> { Span(s.text).fontColor(s.matched?'#965000':Theme.ink).fontWeight(s.matched?FontWeight.Bold:FontWeight.Normal) },(s: KnowledgeResultSegment): string=>s.id) }.fontSize(14).width('100%')
+          Text(r.route==='BodyDirect'?'正文直接命中':r.route==='OcrDirect'?'OCR直接命中':r.route==='Tag'?'本机标签':r.route==='Vector'?'语义相关':r.route).fontSize(12).fontColor(Theme.muted).width('100%')
+          Text() { ForEach(this.segments(r),(s: KnowledgeResultSegment)=> { Span(s.text).fontColor(s.matched?'#965000':Theme.ink).fontWeight(s.matched?FontWeight.Bold:FontWeight.Normal) },(s: KnowledgeResultSegment): string=>s.id) }.fontSize(14).maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
         }.width('100%')
       },(r: UnifiedSearchReason): string=>r.id)
-      ForEach(this.card.parents,(p: UnifiedSearchParent)=> { Text(`${p.title} · ${p.precision} · ${p.occurrenceId || p.generation}`).fontSize(11).fontColor(Theme.muted).width('100%') },(p: UnifiedSearchParent): string=>p.documentKey+'|'+p.generation+'|'+p.occurrenceId)
+      ForEach(this.card.parents,(p: UnifiedSearchParent)=> { Text('来源：' + p.title).fontSize(11).fontColor(Theme.muted).width('100%') },(p: UnifiedSearchParent): string=>p.documentKey+'|'+p.generation+'|'+p.occurrenceId)
       Button('查看来源').id('upd-card-source-'+this.card.key).enabled(this.card.current && this.card.kind!=='Legacy').onClick((): void=> { this.onOpen(this.card); })
     }.width('100%').padding(12).backgroundColor(Theme.surface).borderRadius(8).alignItems(HorizontalAlign.Start)
   }

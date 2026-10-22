@@ -24,7 +24,7 @@ export class VisionTransportAdapter implements VisionTransportPort {
     try {
       const deadline: Promise<rcp.Response>=new Promise<rcp.Response>((_resolve: (r: rcp.Response)=>void,reject: (error: Object)=>void): void=> { timer=setTimeout((): void=> { active=false; session.cancel(request); reject(new VisionFailure('TimeoutUnknown','transport',launched)); },Math.max(1,Math.min(VisionLimits.ms,cancel.deadline-Date.now()))); });
       const response: rcp.Response=await Promise.race<rcp.Response>([this.credentials.fetch(request,session,(): void=> { cancel.check(); if (!active) { throw new VisionFailure('Canceled','transport',launched); } },async (launch: () => void): Promise<void>=> { await admit((): void=> { cancel.check(); launched=true; launch(); }); }),deadline]);
-      if (response.statusCode!==200) { throw new VisionFailure(`Http:${response.statusCode}`,'transport',true); } if (!ended) { throw new VisionFailure('ResponseIncomplete','transport',true); }
+      if (response.statusCode!==200) { throw new VisionFailure(`Http:${response.statusCode}`,response.statusCode===401 || response.statusCode===403?'auth':'transport',true); } if (!ended) { throw new VisionFailure('ResponseIncomplete','transport',true); }
       const raw: Uint8Array=new Uint8Array(size); let at: number=0; for (const c of chunks) { raw.set(c,at); at+=c.length; }
       try { return visionDecode(util.TextDecoder.create('utf-8',{fatal:true}).decodeToString(raw)); }
       catch (error) { if (error instanceof VisionFailure) { throw error; } throw new VisionFailure('InvalidVisionResponse','response',true); }

@@ -13,8 +13,8 @@ import { unifiedProxyInputs, unifiedProxyText } from '../pipeline/UnifiedTextPol
 export class UnifiedProcessingQueue {
   private repository: UnifiedProcessingRepositoryPort; private documents: ParsedRepositoryPort; private assets: ParsedAssetPort; private identity: ParsedIdentityPort;
   private images: ImageKnowledgeService; private embedding: UnifiedEmbeddingService; private foreground: boolean=true; private paused: boolean=false;
-  private running: Promise<void> | undefined; private cancellations: ParsedCancellation[]=[]; private listeners: Array<() => void>=[];
-  private requested: boolean=false;
+  private visionRunning: Promise<void> | undefined; private embeddingRunning: Promise<void> | undefined; private cancellations: ParsedCancellation[]=[]; private listeners: Array<() => void>=[];
+  private visionRequested: boolean=false; private embeddingRequested: boolean=false;
   private control: Promise<void>=Promise.resolve();
   private stopping: boolean=false;
   message: string='';
@@ -57,15 +57,28 @@ export class UnifiedProcessingQueue {
   }
   private async saveNew(job: UnifiedProcessingJob): Promise<void> { if (!(await this.repository.jobs()).some((j: UnifiedProcessingJob): boolean=>j.id===job.id)) { await this.repository.saveJob(job); } }
   kick(): void {
-    this.requested=true;
-    if (this.running!==undefined || !this.foreground || this.paused || this.stopping) { return; }
-    this.running=this.run().catch((error: Error): void=> { this.message='QueueCheckpointFailed'; }).then((): void=> { this.running=undefined; this.emit(); });
+    this.visionRequested=true; this.embeddingRequested=true;
+    if (!this.foreground || this.paused || this.stopping) { return; }
+    if (this.visionRunning===undefined) {
+      this.visionRunning=this.runLane('Vision').catch((): void=> { this.message='VisionQueueCheckpointFailed'; }).then((): void=> { this.visionRunning=undefined; this.emit(); });
+    }
+    if (this.embeddingRunning===undefined) {
+      this.embeddingRunning=this.runLane('Embedding').catch((): void=> { this.message='EmbeddingQueueCheckpointFailed'; }).then((): void=> { this.embeddingRunning=undefined; this.emit(); });
+    }
   }
-  async drain(): Promise<void> { await this.control; this.kick(); if (this.running!==undefined) { await this.running; } }
+  private async waitRunning(): Promise<void> {
+    while (this.visionRunning!==undefined || this.embeddingRunning!==undefined) {
+      const active: Promise<void>[]=[];
+      if (this.visionRunning!==undefined) { active.push(this.visionRunning); }
+      if (this.embeddingRunning!==undefined) { active.push(this.embeddingRunning); }
+      await Promise.all<void>(active);
+    }
+  }
+  async drain(): Promise<void> { await this.control; this.kick(); await this.waitRunning(); }
   background(): void { this.foreground=false; }
   resumeForeground(): void { this.foreground=true; this.control=this.reactivatePaused().then((): void=> { this.kick(); }).catch((): void=> { this.message='ForegroundCheckpointUnavailable'; this.emit(); }); }
   pause(): void { this.paused=true; for (const c of this.cancellations) { c.invalid=true; } this.control=this.repository.putMeta('queue-paused','true').catch((): void=> { this.message='PauseCheckpointFailed'; }); this.emit(); }
-  async stop(): Promise<void> { this.stopping=true; this.foreground=false; for (const c of this.cancellations) { c.invalid=true; } await this.control; if (this.running!==undefined) { await this.running; } }
+  async stop(): Promise<void> { this.stopping=true; this.foreground=false; for (const c of this.cancellations) { c.invalid=true; } await this.control; await this.waitRunning(); }
   resume(): void { this.control=this.repository.putMeta('queue-paused','false').then(async (): Promise<void>=> { this.paused=false; this.foreground=true; await this.reactivatePaused(); this.kick(); }).catch((): void=> { this.message='ResumeCheckpointFailed'; }); }
   private async reactivatePaused(): Promise<void> {
     for (const job of await this.repository.jobs()) { if (job.state!==UnifiedJobState.Paused || job.origin===UnifiedJobOrigin.LocalMigration) { continue; }
@@ -115,9 +128,13 @@ export class UnifiedProcessingQueue {
       }
     }
   }
-  private async run(): Promise<void> {
-    // Independent lanes: at most one vision and one corpus request; local/query never use these slots.
-    do { this.requested=false; await Promise.all<void>([this.lane('Vision'),this.lane('Embedding')]); } while (this.requested && this.foreground && !this.paused);
+  private async runLane(purpose: string): Promise<void> {
+    // A newly imported image may start while a long corpus job is still running.
+    // Each purpose owns one runner; query requests use neither corpus slot.
+    do {
+      if (purpose==='Vision') { this.visionRequested=false; } else { this.embeddingRequested=false; }
+      await this.lane(purpose);
+    } while ((purpose==='Vision'?this.visionRequested:this.embeddingRequested) && this.foreground && !this.paused && !this.stopping);
   }
   private async nextJob(purpose: string): Promise<UnifiedProcessingJob | undefined> {
     const jobs: UnifiedProcessingJob[]=await this.repository.jobs();
@@ -148,7 +165,19 @@ export class UnifiedProcessingQueue {
       const admit=async (hash: string, launch: () => void): Promise<void>=> {
         cancel.check(); if (!this.foreground || this.paused) { throw new ParsedFailure('DispatchPaused','queue'); }
         const attempt: UnifiedProcessingAttempt=new UnifiedProcessingAttempt(); attempt.id=this.identity.id(); attempt.jobId=job.id; attempt.inputHash=hash; attempt.settingsRevision=job.settingsRevision; attempt.costRevision=job.costRevision; last=attempt;
-        await this.repository.admitAttempt(job,attempt,(): void=> { cancel.check(); if (!this.foreground || this.paused) { throw new ParsedFailure('DispatchPaused','queue'); } launched=true; launch(); });
+        let dispatched: boolean=false;
+        try {
+          await this.repository.admitAttempt(job,attempt,(): void=> { cancel.check(); if (!this.foreground || this.paused) { throw new ParsedFailure('DispatchPaused','queue'); } dispatched=true; launched=true; launch(); });
+        } catch (error) {
+          // Admission persists InFlight before invoking launch. A foreground change
+          // during that write is a proven no-send, not an unknown network result.
+          if (!dispatched) {
+            const stored=(await this.repository.attempts(job.id)).find((a: UnifiedProcessingAttempt): boolean=>a.id===attempt.id);
+            if (stored?.outcome==='InFlight') { stored.outcome='NotSent'; stored.receipt='DispatchNotLaunched'; await this.repository.saveAttempt(stored); }
+          }
+          if (error instanceof Error) { throw error; }
+          throw new ParsedFailure('AdmissionFailed','queue');
+        }
       };
       try {
         await this.repository.holdProcessingJob(job);
@@ -159,7 +188,7 @@ export class UnifiedProcessingQueue {
       } catch (error) {
         const pending: boolean=(await this.repository.attempts(job.id)).some((a: UnifiedProcessingAttempt): boolean=>a.outcome==='InFlight');
         job.state=launched && pending?UnifiedJobState.Unknown:cancel.invalid || !this.foreground || this.paused?UnifiedJobState.Paused:UnifiedJobState.Failed;
-        if (error instanceof VisionFailure && error.stage==='response') { job.state=UnifiedJobState.Failed; }
+        if (error instanceof VisionFailure && (error.stage==='response' || error.stage==='auth')) { job.state=UnifiedJobState.Failed; }
         job.failure=error instanceof ParsedFailure || error instanceof VisionFailure?error.category:'RequestOrReadbackUnknown';
         if (last!==undefined && last.launched) { const stored=(await this.repository.attempts(job.id)).find((a: UnifiedProcessingAttempt): boolean=>a.id===last?.id); if (stored?.outcome==='InFlight') { last.outcome=job.state; await this.repository.saveAttempt(last); } }
       } finally { this.cancellations=this.cancellations.filter((c: ParsedCancellation): boolean=>c!==cancel); try { await this.repository.releaseProcessingJob(job,job.state===UnifiedJobState.Unknown); } catch { job.resourcePhase='ReleasePending'; this.message='JobReleaseCheckpointPending'; await this.repository.saveJob(job); } await this.repository.reconcileUnifiedOwners(); try { await this.settled?.(); } catch { this.message='LocalMirrorPending'; } this.emit(); }

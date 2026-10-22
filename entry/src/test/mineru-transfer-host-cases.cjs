@@ -64,7 +64,7 @@ module.exports = function transferHostCases(outputRoot, asset) {
       }
     }) } },
     '@kit.ArkTS': { util: { TextEncoder: HostEncoder, TextDecoder: HostDecoder }, taskpool: { Task: { isCanceled: () => false } } },
-    '@kit.CoreFileKit': { fileIo: io }, '@kit.AbilityKit': {}, '@kit.BasicServicesKit': {},
+    '@kit.CoreFileKit': { fileIo: io }, '@kit.AbilityKit': {}, '@kit.BasicServicesKit': {}, '@kit.ArkData': {},
     '@kit.CryptoArchitectureKit': { cryptoFramework: {
       CryptoMode: { ENCRYPT_MODE: 0, DECRYPT_MODE: 1 },
       createRandom: () => ({ generateRandom: async n => ({ data: new Uint8Array(crypto.randomBytes(n)) }) }),
@@ -84,8 +84,8 @@ module.exports = function transferHostCases(outputRoot, asset) {
     } } }
   };
   function load(relative) {
-    const name = path.join(outputRoot, relative); const loaded = new Module(name, module); loaded.filename = name; loaded.paths = Module._nodeModulePaths(path.dirname(name));
-    const original = loaded.require.bind(loaded); loaded.require = id => Object.hasOwn(kit, id) ? kit[id] : original(id);
+    const name = path.join(outputRoot, relative); if (require.cache[name]) return require.cache[name].exports; const loaded = new Module(name, module); loaded.filename = name; loaded.paths = Module._nodeModulePaths(path.dirname(name));
+    const original = loaded.require.bind(loaded); loaded.require = id => { if(Object.hasOwn(kit,id))return kit[id]; if(id.startsWith('.')){const target=path.resolve(path.dirname(name),id+'.js');if(!target.startsWith(path.resolve(outputRoot)+path.sep))throw Error('HostModuleBoundary');return load(path.relative(outputRoot,target));}return original(id); };
     // Only this adapter gets virtual timers. The test runner and other suites keep real timers.
     loaded._compile(`const setTimeout = global.__mineruHostTimers.set; const clearTimeout = global.__mineruHostTimers.clear;\n${fs.readFileSync(name, 'utf8')}`, name);
     require.cache[name] = loaded; return loaded.exports;
