@@ -35,7 +35,7 @@ export struct KnowledgeMigrationView {
     catch { this.message='旧资料目录读取失败，未当空库；没有执行迁移'; }
   }
   private toggle(key: string): void { this.selected=this.selected.indexOf(key)>=0?this.selected.filter((s: string): boolean=>s!==key):this.selected.concat([key]); this.upgrade=new ParsedUpgradeBatch(); this.costConsent=false; }
-  private async freeze(): Promise<void> { try { await this.migration?.freeze(this.selected); this.upgrade=new ParsedUpgradeBatch(); this.update(); this.batchIds=await this.migration?.batches() ?? []; } catch { this.message='冻结范围失败；原件和旧活动资料未改'; } }
+  private async freezeScope(): Promise<void> { try { await this.migration?.freeze(this.selected); this.upgrade=new ParsedUpgradeBatch(); this.update(); this.batchIds=await this.migration?.batches() ?? []; } catch { this.message='冻结范围失败；原件和旧活动资料未改'; } }
   private async run(): Promise<void> { try { if (this.batchId.length>0) { await this.migration?.run(this.batchId); } this.update(); } catch { this.message='本机迁移未完成；可从原冻结批次恢复'; } }
   private async load(id: string): Promise<void> { try { await this.migration?.load(id); this.upgrade=new ParsedUpgradeBatch(); this.update(); } catch { this.message='冻结批次不可读'; } }
   private async freezeUpgrade(): Promise<void> {
@@ -57,7 +57,7 @@ export struct KnowledgeMigrationView {
       ForEach(this.rows,(r: ParsedMigrationInput)=> {
         Row() { Checkbox().select(this.selected.indexOf(r.key)>=0).enabled(!this.busy).onChange((): void=> { this.toggle(r.key); }); Text(`${r.namespace} · ${r.title} · ${r.active}`).fontSize(13).layoutWeight(1) }.width('100%')
       },(r: ParsedMigrationInput): string=>r.key)
-      Button(`冻结本机范围（${this.selected.length}）`).id('upd-migration-freeze').enabled(!this.busy && this.selected.length>0).onClick((): void=> { this.freeze(); })
+      Button(`冻结本机范围（${this.selected.length}）`).id('upd-migration-freeze').enabled(!this.busy && this.selected.length>0).onClick((): void=> { this.freezeScope(); })
       ForEach(this.batchIds,(id: string)=> { Button(id).enabled(!this.busy).onClick((): void=> { this.load(id); }) },(id: string): string=>id)
       Text(`冻结 ${this.denominator} · 完整 ${this.receipts.filter((r: ParsedMigrationReceipt): boolean=>r.state==='Complete').length} · 部分 ${this.receipts.filter((r: ParsedMigrationReceipt): boolean=>r.state==='Partial').length} · 失败 ${this.receipts.filter((r: ParsedMigrationReceipt): boolean=>r.state==='Failed').length}`).fontSize(13).width('100%')
       Row() { Button('开始 / 恢复本机迁移').id('upd-migration-run').enabled(!this.busy && this.batchId.length>0).onClick((): void=> { this.run(); }); Button('暂停本机迁移').id('upd-migration-pause').enabled(this.busy).onClick((): void=> { this.migration?.pause(); }) }.width('100%')

@@ -14,12 +14,12 @@ import { pdfEncodeNodeWorker, pdfHydrateHeaderWorker, pdfHydrateNodeWorker } fro
 import { PdfWorkerResult } from '../domain/PdfWorkerModels';
 import { pdfWorkerPayload, pdfWorkerReadNode, pdfWorkerReadSnapshot, pdfWorkerRejected } from '../pipeline/PdfWorkerPolicy';
 import { pdfWorkerAwait } from './PdfWorkerSupport';
-import { PdfImagePayloadExporter } from './PdfImagePayload';
+import { PdfImageDescriptorPort, PdfImagePayloadExporter } from './PdfImagePayload';
 import { ParsedImageAsset } from '../domain/ParsedDocumentModels';
 import { ParsedAssetPort } from '../domain/ParsedDocumentPorts';
 import { KnowledgeIdentityPort } from '../domain/KnowledgePorts';
 
-export interface PdfAssetLedgerPort {
+export interface PdfAssetLedgerPort extends PdfImageDescriptorPort {
   reserveAsset(id: string, generation: string, bytes: number): Promise<void>;
   commitAsset(id: string, hash: string, bytes: number, manifest: string): Promise<void>;
   derivedBytes(): Promise<number>;

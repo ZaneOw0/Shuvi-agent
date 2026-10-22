@@ -119,17 +119,20 @@ export class UnifiedProcessingQueue {
     // Independent lanes: at most one vision and one corpus request; local/query never use these slots.
     do { this.requested=false; await Promise.all<void>([this.lane('Vision'),this.lane('Embedding')]); } while (this.requested && this.foreground && !this.paused);
   }
+  private async nextJob(purpose: string): Promise<UnifiedProcessingJob | undefined> {
+    const jobs: UnifiedProcessingJob[]=await this.repository.jobs();
+    for (const candidate of jobs) { if (candidate.settingsPurpose!==purpose || candidate.origin===UnifiedJobOrigin.LocalMigration || [UnifiedJobState.Pending,UnifiedJobState.AwaitingConfig].indexOf(candidate.state)<0) { continue; }
+      if (candidate.origin===UnifiedJobOrigin.ExplicitUpgrade && (await this.repository.upgradeBatch(candidate.batchId))?.paused) { continue; }
+      return candidate;
+    }
+    return undefined;
+  }
   private async lane(purpose: string): Promise<void> {
     const until: number=Date.now()+900000;
     while (this.foreground && !this.paused && !this.stopping && Date.now()<until) {
       const settings: UnifiedProcessingSettings=await this.repository.settings(purpose);
       if (!settings.enabled || settings.paused || !settings.costAcknowledged || !settings.automatic) { return; }
-      const jobs: UnifiedProcessingJob[]=await this.repository.jobs();
-      let job: UnifiedProcessingJob | undefined;
-      for (const candidate of jobs) { if (candidate.settingsPurpose!==purpose || candidate.origin===UnifiedJobOrigin.LocalMigration || [UnifiedJobState.Pending,UnifiedJobState.AwaitingConfig].indexOf(candidate.state)<0) { continue; }
-        if (candidate.origin===UnifiedJobOrigin.ExplicitUpgrade && (await this.repository.upgradeBatch(candidate.batchId))?.paused) { continue; }
-        job=candidate; break;
-      }
+      const job: UnifiedProcessingJob | undefined=await this.nextJob(purpose);
       if (job===undefined) { return; }
       const document=await this.repository.get(job.documentKey);
       const image: UnifiedImageRecord | undefined=job.stage==='Vision' || job.stage==='ImageEmbedding'?(await this.repository.imageRecords(job.documentKey)).find((r: UnifiedImageRecord): boolean=>r.occurrenceId===job.occurrenceId):undefined;

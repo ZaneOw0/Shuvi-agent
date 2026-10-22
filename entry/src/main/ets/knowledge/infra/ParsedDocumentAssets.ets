@@ -40,7 +40,7 @@ export class ParsedDocumentAssets implements ParsedAssetPort, ParsedPublicationV
     try { await this.read(assetId,cancel); const asset: ParsedImageAsset | undefined = await this.ledger.asset(assetId);
       if (asset === undefined || asset.state !== ParsedAssetState.Ready || !asset.relativePath.startsWith('images/')) { throw new ParsedFailure('PreviewAssetUnavailable','asset'); }
       const preview: ParsedAssetPreview = new ParsedAssetPreview(); preview.assetId = assetId; preview.leaseId = lease.id; preview.path = `file://${this.path(asset.relativePath)}`; return preview;
-    } catch (error) { await this.ledger.releaseLease(lease.id); throw error; }
+    } catch (error) { await this.ledger.releaseLease(lease.id); if (error instanceof Error) { throw error; } throw new ParsedFailure('PreviewOpenFailed','asset'); }
   }
   async closePreview(preview: ParsedAssetPreview): Promise<void> { if (preview.leaseId.length > 0) { await this.ledger.releaseLease(preview.leaseId); preview.leaseId = ''; } }
   async saveHistory(id: string, record: string, bytes: Uint8Array, cancel: ParsedCancellation): Promise<string> {

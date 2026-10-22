@@ -173,7 +173,7 @@ export class VectorRdbRepository implements KnowledgeVectorPort, VectorWorkflowS
     if (!owner.startsWith('upd:') || this.space(spaceId).preprocessing!=='UNIFIED-KNOWLEDGE-TEXT-1') { throw new KnowledgeFailure('UnifiedOwnerOrSpaceRequired','mirror'); }
     await this.write<void>(async (): Promise<void>=> { const store=this.requireStore(); const tx: number=await store.beginTrans();
       try { await store.execute(`UPDATE ${vectorTableId(spaceId)} SET eligible=0 WHERE doc=?`,tx,[owner]); await store.execute(`UPDATE ${vectorTableId(spaceId)} SET eligible=1,epoch=? WHERE doc=? AND content_generation=? AND generation=?`,tx,[epoch,owner,content,generation]); await store.commit(tx); }
-      catch (error) { await store.rollback(tx); throw error; }
+      catch (error) { await store.rollback(tx); if (error instanceof Error) { throw error; } throw new KnowledgeFailure('UnifiedMirrorFailed','mirror'); }
     });
   }
   async revokeUnified(spaceId: string, owner: string): Promise<void> {

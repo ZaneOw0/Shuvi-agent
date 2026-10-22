@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
+const Module = require('node:module');
 const { test } = require('node:test');
 
 const sdkHome = process.env.DEVECO_SDK_HOME;
@@ -48,6 +49,7 @@ const optionalSources = [
   'knowledge/domain/KnowledgeStorageScope','knowledge/domain/PdfLocalModels','knowledge/pipeline/PdfEvidenceCodec',
   'knowledge/domain/VectorWorkflowModels','knowledge/pipeline/EmbeddingSpacePolicy','knowledge/application/EmbeddingWorkflow','knowledge/infra/PdfVectorRepository',
   'knowledge/infra/KnowledgeDerivedBudget',
+  'knowledge/domain/ParsedDocumentModels', 'knowledge/domain/ParsedDocumentPorts', 'knowledge/domain/UnifiedKnowledgeModels', 'knowledge/domain/UnifiedQueryModels', 'knowledge/infra/PdfImagePayload',
   'knowledge/domain/EmbeddingBasisModels','knowledge/pipeline/EmbeddingBasisPolicy',
   'knowledge/pipeline/EmbeddingPolicy', 'knowledge/application/EmbeddingService',
   'knowledge/pipeline/SafeZipPolicy',
@@ -77,6 +79,22 @@ const optionalSources = [
 for (const source of optionalSources) {
   if (fs.existsSync(path.join(project, source))) sources.push(source);
 }
+// Transpile the relative-import closure so a listed source never resolves to a
+// module that was left out of the allowlist above. Only local .ets files are
+// added; package imports stay unresolved and are never loaded.
+const transpiled = new Set(sources.map(source => path.resolve(project, source)));
+const pending = sources.slice();
+while (pending.length > 0) {
+  const current = path.resolve(project, pending.shift());
+  const text = fs.readFileSync(current, 'utf8');
+  for (const match of text.matchAll(/from\s+'(\.[^']+)'/g)) {
+    const target = path.resolve(path.dirname(current), match[1] + '.ets');
+    if (!fs.existsSync(target) || transpiled.has(target)) continue;
+    transpiled.add(target);
+    const relative = path.relative(project, target);
+    sources.push(relative); pending.push(relative);
+  }
+}
 console.log(`[工具] Node=${process.version} SDK=${sdkHome} compiler=${ts.version} golden=text-m1-golden-v1`);
 console.log('[执行边界] host transpilation/injected ports only; NOT ArkTS checker, native zlib, ArkData, PDFKit, device, UI or provider verification');
 for (const source of sources.concat(['entry/src/main/ets/pages/Index.ets', 'entry/src/test/eval/text-m1-golden.json',
@@ -101,6 +119,20 @@ for (const source of sources) {
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, result.outputText);
 }
+// Suites inject their own SDK doubles for the modules they load directly. A
+// transitively imported module would otherwise fail to resolve an @kit package
+// in Node, so fall back to a hard-failing stub: any platform call still throws.
+const platformForbidden = new Proxy(function platformForbidden() {}, {
+  get: () => platformForbidden,
+  apply: () => { throw new Error('Platform operation forbidden in host test'); }
+});
+const hostLoad = Module._load;
+Module._load = function hostKitFallback(request) {
+  if (/^@(kit|ohos)[./]/.test(request)) {
+    try { return hostLoad.apply(this, arguments); } catch { return platformForbidden; }
+  }
+  return hostLoad.apply(this, arguments);
+};
 
 const fixtureRoot = path.join(project, 'entry/src/test/fixtures');
 for (const item of require('./pdf-worker-host-cases.cjs')(outputRoot,project)) { test(`PDF worker injected host boundary · ${item.name}`,item.run); }
@@ -255,7 +287,7 @@ test('保存视图源码契约 · 服务缺失可见且提交捕获输入先于�
 test('转发视图源码契约 · V1可观察任务进度前置且前台导航不暂停', () => {
   const view = fs.readFileSync(path.join(project, 'entry/src/main/ets/knowledge/ui/DocumentParseView.ets'), 'utf8');
   const index = fs.readFileSync(path.join(project, 'entry/src/main/ets/pages/Index.ets'), 'utf8');
-  const close = index.slice(index.indexOf('private closeParse()'), index.indexOf('private async openParse('));
+  const close = index.slice(index.indexOf('private closeParse()'), index.indexOf('private async openImages('));
   if (close.includes('.pause(') || !close.includes('.clearInput(')) throw new Error('Foreground navigation canceled transfer');
   if (!view.includes('@Observed\nclass DocumentParseTaskPresentation') || !view.includes('@ObjectLink taskRow: DocumentParseTaskPresentation') ||
     !view.includes("@Link @Watch('updateTaskRows') parseState") || !view.includes('(row: DocumentParseTaskPresentation): string => row.taskId')) throw new Error('Stable-key V1 observation missing');
@@ -270,8 +302,10 @@ test('转发视图源码契约 · V1可观察任务进度前置且前台导航�
 test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => {
   const protectedFiles = {
     'entry/src/main/ets/knowledge/domain/TextKnowledgeModels.ets': '530e82f28659c7febdfe74c9e7c7f265c0217ba9ed933fad5b168a0310c1be7f',
-    'entry/src/main/ets/knowledge/application/TextKnowledgeService.ets': '7bb0f0bd519fff14ea1ba869a4f0267a956ebffdd8123ab8553ddc8bd34da0b5',
-    'entry/src/main/ets/knowledge/infra/TextFileAdapter.ets': 'c65bc087f958b28ad04dcf18bf3c43482defd98a3a8ff9b96cdfaa4fa4d7200a',
+    // Approved unified-parsing connection points: attachBeforeCleanup/attachUnifiedImport
+    // and the KnowledgeStoreHost cleanup guard. No M1 storage or wire bytes changed.
+    'entry/src/main/ets/knowledge/application/TextKnowledgeService.ets': 'c5d8eb092a1247838ee9ca6cca372496c9ad798fdf762bf0b8795ccf9ae98805',
+    'entry/src/main/ets/knowledge/infra/TextFileAdapter.ets': '9e9ae7b5975872169eb04c823734d48e7f49e6f87a066fde362ea1d4e336e82e',
     'entry/src/main/ets/knowledge/pipeline/TextNormalizer.ets': 'dc4e861e99dc69883350b4d23e9289e455e9a3e7bb8eb880a7e6dad8595a3760',
     'entry/src/test/eval/text-m1-golden.json': 'f060e0ed13451a56e89625b32946b906b718d9238996bc85d30e8edd7e1f9494',
     'scripts/dev-run-mac.sh': 'c8d74af19a7cf3fb702ee50770507394f03e0c6a2f15ad5fdb4f09720dd19216',
@@ -302,5 +336,5 @@ test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => 
   if (JSON.stringify(permissions) !== JSON.stringify(['ohos.permission.INTERNET'])) throw new Error('Permission scope changed');
   const backup = JSON.parse(fs.readFileSync(path.join(project, 'entry/src/main/resources/base/profile/backup_config.json'), 'utf8'));
   const oldBackup = JSON.parse(baseline('entry/src/main/resources/base/profile/backup_config.json'));
-  if (backup.allowToBackupRestore !== true || !oldBackup.excludes.every(p=>backup.excludes.includes(p)) || backup.excludes.some(p => !p.includes('knowledge_parse_v1') && !p.includes('shuvi_parse_stage_v1.db') && !p.includes('knowledge_pdf_v1') && !p.includes('shuvi_kb_vector_v1.db'))) throw new Error('M1 backup isolation changed');
+  if (backup.allowToBackupRestore !== true || !oldBackup.excludes.every(p=>backup.excludes.includes(p)) || backup.excludes.some(p => !p.includes('knowledge_parse_v1') && !p.includes('shuvi_parse_stage_v1.db') && !p.includes('knowledge_pdf_v1') && !p.includes('shuvi_kb_vector_v1.db') && !p.includes('knowledge_unified_v1'))) throw new Error('M1 backup isolation changed');
 });

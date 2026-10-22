@@ -32,7 +32,7 @@ export async function docxReadUnifiedOutput(archive: DocxArchivePort, directory:
   let content: Uint8Array | undefined;
   if (selected.length > 0) {
     try { content = await archive.read(selected[0],cancel); }
-    catch (error) { cancel.check(); if (markdown.trim().length === 0) { throw error; } a.addWarning('StructuredMemberUnavailableMarkdownPreserved'); }
+    catch (error) { cancel.check(); if (markdown.trim().length === 0) { if (error instanceof Error) { throw error; } throw new DocxFailure('StructuredMemberUnreadable','output'); } a.addWarning('StructuredMemberUnavailableMarkdownPreserved'); }
   }
   a.setOutput(markdown,content,md[0]?.name ?? selected[0]?.name ?? '');
   a.setOutputBase(md[0]?.name ?? selected[0]?.name ?? '');

@@ -53,7 +53,7 @@ export class ParsedDocumentAdapters implements ParsedProducerPort {
     if (this.projected!==undefined) { projection=this.projected; }
     else if (this.content !== undefined) {
       try { projection = parsedContentProjection(this.content,cancel); }
-      catch (error) { cancel.check(); if (this.markdown.trim().length === 0) { throw error; } projection = parsedMarkdownProjection(this.markdown,cancel); projection.warnings.push('StructuredOutputUnusableMarkdownPreserved'); }
+      catch (error) { cancel.check(); if (this.markdown.trim().length === 0) { if (error instanceof Error) { throw error; } throw new ParsedFailure('StructuredOutputUnreadable','producer'); } projection = parsedMarkdownProjection(this.markdown,cancel); projection.warnings.push('StructuredOutputUnusableMarkdownPreserved'); }
     } else { projection = parsedMarkdownProjection(this.markdown,cancel); }
     if (this.markdown.trim().length > 0 && projection.blocks.some((b: ParsedBlock): boolean => b.kind === 'Unknown')) {
       const selected: ParsedOutputProjection = parsedMarkdownProjection(this.markdown,cancel);

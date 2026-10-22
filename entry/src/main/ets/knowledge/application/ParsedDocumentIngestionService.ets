@@ -65,7 +65,7 @@ export class ParsedDocumentIngestionService {
       if (this.published!==undefined) { try { await this.published(this.state.document); this.state.enhancement='QueuedOrAwaitingConfig'; } catch { this.state.enhancement='QueueCheckpointFailed'; this.state.message+='；增强排队待重试，正文保留'; } }
     } catch (error) {
       this.state.stage = cancel.invalid ? 'Paused' : 'Failed'; this.state.message = error instanceof ParsedFailure ? `${error.category} / ${error.stage}` : 'LocalImportFailed；原件与已发布内容保留';
-      throw error;
+      if (error instanceof Error) { throw error; } throw new ParsedFailure('LocalImportFailed','ingest');
     } finally { this.cancel = undefined; this.state.busy = false; await this.refresh(); }
   }
   async stop(): Promise<void> { this.pause(); await this.closePreview(); const deadline: number=Date.now()+120000; while (this.state.busy) { if (Date.now()>deadline) { throw new ParsedFailure('IngestionReleaseUnconfirmed','close'); } await new Promise<void>((resolve: () => void): void=> { setTimeout(resolve,20); }); } }

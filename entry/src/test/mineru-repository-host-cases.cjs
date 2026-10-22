@@ -65,12 +65,12 @@ module.exports = function repositoryHostCases(outputRoot) {
       assert.equal(result.tasks[0].recoveryUploadUsed, true); assert.equal(result.tasks[0].queries, 137); assert.equal(result.tasks[0].failureCode, '403'); assert.equal(result.tasks[0].lastQueryAt, 15);
       assert.equal(result.originals[0].hash, 'a'.repeat(64)); assert.equal(result.occupancy.batchId, 'unit-batch'); assert.equal(result.occupancy.retired, false);
       assert.equal(s.db.prepare("SELECT name FROM pragma_table_info('remote_slot')").all().map(row => row.name).includes('retired'), true);
-      assert.equal(s.store.version, 3); s.db.close();
+      assert.equal(s.store.version, 6); s.db.close();
     } },
     { name: 'v2 to v3 migration preserves rows and persists the retire flag', run: async () => {
       const s = session(); const repo = seed(s, true); const tasksBefore = JSON.stringify(s.db.prepare('SELECT * FROM task').all());
       await repo.open(); const snapshot = await repo.load();
-      assert.equal(s.store.version, 3); assert.equal(JSON.stringify(s.db.prepare('SELECT * FROM task').all()), tasksBefore);
+      assert.equal(s.store.version, 6); assert.equal(JSON.stringify(s.db.prepare('SELECT * FROM task').all()), tasksBefore);
       assert.equal(snapshot.occupancy.batchId, 'unit-batch'); assert.equal(snapshot.occupancy.retired, false);
       snapshot.occupancy.retired = true; await repo.save(snapshot); await repo.close();
       const reopened = new DocumentParseRepository({ databaseDir: '/host/database' }); await reopened.open(); const again = await reopened.load();
