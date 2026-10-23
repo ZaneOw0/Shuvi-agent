@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>aigw-tray</AssemblyName>
+    <RootNamespace>LocalAIGateway.Tray</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LocalAIGateway.Core\LocalAIGateway.Core.csproj" />
+    <ProjectReference Include="..\LocalAIGateway.Windows\LocalAIGateway.Windows.csproj" />
+  </ItemGroup>
+</Project>

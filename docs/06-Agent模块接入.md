@@ -1,5 +1,7 @@
 # 06 Agent 模块接入
 
+> 状态：已实现待验收（2026-10-23 目录迁移及测试宿主；验证与限制见第 7、8 节）。当前源码位于 `modules/harmony_agent/`，来源为 `f177176`。第 1、3 节保留 `a12b6a1` 的历史范围和证据，不能作为新版本复验结果。
+>
 > 2026-10-20：阶段 A 构建及用户模拟器快速回归通过。阶段 B1 的应用内正常连接路径已获用户确认；异常、取消的设备验收仍待完成。已声明网络权限；生产宿主、真实搜索与模型回答尚未接入。
 > 用户已批准六模块固定源码快照，以及 B1 网络权限、HDC 回环调试和 ArkTS 资料替代方案。实际搜索/模型调用与公共合同调整不包含在 B1 中。
 
@@ -29,11 +31,11 @@ Shuvi 基线 `dev/ux` / `bd7c76f`；Agent 固定提交 `a12b6a18cbbf1188a4708997
 在仓库根目录执行，不需要另一个 `Harmony_agent` 克隆：
 
 ```powershell
-node scripts/verify-agent-vendor.cjs
+node scripts/verify-agent-import.cjs
 ohpm install --all
 ```
 
-`ohpm` 使用 DevEco 配套版本。核验脚本检查文件哈希、模块版本、许可声明、六模块内部依赖闭包、entry 依赖路径和工程模块注册；具体来源与升级约定见 [源码快照说明](../vendor/harmony_agent/README.md)。
+`ohpm` 使用 DevEco 配套版本。核验脚本检查文件哈希、模块版本、许可声明、六模块内部依赖闭包、entry 依赖路径和工程模块注册；具体来源与维护约定见 [模块说明](../modules/harmony_agent/README.md)。旧命令 `verify-agent-vendor.cjs` 作为兼容入口保留。
 
 使用 DevEco Studio 构建应用；命令行也可调用已安装的 Hvigor：
 
@@ -186,3 +188,53 @@ Agent 上游 `docs/LOCAL_AI_GATEWAY_INTEGRATION.md` 记录的是另一台开发�
 本机证据：`.local/agent-integration-stage-b2/gateway-smoke.cjs`、`gateway-smoke-result.json` 和逐次脱敏结果。固定版本 ArkTS Transport 尚无 `extra_body/thinking` 字段，且 Planner 请求包含结构化输出要求，因此不能用该 Node 文本探针替代 Agent 适配验收。设备 4000 端口、设备凭据、生产宿主资源及真实搜索仍待接入。本轮仅增加本地探针与更新记录，没有修改 ArkTS 或重跑应用构建。
 
 请 Agent 同学提供完整宿主示例，并对齐思考模式、结构化输出、模型能力与价格快照；凭据不要放进文档、消息或代码。确认后再实现宿主资源与页面服务并验证手机真实请求。给 Agent 的简短交接文字见仓库根目录 `SHUVI_AGENT_B2_HANDOFF.md`。
+
+## 7. 六模块目录迁移与版本更新（2026-10-23）
+
+整合分支 `chore/integrate-agent-gateway`：六模块已从 `vendor/harmony_agent/` 迁至 `modules/harmony_agent/`，固定来源升级到 `f1771764f129193725a8bccb5da2be6c3604e998`（标签 `backend-v0.1.0-rc.2`）。从提交对象导出 193 个文件，其中 36 个是恢复导入的 `src/test` 文件，没有复制来源工作区改动。模块版本见 [来源清单](../modules/harmony_agent/UPSTREAM.json)：Connectors 为 `0.13.0`、Storage 为 `0.9.0`，其余版本与第 1 节一致。
+
+更新主工程模块路径、entry 依赖路径及 OHPM 生成的锁文件；根 SDK、Hypium、Hamock、应用权限和签名模板未变。模块公共入口按上游保留，没有增加页面或启用凭据写入/轮换、数据库换钥。旧目录移入本机忽略的 `.local/repository-integration/agent-a12b6a1-backup/`，不参与构建，不提交备份。
+
+### 7.1 本轮实际验证
+
+环境：Windows、Node.js `24.14.1`、本机 DevEco 配套 OHPM/Hvigor/JBR、HarmonyOS API 26。会话没有 `arkts_check` / `build_project`，沿用已批准的本机工具链验证方式；读取 `openharmony-development` 技能的 Windows DevEco 与 toolchain 路由，没有使用非当前 SDK 的语法示例改写源码。
+
+| 检查 | 结果 |
+|---|---|
+| 导入前旧快照核验 | 原 156 个上游文件和六模块一致 |
+| `node scripts/verify-agent-import.cjs` | 新 193 个文件和六模块通过；构建后再次核验通过 |
+| 配套 `ohpm.bat install --all` | 退出码 0；entry 和各模块本地依赖指向新目录，锁文件由工具生成 |
+| 配套 `hvigorw.bat assembleHap assembleHar --no-daemon` | 退出码 0，`BUILD SUCCESSFUL`；207 个任务，203 个执行、4 个最新；entry CompileArkTS 和六模块 HarCompileArkTS 均完成，产出一个未签名 HAP 与六个 HAR |
+| `node entry/src/test/run-host-tests.cjs` | 20/20 通过（日程和搜索 Mock 逻辑） |
+| `node entry/src/test/run-floating-placement-tests.cjs` | 9/9 通过 |
+| `node entry/src/test/run-mcp-probe-tests.cjs` | 13/13 通过（注入传输的本机测试，无真实网络） |
+| `node scripts/verify-gateway-import.cjs` | 保留的网关导入基线 281 文件通过；本轮没有重复运行其 588 项测试 |
+| Agent `src/test` / 独立测试宿主 | 仅恢复测试源码，未运行；不引用上游通过数 |
+| Code Linter | 本轮未运行；第 3 节已记录的分析器问题未解决，不声称全量检查通过 |
+| 模拟器快速回归 | 2026-10-23 用户完成下述三项检查并确认无异常；属于用户人工反馈，AI 未执行设备操作 |
+| 签名与安装记录、真机及真实模型 | 未采集用户本次签名与安装记录；真机及真实模型链路未验证 |
+
+构建警告仍包括：HAR 的 `applyToProducts` 不生效、模块 SemVer / 本地模块信息提示、本地依赖 HAR 打包提示、未签名、网络权限及 `TextAreaController` 设备能力提示。SemVer / 本地模块信息两类提示在旧阶段 A 日志也存在；新旧日志对应行数均为 17，未以迁移为由修改包名、版本或关闭检查。entry 已声明 INTERNET；HAR 网络接口的调用方仍须满足目标设备权限条件。当前制品不能当作可独立发布的 SDK 或已签名安装包。
+
+新增 RDB `rekeyEx` 在本机配套 SDK `@ohos.data.relationalStore.d.ts` 中标记 `@since 22`、`SystemCapability.DistributedDataManager.RelationalStore.Core`，API 26 编译通过；这仅支持当前工具链兼容性判断，不代表已在目标 OpenHarmony 设备验证凭据或数据库操作。
+
+本机证据位于 `.local/repository-integration/`：`agent-ohpm.log`、`agent-build.log`、`agent-host-regression.log`、`agent-floating-regression.log`、`agent-probe-regression.log` 和 `agent-artifacts.json`。日志及制品不入库。
+
+未签名 HAP SHA-256：`4881D427234AC11C0E6B084344CFCBEB0E09CC554F9CBB55F144FD2F3E5B2CA2`。
+
+2026-10-23，用户在释放本机内存后回复“在模拟器中完成检查，确认无异常”。按此前约定，人工检查范围为：首页正常打开、日程和搜索样例正常展示、「我的 → 检查连接」页面能够打开。记录为此次目录迁移后的模拟器快速回归通过，不扩大为 MCP 握手成功、真实搜索、模型调用或新增安全存储能力验收。用户未提供本次模拟器型号、系统版本和已安装包哈希，不将上面的未签名构建产物哈希直接当作安装包身份。
+
+### 7.2 六模块迁移阶段结束时的待办
+
+- `native_tools`、`agent_testkit`、隔离的 `tests/agent-host/` 及测试脚本路径迁移，重新运行 Agent 测试。
+- Agent 架构、模块职责、接入、进度和历史验收文档的整理与归档；研究资料白名单审查。
+- 统一 CI、后续改动对应的设备回归、目标 OpenHarmony 真机验证；本次迁移的模拟器快速回归已获用户确认。
+- 第 6 节列出的生产宿主、模型参数、授权信息及澄清/回答接口对齐；迁移没有解决这些业务接入问题。
+
+## 8. 剩余模块与独立测试宿主（2026-10-23）
+
+已从同一固定来源补入 `native_tools` 0.1.1 和 `agent_testkit` 0.6.0，模块导入清单共 224 个文件。`tests/agent-host/` 注册八模块与独立宿主，复用同一源码；产品 entry 仍只依赖原六模块。测试包名独立为 `com.example.shuvi.agenttest`，未修改产品权限或签名。
+
+八模块 Hypium 本机测试实际执行 380/380 通过，固定样例 MCP 服务的协议测试 10/10 通过；独立宿主、八个 HAR、ohosTest 包均编译通过，最后产品工程复核构建通过。设备测试、真机和真实模型链路仍未执行。具体版本、命令、数量、警告与制品哈希见 [测试宿主迁移验证](verification/agent/测试宿主迁移.md)，操作入口见 [独立测试宿主](../tests/agent-host/README.md)。
+
+第 7.2 节中的模块/宿主导入和本机单元测试已完成。随后已完成文档归档与 CI 配置扩展，见 [当前进度](08-项目进度与验收.md)；设备编排、研究资料、发布工具及远端 CI 验证仍待处理。第 6 节生产接入问题仍保留。

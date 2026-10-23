@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/AlterGo-xzy/Harmony_agent",
+  "commit": "f1771764f129193725a8bccb5da2be6c3604e998",
+  "importedAt": "2026-10-23",
+  "files": [
+    {
+      "sourcePath": "tools/fixture/fixture-contract.test.mjs",
+      "path": "fixture/fixture-contract.test.mjs",
+      "sourceSha256": "0b7c1591494ea0f565be367032a998a4cae907d3d747f5e6da61835307836b10",
+      "importedSha256": "0b7c1591494ea0f565be367032a998a4cae907d3d747f5e6da61835307836b10"
+    },
+    {
+      "sourcePath": "tools/fixture/fixture-server.mjs",
+      "path": "fixture/fixture-server.mjs",
+      "sourceSha256": "ed138a1030f6a7bc4d4936a1f9a8b5260fdb02ddf76c114011b32db4f98e0629",
+      "importedSha256": "ed138a1030f6a7bc4d4936a1f9a8b5260fdb02ddf76c114011b32db4f98e0629"
+    },
+    {
+      "sourcePath": "tools/fixture/package.json",
+      "path": "fixture/package.json",
+      "sourceSha256": "fdd4db0036c2c66a61844b6b8541812870eb2c5ea204b085f4230666a9fe2a0d",
+      "importedSha256": "fdd4db0036c2c66a61844b6b8541812870eb2c5ea204b085f4230666a9fe2a0d"
+    }
+  ]
+}

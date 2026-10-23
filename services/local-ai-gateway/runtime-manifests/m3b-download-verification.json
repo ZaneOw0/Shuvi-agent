@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "verificationDate": "2026-08-28",
+  "approvedManifest": {
+    "path": "runtime-manifests/m3b-proxy-without-enterprise.candidate.json",
+    "sha256": "0bb5e21d4b8b20e5d2f0cc6df4a74362ce3c3a595fa49bfb1ee3e92d6c94e361"
+  },
+  "downloadTarget": "C:\\claude-gateway\\artifacts\\m3b-runtime-download",
+  "download": {
+    "fileCount": 108,
+    "totalBytes": 139606084,
+    "allExpectedFilesPresent": true,
+    "unexpectedFileCount": 0,
+    "partialFileCount": 0,
+    "allSizesVerified": true,
+    "allSha256Verified": true
+  },
+  "archiveAudit": {
+    "archiveCount": 108,
+    "allArchivesReadable": true,
+    "unsafePathEntryCount": 0,
+    "nativeBinaryArchiveCount": 26,
+    "enterpriseCodeEntryCount": 0,
+    "declaredLicenseFileMissingCount": 0,
+    "archivesWithoutEmbeddedLicenseEntry": [
+      "tokenizers-0.23.1-cp310-abi3-win_amd64.whl"
+    ]
+  },
+  "licenseAudit": {
+    "status": "review-required-before-runtime-freeze",
+    "proprietarySignalCount": 0,
+    "agplSignalCount": 0,
+    "ssplSignalCount": 0,
+    "externalEvidence": [
+      {
+        "artifact": "tokenizers-0.23.1-cp310-abi3-win_amd64.whl",
+        "licenseExpression": "Apache-2.0",
+        "url": "https://raw.githubusercontent.com/huggingface/tokenizers/v0.23.1/LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "reason": "The wheel metadata declares the Apache Software License classifier but the wheel contains no LICENSE or NOTICE entry."
+      }
+    ],
+    "redistributionObligations": [
+      {
+        "artifact": "soundfile-0.12.1-py2.py3-none-win_amd64.whl",
+        "component": "_soundfile_data/libsndfile_64bit.dll",
+        "licenseFamily": "LGPL-2.1",
+        "embeddedLicenseEntry": "_soundfile_data/COPYING",
+        "embeddedLicenseSha256": "ad01ea5cd2755f6048383c8d54c88459cd6fcb17757c5c8892f8c5ea060f6140",
+        "decision": "Do not include this optional audio dependency in the final text-only runtime unless LGPL obligations are deliberately accepted."
+      },
+      {
+        "artifacts": [
+          "certifi-2026.4.22-py3-none-any.whl",
+          "orjson-3.11.6-cp314-cp314-win_amd64.whl",
+          "tqdm-4.67.3-py3-none-any.whl"
+        ],
+        "licenseFamily": "MPL-2.0",
+        "decision": "Retain and reproduce the applicable license files and notices if these artifacts remain in the final runtime."
+      }
+    ]
+  },
+  "runtimeState": {
+    "installed": false,
+    "extracted": false,
+    "started": false,
+    "offlineSmokeTested": false,
+    "status": "downloaded-and-hash-verified-only"
+  }
+}

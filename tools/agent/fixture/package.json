@@ -1,0 +1,13 @@
+{
+  "name": "harmony_agent-mcp-fixture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node fixture-server.mjs",
+    "test": "node --test fixture-contract.test.mjs"
+  }
+}

@@ -10,7 +10,7 @@
 
 ArkUI 搜索 Mock v0.2 已实现待验收：在助手页开启「搜索」，填入「搜索样例」发送，可查看分步进度、来源、引用与异常状态。这里使用固定样例，不调用 MCP / Tavily 或模型；真实链路仍待 Agent 联调。
 
-Agent 模块接入阶段 A 已完成：固定上游 `a12b6a1` 的六个 HAR 源码模块已纳入工程并通过构建。阶段 B1 新增调试版「我的 → 检查连接」，仅做 MCP 握手与工具发现，用户已确认应用内正常路径通过；异常与取消设备验收待完成。搜索与日程仍使用 Mock，生产 Runtime 尚未接线。范围、复现步骤及验证限制见 [06 Agent 模块接入](docs/06-Agent模块接入.md)。
+Agent 八模块已迁至 `modules/harmony_agent/`，来源固定为 `f177176`；其中六个 HAR 供产品引用，另两个用于独立测试宿主。统一进度与证据见 [08 项目进度与验收](docs/08-项目进度与验收.md)。阶段 B1 调试版「我的 → 检查连接」仅做 MCP 握手与工具发现，历史正常路径已获用户确认；异常与取消设备验收待完成。搜索与日程仍使用 Mock，生产 Runtime 尚未接线。
 
 休比（Shuvi）是面向开源鸿蒙社区竞赛开发的智能个人助理，使用 ArkTS / ArkUI 开发。产品目标、需求层级与架构建议见 [00 项目总览](docs/00-项目总览.md)。
 
@@ -25,12 +25,15 @@ Agent 模块接入阶段 A 已完成：固定上游 `a12b6a1` 的六个 HAR 源�
 | `entry/` | 应用入口 HAP：四个一级页面、日程 Mock 流程、交互状态与前端逻辑测试 |
 | `AppScope/` | 应用级配置（`app.json5`：bundleName、版本、图标与名称） |
 | `services/search-mcp/` | 独立 Node.js 搜索 MCP Server，不进入 HAP；单独安装、构建与测试 |
-| `vendor/harmony_agent/` | 固定上游提交的六个 Agent HAR 源码模块、许可及哈希清单 |
+| `services/local-ai-gateway/` | 独立 Windows/.NET 模型网关，固定源码已导入，自包含自动测试 588/588 通过；不进入 HAP，远端 CI 与完整运行包验收待完成 |
+| `modules/harmony_agent/` | 八个 Agent HAR 源码模块及测试；原六模块供产品依赖，另外两个仅接入测试工程 |
+| `tests/agent-host/` | 独立 Agent 测试工程，复用八模块；本机 Hypium 380/380 通过，设备测试待执行 |
+| `tools/agent/fixture/` | 固定样例 MCP 测试服务，不是生产搜索服务 |
 | `scripts/` | 本地一键启动脚本：设备/模拟器 → 签名 → 构建 → 安装运行 |
 | `specs/` | 按用户闭环划分的功能契约，三条开发线的唯一对齐点 |
 | `docs/` | 项目文档，见下方文档索引 |
 
-规划中的 `assistant_core`（领域对象、用例与 Agent 编排）与 `platform_adapter`（平台能力适配）尚未创建，模块边界与依赖方向见 [00 项目总览](docs/00-项目总览.md) 第 3 节。
+早期建议的 `assistant_core` 与 `platform_adapter` 职责现由六个 Agent 模块及 entry 中的应用服务承接，未建立这两个同名目录。建议职责与实际模块的对应见 [00 项目总览](docs/00-项目总览.md) 第 3 节。
 
 ## 快速开始
 
@@ -69,6 +72,9 @@ scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
 | [04 图标素材库](docs/04-图标素材库.md) | 23 个图标的用途、ArkUI 复用方式与维护规则；[本地预览页](docs/assets/icons/index.html) |
 | [05 品牌配色与 Logo](docs/05-品牌配色与Logo.md) | 角色形象、莓紫与奶油白配色、应用图标配置；[本地预览页](docs/assets/brand/index.html) |
 | [06 Agent 模块接入](docs/06-Agent模块接入.md) | 六模块固定源码快照、依赖配置、构建证据与后续接入边界 |
+| [07 仓库整合与文档迁移方案](docs/07-仓库整合与文档迁移方案.md) | 来源版本、授权记录、迁移范围与执行进度 |
+| [08 项目进度与验收](docs/08-项目进度与验收.md) | 当前整合成果、本机验证、设备与产品接入待办 |
+| [文档导航](docs/README.md) | 当前文档、子项目架构与部署入口；历史说明的适用边界 |
 
 ## 构建与签名
 
@@ -76,7 +82,7 @@ scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
 - 签名：本机自动生成，材料保存在 `~/.ohos/config/`，不入库
 - 运行：`devecocli run`，或使用 `scripts/dev-run.sh`
 - 构建、模拟器与真机结果分别记录、不互相替代，见 [02 平台基线](docs/02-平台基线.md) 第 4 节
-- CI 门禁：`scripts/ci-windows.cmd`（依赖安装 → 代码检查 → 构建），配置见 `.github/workflows/ci.yml`
+- CI 门禁：来源核验、Node 搜索测试、鸿蒙检查与构建、Agent 宿主/Hypium、Windows 网关测试；runner 前提及尚未完成的远端验证见 [持续集成](docs/deployment/持续集成.md)
 
 ## 贡献指南
 
@@ -85,4 +91,5 @@ scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
 ## License
 
 本项目采用 MIT 许可，见 [LICENSE](LICENSE)。
-`vendor/harmony_agent/` 的上游模块声明使用 Apache-2.0，许可说明与标准文本保留在该目录。
+`modules/harmony_agent/` 的上游模块声明使用 Apache-2.0，许可说明与标准文本保留在该目录。
+`services/local-ai-gateway/` 保留其原 LICENSE 和第三方声明，不适用根目录 MIT；用户已确认取得本次整合与发布范围的书面授权，记录见该子项目 `UPSTREAM.json`。

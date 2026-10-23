@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>aigw-launcher</AssemblyName>
+    <RootNamespace>LocalAIGateway.Launcher</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LocalAIGateway.Core\LocalAIGateway.Core.csproj" />
+    <ProjectReference Include="..\LocalAIGateway.Windows\LocalAIGateway.Windows.csproj" />
+  </ItemGroup>
+</Project>
