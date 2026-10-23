@@ -58,7 +58,8 @@ export class ParsedDocumentRepository implements ParsedRepositoryPort, UnifiedPr
   async open(): Promise<void> {
     if (this.ready()) { return; }
     if (this.opening === undefined) { this.opening = this.openOnce(); }
-    try { await this.opening; } finally { this.opening = undefined; }
+    const opening: Promise<void> = this.opening;
+    try { await opening; } finally { this.opening = undefined; }
   }
   private async openOnce(): Promise<void> {
     if (this.ready()) { return; } await this.host.acquireExtension();
@@ -66,7 +67,7 @@ export class ParsedDocumentRepository implements ParsedRepositoryPort, UnifiedPr
       await this.host.enqueue<void>(async (): Promise<void> => { await this.host.transaction(async (tx: relationalStore.Transaction): Promise<void> => { await parsedOpenLayout(tx,this.identity); }); this.host.unifiedReady = true; this.opened = true; });
     } catch (error) { this.host.unifiedReady = false; await this.host.release(); if (error instanceof Error) { throw error; } throw new ParsedFailure('LayoutRejected','upd-open'); }
   }
-  async close(): Promise<void> { if (this.opening !== undefined) { await this.opening; } if (!this.opened) { return; } await this.host.release(); this.opened = false; }
+  async close(): Promise<void> { const opening: Promise<void> | undefined = this.opening; if (opening !== undefined) { await Promise.resolve(opening); } if (!this.opened) { return; } await this.host.release(); this.opened = false; }
   async get(id: string): Promise<ParsedDocumentRecord | undefined> {
     const rows: relationalStore.ResultSet = await this.store().querySql('SELECT * FROM upd_document WHERE id=?',[id]);
     try { return rows.goToNextRow() ? recordFrom(rows) : undefined; } finally { rows.close(); }

@@ -196,19 +196,24 @@ export struct ParsedDocumentView {
   }
   private refreshLibrary(): void {
     const rows: ParsedLibraryItem[] = [];
-    for (const d of this.documents) {
-      if (d.tombstone || !this.includeArchived && d.archived) { continue; }
-      const original: DocumentOriginal | undefined = this.originals.find((o: DocumentOriginal): boolean => o.id === d.legacyId);
+    const documents: ParsedDocumentRecord[] = this.documents;
+    const originals: DocumentOriginal[] = this.originals;
+    const includeArchived: boolean = this.includeArchived;
+    const jobs: UnifiedProcessingJob[] = this.processingJobs;
+    const tasks: DocumentParseTask[] = this.tasks;
+    for (const d of documents) {
+      if (d.tombstone || !includeArchived && d.archived) { continue; }
+      const original: DocumentOriginal | undefined = originals.find((o: DocumentOriginal): boolean => o.id === d.legacyId);
       const item: ParsedLibraryItem = new ParsedLibraryItem(); item.id = d.id; item.documentId = d.id; item.originalId = original?.id ?? ''; item.title = d.title; item.namespace = d.namespace;
-      item.category = this.categoryOf(d.title, d.namespace); item.savedAt = original?.savedAt ?? 0; item.status = processingDocumentStatus(this.processingJobs,d);
-      if (d.namespace === 'Image' && item.originalId.length > 0 && !d.archived) { const task: DocumentParseTask | undefined = this.tasks.find((t: DocumentParseTask): boolean => t.originalId === item.originalId); if (task?.stage !== DocumentParseStage.Received) { item.status = processingDocumentStatus(this.processingJobs,d)+' · '+(task?.stage ?? '未解析图片文字'); } }
+      item.category = this.categoryOf(d.title, d.namespace); item.savedAt = original?.savedAt ?? 0; item.status = processingDocumentStatus(jobs,d);
+      if (d.namespace === 'Image' && item.originalId.length > 0 && !d.archived) { const task: DocumentParseTask | undefined = tasks.find((t: DocumentParseTask): boolean => t.originalId === item.originalId); if (task?.stage !== DocumentParseStage.Received) { item.status = processingDocumentStatus(jobs,d)+' · '+(task?.stage ?? '未解析图片文字'); } }
       rows.push(item);
     }
-    for (const o of this.originals) {
-      if (this.documents.some((d: ParsedDocumentRecord): boolean => d.legacyId === o.id)) { continue; }
+    for (const o of originals) {
+      if (documents.some((d: ParsedDocumentRecord): boolean => d.legacyId === o.id)) { continue; }
       const item: ParsedLibraryItem = new ParsedLibraryItem(); item.id = o.id; item.originalId = o.id; item.title = o.title; item.namespace = '';
       item.category = this.categoryOf(o.title, ''); item.savedAt = o.savedAt;
-      const task = this.tasks.find((t: DocumentParseTask): boolean => t.originalId === o.id);
+      const task = tasks.find((t: DocumentParseTask): boolean => t.originalId === o.id);
       item.status = task?.stage === DocumentParseStage.Received ? '待入库' : task?.stage ?? '待解析'; rows.push(item);
     }
     const matched: ParsedLibraryItem[] = rows.filter((item: ParsedLibraryItem): boolean => item.title.toLowerCase().includes(this.filterText.trim().toLowerCase()));

@@ -30,10 +30,13 @@ export class KnowledgeLifecycleService implements KnowledgeSourceProtectionPort 
   }
   private requireReady(): void { if (!this.repository.ready()) { throw new KnowledgeFailure('ProtectionUnavailable', 'source-lifecycle'); } }
   async assertDeletable(sourceId: string, assetIds: string[]): Promise<void> {
-    if (this.unifiedProtection !== undefined) { await this.unifiedProtection(assetIds); }
+    const unified: ((assets: string[]) => Promise<void>) | undefined = this.unifiedProtection;
+    if (unified !== undefined) { await unified(assetIds); }
     this.requireReady();
-    if (this.imageProtection !== undefined) { await this.imageProtection(assetIds); }
-    if (this.docxProtection !== undefined) { await this.docxProtection(assetIds); }
+    const image: ((assets: string[]) => Promise<void>) | undefined = this.imageProtection;
+    if (image !== undefined) { await image(assetIds); }
+    const docx: ((assets: string[]) => Promise<void>) | undefined = this.docxProtection;
+    if (docx !== undefined) { await docx(assetIds); }
     if ((await this.repository.pins(sourceId, assetIds)).length > 0) { throw new KnowledgeFailure('KnowledgeSourcePinned', 'source-delete'); }
     if (assetIds.length > 0) { await this.repository.assertNoReaders(assetIds); }
   }

@@ -27,9 +27,9 @@ export class ParsedDocumentMigrationService {
   pause(): void { if (this.cancel!==undefined) { this.cancel.invalid=true; } this.message='已请求本机暂停，旧活动资料保留'; this.emit(); }
   async run(id: string): Promise<void> {
     if (this.operation!==undefined) { throw new ParsedFailure('MigrationAlreadyRunning','migration'); }
-    this.operation=this.execute(id); try { await this.operation; } finally { this.operation=undefined; }
+    const operation: Promise<void>=this.execute(id); this.operation=operation; try { await operation; } finally { this.operation=undefined; }
   }
-  async close(): Promise<void> { this.pause(); if (this.operation!==undefined) { await this.operation; } }
+  async close(): Promise<void> { this.pause(); const operation: Promise<void> | undefined=this.operation; if (operation!==undefined) { await Promise.resolve(operation); } }
   private async execute(id: string): Promise<void> {
     await this.load(id); const batch: ParsedMigrationBatch | undefined=this.batch; if (batch===undefined) { return; }
     this.busy=true; const cancel: ParsedCancellation=new ParsedCancellation(); this.cancel=cancel; this.emit();

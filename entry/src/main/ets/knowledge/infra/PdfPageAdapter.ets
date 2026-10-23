@@ -121,7 +121,7 @@ export class PdfPageAdapter implements PdfPagePort {
   async close(): Promise<void> {
     for (const token of this.tokens) { token.invalid = true; }
     if (this.closing !== undefined) { return this.closing; }
-    this.closing = this.releaseOwned(); try { await this.closing; } finally { this.closing = undefined; }
+    this.closing = this.releaseOwned(); const closing: Promise<void> = this.closing; try { await closing; } finally { this.closing = undefined; }
   }
   private async releaseOwned(): Promise<void> {
     this.releaseState = 'Releasing';

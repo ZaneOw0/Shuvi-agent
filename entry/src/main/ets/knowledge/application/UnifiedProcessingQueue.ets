@@ -191,7 +191,7 @@ export class UnifiedProcessingQueue {
         if (error instanceof VisionFailure && (error.stage==='response' || error.stage==='auth')) { job.state=UnifiedJobState.Failed; }
         job.failure=error instanceof ParsedFailure || error instanceof VisionFailure?error.category:'RequestOrReadbackUnknown';
         if (last!==undefined && last.launched) { const stored=(await this.repository.attempts(job.id)).find((a: UnifiedProcessingAttempt): boolean=>a.id===last?.id); if (stored?.outcome==='InFlight') { last.outcome=job.state; await this.repository.saveAttempt(last); } }
-      } finally { this.cancellations=this.cancellations.filter((c: ParsedCancellation): boolean=>c!==cancel); try { await this.repository.releaseProcessingJob(job,job.state===UnifiedJobState.Unknown); } catch { job.resourcePhase='ReleasePending'; this.message='JobReleaseCheckpointPending'; await this.repository.saveJob(job); } await this.repository.reconcileUnifiedOwners(); try { await this.settled?.(); } catch { this.message='LocalMirrorPending'; } this.emit(); }
+      } finally { this.cancellations=this.cancellations.filter((c: ParsedCancellation): boolean=>c!==cancel); try { await this.repository.releaseProcessingJob(job,job.state===UnifiedJobState.Unknown); } catch { job.resourcePhase='ReleasePending'; this.message='JobReleaseCheckpointPending'; await this.repository.saveJob(job); } await this.repository.reconcileUnifiedOwners(); const settled: (() => Promise<void>) | undefined = this.settled; try { if (settled !== undefined) { await settled(); } } catch { this.message='LocalMirrorPending'; } this.emit(); }
     }
   }
 }

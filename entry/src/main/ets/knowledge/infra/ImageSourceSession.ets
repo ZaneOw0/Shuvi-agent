@@ -50,7 +50,8 @@ export class ImageSourceSession {
   }
   pause(): void { this.epoch++; if (this.cancel !== undefined) { this.cancel.invalid = true; } this.display(undefined); }
   async close(): Promise<void> {
-    this.pause(); if (this.operation !== undefined) { try { await this.operation; } catch { /* Release still required after failed/late open. */ } }
+    this.pause(); const operation: Promise<void> | undefined = this.operation;
+    if (operation !== undefined) { try { await Promise.resolve(operation); } catch { /* Release still required after failed/late open. */ } }
     const deadline: number = Date.now()+120000;
     while (this.displayHeld) {
       if (Date.now() >= deadline) { this.message = '待释放：UI 像素解绑未确认'; this.emit(); throw new ImageKnowledgeFailure('ImageDisplayDetachUnconfirmed','image-source-release'); }

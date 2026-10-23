@@ -25,7 +25,9 @@ export class KnowledgeSourceRegistry implements KnowledgeScopePort, KnowledgeQue
   }
   hits(receiptId: string): KnowledgeHit[] { const hits: KnowledgeHit[] | undefined = this.hitSets.get(receiptId); if (hits === undefined) { throw new KnowledgeFailure('ScopeHitSetMissing','scope'); } return hits.slice(); }
   async visible(hit: KnowledgeHit, archived: boolean): Promise<boolean> {
-    const source = this.sources.find((p: KnowledgeSearchSourcePort): boolean => p.kind === hit.sourceKind); return source !== undefined && await source.visible(hit,archived);
+    const source: KnowledgeSearchSourcePort | undefined = this.sources.find((p: KnowledgeSearchSourcePort): boolean => p.kind === hit.sourceKind);
+    if (source === undefined) { return false; }
+    return await source.visible(hit,archived);
   }
   private async scanLocked(input: TextQueryInput, archived: boolean, extras: boolean, cancel: KnowledgeCancellation): Promise<KnowledgeScopeReceipt> {
     this.lastHits = []; const receipt: KnowledgeScopeReceipt = new KnowledgeScopeReceipt(); receipt.id = this.identity.id(); receipt.archived = archived; receipt.extras = extras;

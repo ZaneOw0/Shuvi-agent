@@ -92,7 +92,8 @@ export class KnowledgeStoreHost {
     return this.enqueue<relationalStore.RdbStore>(async (): Promise<relationalStore.RdbStore> => {
       if (!this.m1Ready) {
         if (this.opening === undefined) { this.opening = this.start(bootstrap); }
-        try { await this.opening; } finally { this.opening = undefined; }
+        const opening: Promise<void> = this.opening;
+        try { await opening; } finally { this.opening = undefined; }
       }
       this.leases++; return this.requireStore();
     });

@@ -52,7 +52,9 @@ export class VisionCredentialStore implements VisionCredentialPort {
       if (epoch!==this.epoch) { throw new VisionFailure('CredentialChanged','credential'); } check();
       const headers: rcp.RequestHeaders={'authorization':`Bearer ${token}`,'content-type':'application/json','accept':'application/json'}; request.headers=headers;
       const pending: VisionFetchPending=new VisionFetchPending();
-      await admission((): void=> { check(); if (epoch!==this.epoch) { throw new VisionFailure('CredentialChanged','credential'); } pending.pending=session.fetch(request); });
+      const launch = (): void=> { check(); if (epoch!==this.epoch) { throw new VisionFailure('CredentialChanged','credential'); } pending.pending=session.fetch(request); };
+      const admitted: Promise<void> = admission(launch);
+      await Promise.resolve(admitted);
       if (pending.pending===undefined) { throw new VisionFailure('AdmissionDidNotLaunch','credential'); } return await pending.pending;
     } finally { secret.fill(0); request.headers=undefined; }
   }

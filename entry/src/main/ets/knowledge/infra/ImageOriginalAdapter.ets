@@ -80,7 +80,8 @@ export class ImageOriginalAdapter implements ImageOriginalPort {
   }
   private async releaseResources(): Promise<ImageReleaseReceipt> {
     this.previewReady = false;
-    if (this.running !== undefined) { try { await this.running; } catch { /* Operation failure does not certify resource release. */ } }
+    const running: Promise<ImageHeaderEvidence> | undefined = this.running;
+    if (running !== undefined) { try { await Promise.resolve(running); } catch { /* Operation failure does not certify resource release. */ } }
     if (this.pixel !== undefined) { try { await this.pixel.release(); this.pixel = undefined; this.receipt.pixel = 'Released'; } catch { this.receipt.pixel = 'Unknown'; this.receipt.failure = 'PixelReleaseUnconfirmed'; return this.receipt; } }
     if (this.source !== undefined) { try { await this.source.release(); this.source = undefined; this.receipt.source = 'Released'; } catch { this.receipt.source = 'Unknown'; this.receipt.failure = 'SourceReleaseUnconfirmed'; return this.receipt; } }
     if (this.file !== undefined) { try { await fileIo.close(this.file); this.file = undefined; this.receipt.file = 'Released'; } catch { this.receipt.file = 'Unknown'; this.receipt.failure = 'FileCloseUnconfirmed'; return this.receipt; } }
