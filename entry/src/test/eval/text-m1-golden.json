@@ -1,0 +1,15 @@
+{
+  "version": "text-m1-golden-v1",
+  "unit": "original UTF-16 half-open; lines one-based",
+  "fixtures": [
+    { "file": "deepseek-chat-completions.md", "bytes": 6970, "sha256": "0c3354a563437d81562d7222de65564f12041e10e57d38eca85a6a3671539231", "query": "补全对话内容", "evidence": "根据输入的上下文，来让模型补全对话内容。", "start": 154, "end": 174, "line": 9, "kind": "PARAGRAPH", "heading": "/chat/completions" },
+    { "file": "who-hypertension-factsheet.md", "bytes": 7567, "sha256": "ca942b149cdf688c72c3da34e2cb67c3e2609e8f73cd713e32208a2ab979cf73", "query": "140/90 mmHg", "evidence": "高血压是指血管压力过高（140/90 mmHg或更高）。", "start": 366, "end": 394, "line": 13, "kind": "PARAGRAPH", "heading": "概述" },
+    { "file": "apache-license-2.0.txt", "bytes": 11358, "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30", "query": "Definitions", "evidence": "1. Definitions.", "start": 227, "end": 242, "line": 8, "kind": "PARAGRAPH", "heading": "" },
+    { "file": "engineering-readme-mixed.md", "bytes": 3664, "sha256": "6865635a0a5ef1af99c73a502e8ca915bb1fde0ccf61169a07c92a565e3922ff", "query": "API Level 26", "evidence": "| HarmonyOS SDK | 26.0.0 | API Level 26 |", "start": 214, "end": 255, "line": 9, "kind": "TABLE", "heading": "1. 环境要求" },
+    { "file": "project-design-zh.md", "bytes": 13891, "sha256": "06c6a1146d298b80843f2f44ae80a5f39b424de5e70dfab5d02bc1fed4d474fd", "query": "平台范围是手机与平板", "evidence": "平台范围是手机与平板。", "start": 555, "end": 566, "line": 11, "kind": "PARAGRAPH", "heading": "一、目标与范围" },
+    { "file": "unicode-edge-cases.txt", "bytes": 3302, "sha256": "af5ae534cd547e6f0348a22eb628ead0811c8d0c44f7708b7f7808fe41857827", "query": "辅助平面字符", "evidence": "辅助平面字符：𝄞（U+1D11E）、𠀀（U+20000）、😀（U+1F600）", "start": 351, "end": 393, "line": 13, "kind": "PARAGRAPH", "heading": "" }
+  ],
+  "negativeQueries": ["M1不存在的海底火山样本", "无人资料中的ZXY987654321"],
+  "structure": ["ATX/Setext", "fenced code", "list", "table header and escaped/code pipes", "image references never loaded"],
+  "scope": "host fixed evidence, not semantic quality or device verification"
+}

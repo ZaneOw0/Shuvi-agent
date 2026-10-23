@@ -66,3 +66,32 @@ SDK 依据：安装包 `sdk/default/openharmony/ets/api/@ohos.data.relationalSto
 可发送的交接摘要：
 
 > 整合分支的本机构建及 Agent/搜索/网关测试已通过，但全量 Code Linter 未通过。当前 IDE CLI 退出 0，报告仍有 3 条 await-thenable 和 11 条深拷贝诊断，内部另有 12 条无效规则与 6 条分析异常。门禁已改为同时校验新报告及三个内部日志，不会误放行。请协助用 runner 的 CLT 复核，并确认 SDK、.NET 和 CODELINTER_LOG_DIR；具体位置及证据见本页。无需提供密钥或签名材料。
+
+## 6. 同步 RAG PR #17 后的合并复验
+
+2026-10-23，PR #17 已合入 main（`e040760`），PR #18 已创建为草稿。远端 #18 首次 CI 在工具链预检因 `DEVECO_SDK_HOME` 未配置或无效停止，尚未进入 lint；这与前文的本机 lint 失败是两个独立问题。以下记录对应 `1501c1b` 加本次合并工作区，尚未提交。
+
+四个冲突文件的处理：
+
+- `EntryAbility.ets`：保留来源服务绑定/释放、MCP 后台取消/销毁解除，以及 RAG 前台恢复、后台暂停和销毁清理。
+- `Index.ets`：保留全部知识库子页面和设置入口，保留搜索状态、取消、引用与重试；页面销毁同时取消搜索、释放知识库会话；助手异常演示提示不显示在其他一级页。
+- `run-host-tests.cjs`：同时登记原有日程/搜索 Mock 与 RAG 测试，不删除任何一边的套件。
+- `specs/README.md`：同时保留搜索与知识库契约链接，既有编号暂不重命名，避免破坏引用。
+
+本机 Node `24.14.1`，使用已安装 DevEco Studio SDK 与 Hvigor；未安装新依赖、未签名安装、未发起真实业务请求。当前没有可调用的 `arkts_check` / `build_project`，以 SDK 编译器的产品构建验证，不记作独立静态检查通过。
+
+| 检查 | 结果 | 日志目录（均位于 `.cache/test-logs/`） |
+|---|---|---|
+| `hvigorw.bat assembleHap --no-daemon` | 返回 0，未签名产品构建通过 | `2026-10-23-rag-agent-merge-build-1501c1b/` |
+| `node entry/src/test/run-host-tests.cjs` | 返回 7，固定语料校验阻断，未完成全量测试 | `2026-10-23-rag-agent-merge-host-1501c1b/`、`2026-10-23-rag-agent-merge-host-details-1501c1b/` |
+| 同上加 `--unified-only` | 返回 1，白名单路径初始化失败 | `2026-10-23-rag-agent-merge-unified-1501c1b/` |
+| 聚焦现有 Mock + 悬浮位置 + MCP 探针用例 | 20 + 9 + 13 项通过，不替代完整 RAG host | `2026-10-23-rag-agent-merge-ux-1501c1b/` |
+
+均经 `scripts/capture-test-log.sh`、`CAPTURE_HOST_ONLY=1` 留存命令退出状态和工作区指纹；host 检查另设 `CAPTURE_SAFE_HOST=1`。过滤器对构建与全量 host 原始输出采取整体隐藏，保留真实命令退出码；host 二次排障详细日志在 `.cache/rag-agent-merge-host-details.log`，不提交。实际本机包装命令为 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .local/repository-integration/verify-rag-merge.ps1 -Check <build|host|unified>`；等价复现命令为上表命令，设置 `DEVECO_SDK_HOME` 到本机 Studio SDK，构建使用 Studio 自带 JBR 和 Hvigor。聚焦 Mock 用例从本轮已生成的 `.cache/host-tests/entry/src/test/MockAssistantCases.js` 与 `MockSearchCases.js` 加载既有用例，随后运行 `run-floating-placement-tests.cjs`、`run-mcp-probe-tests.cjs`，本机入口为 `.local/repository-integration/verify-merged-ux.cjs`。
+
+阻塞定位：
+
+1. `fixtures/apache-license-2.0.txt` 在 Windows 工作区为 11560 字节；只将 CRLF 还原为 LF 后为冻结值 11358 字节，SHA256 为 `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30`。当前 `.gitattributes` 对 TXT 只有 `text=auto`，未固定 LF。核验只在内存完成，没有重写语料或冻结值；后续需统一固定语料的检出字节策略。
+2. `unified-host-entry.cjs` 使用 `path.relative(root,file)` 直接比较含 `/` 的白名单；Windows 返回 `domain\ParsedDocumentModels`，因此拒绝加载。后续应规范化分隔符并保留严格白名单，不能绕过校验。这两份文件相对 main 无内容改动，属于同步后暴露的 host 跨平台问题。
+
+用户人工反馈（2026-10-23）：按随后给出的四项操作，搜索样例完成并显示来源、知识库与我的资料入口、悬浮助手返回后聊天保留、“我的”页 MCP 与知识库设置入口并存及设置页返回，均“无异常”。未提供设备日志、版本和包哈希，按日志规范仅记人工反馈，不记已归档的正式设备验收；没有据此认定取消、日程回归、真实解析/模型调用或真机通过。完整 RAG host、lint 和远端 CI 仍不能记为通过。

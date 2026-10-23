@@ -5,6 +5,8 @@ import { DEBUG } from 'BuildProfile';
 import { McpConnectionCheck } from './McpConnectionCheck';
 
 interface FeatureRowOptions {
+  id?: string;
+  available?: boolean;
   title: string;
   description: string;
   icon: Resource;
@@ -12,6 +14,7 @@ interface FeatureRowOptions {
 }
 
 interface WorkbenchPageOptions {
+  onDocuments: () => void;
   recordCount: number;
   onCalendar: () => void;
   onNotice: (title: string, message: string) => void;
@@ -22,6 +25,9 @@ interface NoticePageOptions {
 }
 
 interface ProfilePageOptions extends NoticePageOptions {
+  onVisionSettings: () => void;
+  onParseSettings: () => void;
+  onEmbeddingSettings: () => void;
   floatingAssistantEnabled: boolean;
   onFloatingAssistantChange: (enabled: boolean) => void;
 }
@@ -40,7 +46,7 @@ export function FeatureRow($$: FeatureRowOptions) {
       AppIcon({ source: $r('app.media.ui_chevron_right'), size: 18 })
     }.width('100%').padding(16)
   }.width('100%').backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
-  .onClick($$.onOpen).accessibilityText(`${$$.title}，${$$.description}`)
+  .enabled($$.available ?? true).id($$.id ?? 'feature-' + $$.title).onClick($$.onOpen).accessibilityText(`${$$.title}，${$$.description}`)
 }
 
 // 使用 $$ 按引用传参，让演示日程数量随父页面状态更新。
@@ -53,8 +59,8 @@ export function WorkbenchPage($$: WorkbenchPageOptions) {
     }.width('100%').alignItems(HorizontalAlign.Start).margin({ top: 12, bottom: 16 })
     FeatureRow({ title: '日历日程', description: `${$$.recordCount} 条演示日程 · 查看与安排`, icon: $r('app.media.chat_calendar'),
       onOpen: $$.onCalendar })
-    FeatureRow({ title: '文件管理', description: '整理文件与资料 · 待接入', icon: $r('app.media.ui_folder'),
-      onOpen: () => $$.onNotice('文件管理', '文件浏览与分类待接入，本次不会读取设备文件。') })
+    FeatureRow({ title: '文件管理', description: '文档与图片 · 本机资料', icon: $r('app.media.ui_folder'), id: 'workbench-documents',
+      onOpen: $$.onDocuments })
     FeatureRow({ title: '联网搜索', description: '寻找信息与答案 · 待接入', icon: $r('app.media.chat_globe'),
       onOpen: () => $$.onNotice('联网搜索', '联网检索待接入，本次不会发送搜索请求。') })
     FeatureRow({ title: '长语音转写', description: '留下原文，提炼重点 · 待接入', icon: $r('app.media.ui_microphone'),
@@ -109,7 +115,7 @@ export function ProfilePage($$: ProfilePageOptions) {
     Column({ space: 12 }) {
       BrandAvatar({ size: 72 })
       Text('属于你的休比').fontSize(24).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
-      Text('未登录 · 当前为本地演示').fontSize(13).fontColor(Theme.muted)
+      Text('未登录 · 资料保存在本机').fontSize(13).fontColor(Theme.muted)
       Button('登录 / 注册', { type: ButtonType.Normal }).fontColor(Color.White).fontSize(14)
         .backgroundColor(Theme.accent).borderRadius(12).constraintSize({ minHeight: 44 })
         .onClick(() => $$.onNotice('登录与注册', '账号服务待接入。本次不会收集账号信息。'))
@@ -129,9 +135,12 @@ export function ProfilePage($$: ProfilePageOptions) {
       .backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
     FeatureRow({ title: '我的设备', description: '多设备管理 · 待接入', icon: $r('app.media.ui_devices'),
       onOpen: () => $$.onNotice('我的设备', '设备管理待接入，没有设备已绑定或同步。') })
+    FeatureRow({ title: '解析引擎', description: 'PDF、Word 与图片的文字识别', icon: $r('app.media.ui_document'), onOpen: $$.onParseSettings })
+    FeatureRow({ title: '图片理解', description: '图片描述、标签与自动处理', icon: $r('app.media.chat_book'), id: 'upd-profile-vision', onOpen: $$.onVisionSettings })
+    FeatureRow({ title: '嵌入模型', description: '让资料支持按意思搜索', icon: $r('app.media.ui_search'), onOpen: $$.onEmbeddingSettings })
     FeatureRow({ title: '主题与外观', description: '当前：奶油白与莓紫 · 切换待接入', icon: $r('app.media.ui_palette'),
       onOpen: () => $$.onNotice('主题与外观', '界面采用角色形象中的莓紫、深紫和奶油黄。主题切换和自定义将在后续实现。') })
     FeatureRow({ title: '关于 Shuvi', description: '让想法，成为行动', icon: $r('app.media.chat_info'),
-      onOpen: () => $$.onNotice('关于 Shuvi', '休比是你的个人助理。这是前端演示初稿：数据仅保留在当前页面实例中，退出重启后重置，不会产生真实提醒。') })
+      onOpen: () => $$.onNotice('关于 Shuvi', '休比是你的个人助理。知识库资料保存在本机；日程目前为演示功能，不会产生真实提醒。') })
   }.width('100%').padding({ bottom: 24 })
 }

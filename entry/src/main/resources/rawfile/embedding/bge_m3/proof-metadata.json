@@ -1,0 +1,1710 @@
+{
+  "schema": "BGE-M3-SCALAR-BOUND-1",
+  "modelId": "BAAI/bge-m3",
+  "source": "https://modelscope.cn/BAAI/bge-m3",
+  "revision": "a46a13810c9d7f876fccd8d7017512ebc265d2c1",
+  "upstreamHuggingFaceRevision": "NotIndependentlyResolved",
+  "providerRevision": "NotReported",
+  "baseModelType": "xlm-roberta",
+  "license": {
+    "identifier": "MIT",
+    "declaration": "README.md frontmatter at pinned revision",
+    "noticeSource": "Official FlagEmbedding 1.4.2 distribution LICENSE; copyright (c) 2022 staoxiao",
+    "noticeSourceArchiveSha256": "c9dfd0faac52ae7f87a7ac47bd58fdacdd0ce3ef48a097b8255ddc86df88bb1b"
+  },
+  "referenceImplementation": {
+    "fast": "huggingface/tokenizers 0.22.1",
+    "slowNormalizer": "google/sentencepiece 0.2.1",
+    "fastSourceArchiveSha256": "61de6522785310a309b3407bac22d99c4db5dba349935e99e4d15ea2226af2d9",
+    "scope": "Official public host reference only; no runtime dependency; provider equivalence not established"
+  },
+  "artifacts": [
+    {
+      "file": "sentencepiece.bpe.model",
+      "bytes": 5069051,
+      "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
+      "url": "https://modelscope.cn/api/v1/models/BAAI/bge-m3/repo?Revision=a46a13810c9d7f876fccd8d7017512ebc265d2c1&FilePath=sentencepiece.bpe.model"
+    },
+    {
+      "file": "tokenizer.json",
+      "bytes": 17098108,
+      "sha256": "21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08",
+      "url": "https://modelscope.cn/api/v1/models/BAAI/bge-m3/repo?Revision=a46a13810c9d7f876fccd8d7017512ebc265d2c1&FilePath=tokenizer.json"
+    },
+    {
+      "file": "tokenizer_config.json",
+      "bytes": 444,
+      "sha256": "a62b2b6784f990259fddef5f16388693a8043be4f69179e6a5257eeb3f9abac4",
+      "url": "https://modelscope.cn/api/v1/models/BAAI/bge-m3/repo?Revision=a46a13810c9d7f876fccd8d7017512ebc265d2c1&FilePath=tokenizer_config.json"
+    },
+    {
+      "file": "special_tokens_map.json",
+      "bytes": 964,
+      "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
+      "url": "https://modelscope.cn/api/v1/models/BAAI/bge-m3/repo?Revision=a46a13810c9d7f876fccd8d7017512ebc265d2c1&FilePath=special_tokens_map.json"
+    },
+    {
+      "file": "config.json",
+      "bytes": 687,
+      "sha256": "26159e7ad065073448460117eb24b7a4572f6f4e78eadff65dc0a11c052449fa",
+      "url": "https://modelscope.cn/api/v1/models/BAAI/bge-m3/repo?Revision=a46a13810c9d7f876fccd8d7017512ebc265d2c1&FilePath=config.json"
+    },
+    {
+      "file": "README.md",
+      "bytes": 15822,
+      "sha256": "0b81ccf9134e5874d620a86e6905062ea999e779c34eb1a7e65eaeb7fe00e450",
+      "url": "https://modelscope.cn/api/v1/models/BAAI/bge-m3/repo?Revision=a46a13810c9d7f876fccd8d7017512ebc265d2c1&FilePath=README.md"
+    }
+  ],
+  "sentencepiece": {
+    "modelType": 1,
+    "byteFallback": false,
+    "byteFallbackFieldPresent": false,
+    "modelTypeFieldPresent": true,
+    "treatWhitespaceAsSuffix": false,
+    "pieceTypes": {
+      "1": 249997,
+      "2": 1,
+      "3": 2
+    },
+    "userDefinedSymbols": [],
+    "normalizer": {
+      "name": "nmt_nfkc",
+      "addDummyPrefix": true,
+      "removeExtraWhitespaces": true,
+      "escapeWhitespaces": true,
+      "charsmapBytes": 237539,
+      "charsmapSha256": "0942789e0111452f1cc446f70036e26d24458c3c7858c53cc12ca4d87531279b",
+      "trieBytes": 177152,
+      "outputBytes": 60383
+    }
+  },
+  "fast": {
+    "version": "1.0",
+    "truncation": null,
+    "padding": null,
+    "addedTokens": [
+      {
+        "id": 0,
+        "content": "<s>",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      },
+      {
+        "id": 1,
+        "content": "<pad>",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      },
+      {
+        "id": 2,
+        "content": "</s>",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      },
+      {
+        "id": 3,
+        "content": "<unk>",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      },
+      {
+        "id": 250001,
+        "content": "<mask>",
+        "single_word": false,
+        "lstrip": true,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      }
+    ],
+    "normalizer": {
+      "type": "Sequence",
+      "normalizers": [
+        {
+          "type": "Precompiled",
+          "charsmapSha256": "0942789e0111452f1cc446f70036e26d24458c3c7858c53cc12ca4d87531279b"
+        },
+        {
+          "type": "Replace",
+          "pattern": {
+            "Regex": " {2,}"
+          },
+          "content": " "
+        }
+      ]
+    },
+    "preTokenizer": {
+      "type": "Metaspace",
+      "replacement": "▁",
+      "add_prefix_space": true
+    },
+    "postProcessor": {
+      "type": "TemplateProcessing",
+      "single": [
+        {
+          "SpecialToken": {
+            "id": "<s>",
+            "type_id": 0
+          }
+        },
+        {
+          "Sequence": {
+            "id": "A",
+            "type_id": 0
+          }
+        },
+        {
+          "SpecialToken": {
+            "id": "</s>",
+            "type_id": 0
+          }
+        }
+      ],
+      "pair": [
+        {
+          "SpecialToken": {
+            "id": "<s>",
+            "type_id": 0
+          }
+        },
+        {
+          "Sequence": {
+            "id": "A",
+            "type_id": 0
+          }
+        },
+        {
+          "SpecialToken": {
+            "id": "</s>",
+            "type_id": 0
+          }
+        },
+        {
+          "SpecialToken": {
+            "id": "</s>",
+            "type_id": 0
+          }
+        },
+        {
+          "Sequence": {
+            "id": "B",
+            "type_id": 0
+          }
+        },
+        {
+          "SpecialToken": {
+            "id": "</s>",
+            "type_id": 0
+          }
+        }
+      ],
+      "special_tokens": {
+        "</s>": {
+          "id": "</s>",
+          "ids": [
+            2
+          ],
+          "tokens": [
+            "</s>"
+          ]
+        },
+        "<s>": {
+          "id": "<s>",
+          "ids": [
+            0
+          ],
+          "tokens": [
+            "<s>"
+          ]
+        }
+      }
+    },
+    "modelType": "Unigram",
+    "unkId": 3,
+    "byteFallback": false,
+    "byteFallbackFieldPresent": true,
+    "byteFallbackDefaultEvidence": "tokenizers 0.22.1 tokenizers/src/models/unigram/serialization.rs:51",
+    "vocabularySize": 250002,
+    "emptyPieces": 0
+  },
+  "tokenizerConfig": {
+    "bos_token": "<s>",
+    "clean_up_tokenization_spaces": true,
+    "cls_token": "<s>",
+    "eos_token": "</s>",
+    "mask_token": {
+      "__type": "AddedToken",
+      "content": "<mask>",
+      "lstrip": true,
+      "normalized": true,
+      "rstrip": false,
+      "single_word": false
+    },
+    "model_max_length": 8192,
+    "pad_token": "<pad>",
+    "sep_token": "</s>",
+    "sp_model_kwargs": {},
+    "tokenizer_class": "XLMRobertaTokenizer",
+    "unk_token": "<unk>"
+  },
+  "specialTokensMap": {
+    "bos_token": {
+      "content": "<s>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false
+    },
+    "cls_token": {
+      "content": "<s>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false
+    },
+    "eos_token": {
+      "content": "</s>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false
+    },
+    "mask_token": {
+      "content": "<mask>",
+      "lstrip": true,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false
+    },
+    "pad_token": {
+      "content": "<pad>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false
+    },
+    "sep_token": {
+      "content": "</s>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false
+    },
+    "unk_token": {
+      "content": "<unk>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false
+    }
+  },
+  "derivation": {
+    "ruleCount": 224711,
+    "expandingFirstScalars": 1235,
+    "rangeCount": 277,
+    "maximumWeight": 18,
+    "defaultWeight": 1,
+    "ruleSha256": "33495a96e6cc571ac7ae677e2c44bbe1a3bd0d7d996092c763134d039734deeb",
+    "weightsSha256": "c7b2f6b605b65eecfbfa2678594a4ddbfdeb2dbf67930356e6a66623dc06d45e",
+    "ranges": [
+      [
+        168,
+        168,
+        2
+      ],
+      [
+        175,
+        175,
+        2
+      ],
+      [
+        180,
+        180,
+        2
+      ],
+      [
+        184,
+        184,
+        2
+      ],
+      [
+        188,
+        190,
+        3
+      ],
+      [
+        306,
+        307,
+        2
+      ],
+      [
+        319,
+        320,
+        2
+      ],
+      [
+        329,
+        329,
+        2
+      ],
+      [
+        452,
+        460,
+        2
+      ],
+      [
+        497,
+        499,
+        2
+      ],
+      [
+        728,
+        733,
+        2
+      ],
+      [
+        836,
+        836,
+        2
+      ],
+      [
+        890,
+        890,
+        2
+      ],
+      [
+        900,
+        900,
+        2
+      ],
+      [
+        901,
+        901,
+        3
+      ],
+      [
+        1415,
+        1415,
+        2
+      ],
+      [
+        1653,
+        1656,
+        2
+      ],
+      [
+        2392,
+        2399,
+        2
+      ],
+      [
+        2524,
+        2525,
+        2
+      ],
+      [
+        2527,
+        2527,
+        2
+      ],
+      [
+        2611,
+        2611,
+        2
+      ],
+      [
+        2614,
+        2614,
+        2
+      ],
+      [
+        2649,
+        2651,
+        2
+      ],
+      [
+        2654,
+        2654,
+        2
+      ],
+      [
+        2908,
+        2909,
+        2
+      ],
+      [
+        3635,
+        3635,
+        2
+      ],
+      [
+        3763,
+        3763,
+        2
+      ],
+      [
+        3804,
+        3805,
+        2
+      ],
+      [
+        3907,
+        3907,
+        2
+      ],
+      [
+        3917,
+        3917,
+        2
+      ],
+      [
+        3922,
+        3922,
+        2
+      ],
+      [
+        3927,
+        3927,
+        2
+      ],
+      [
+        3932,
+        3932,
+        2
+      ],
+      [
+        3945,
+        3945,
+        2
+      ],
+      [
+        3955,
+        3955,
+        2
+      ],
+      [
+        3957,
+        3958,
+        2
+      ],
+      [
+        3959,
+        3959,
+        3
+      ],
+      [
+        3960,
+        3960,
+        2
+      ],
+      [
+        3961,
+        3961,
+        3
+      ],
+      [
+        3969,
+        3969,
+        2
+      ],
+      [
+        3987,
+        3987,
+        2
+      ],
+      [
+        3997,
+        3997,
+        2
+      ],
+      [
+        4002,
+        4002,
+        2
+      ],
+      [
+        4007,
+        4007,
+        2
+      ],
+      [
+        4012,
+        4012,
+        2
+      ],
+      [
+        4025,
+        4025,
+        2
+      ],
+      [
+        7834,
+        7834,
+        2
+      ],
+      [
+        8125,
+        8125,
+        2
+      ],
+      [
+        8127,
+        8128,
+        2
+      ],
+      [
+        8129,
+        8129,
+        3
+      ],
+      [
+        8141,
+        8143,
+        3
+      ],
+      [
+        8157,
+        8159,
+        3
+      ],
+      [
+        8173,
+        8174,
+        3
+      ],
+      [
+        8189,
+        8190,
+        2
+      ],
+      [
+        8215,
+        8215,
+        2
+      ],
+      [
+        8229,
+        8229,
+        2
+      ],
+      [
+        8230,
+        8230,
+        3
+      ],
+      [
+        8243,
+        8243,
+        2
+      ],
+      [
+        8244,
+        8244,
+        3
+      ],
+      [
+        8246,
+        8246,
+        2
+      ],
+      [
+        8247,
+        8247,
+        3
+      ],
+      [
+        8252,
+        8252,
+        2
+      ],
+      [
+        8254,
+        8254,
+        2
+      ],
+      [
+        8263,
+        8265,
+        2
+      ],
+      [
+        8279,
+        8279,
+        4
+      ],
+      [
+        8360,
+        8360,
+        2
+      ],
+      [
+        8448,
+        8449,
+        3
+      ],
+      [
+        8451,
+        8451,
+        2
+      ],
+      [
+        8453,
+        8454,
+        3
+      ],
+      [
+        8457,
+        8457,
+        2
+      ],
+      [
+        8470,
+        8470,
+        2
+      ],
+      [
+        8480,
+        8480,
+        2
+      ],
+      [
+        8481,
+        8481,
+        3
+      ],
+      [
+        8482,
+        8482,
+        2
+      ],
+      [
+        8507,
+        8507,
+        3
+      ],
+      [
+        8528,
+        8529,
+        3
+      ],
+      [
+        8530,
+        8530,
+        4
+      ],
+      [
+        8531,
+        8542,
+        3
+      ],
+      [
+        8543,
+        8543,
+        2
+      ],
+      [
+        8545,
+        8545,
+        2
+      ],
+      [
+        8546,
+        8546,
+        3
+      ],
+      [
+        8547,
+        8547,
+        2
+      ],
+      [
+        8549,
+        8549,
+        2
+      ],
+      [
+        8550,
+        8550,
+        3
+      ],
+      [
+        8551,
+        8551,
+        4
+      ],
+      [
+        8552,
+        8552,
+        2
+      ],
+      [
+        8554,
+        8554,
+        2
+      ],
+      [
+        8555,
+        8555,
+        3
+      ],
+      [
+        8561,
+        8561,
+        2
+      ],
+      [
+        8562,
+        8562,
+        3
+      ],
+      [
+        8563,
+        8563,
+        2
+      ],
+      [
+        8565,
+        8565,
+        2
+      ],
+      [
+        8566,
+        8566,
+        3
+      ],
+      [
+        8567,
+        8567,
+        4
+      ],
+      [
+        8568,
+        8568,
+        2
+      ],
+      [
+        8570,
+        8570,
+        2
+      ],
+      [
+        8571,
+        8571,
+        3
+      ],
+      [
+        8585,
+        8585,
+        3
+      ],
+      [
+        8748,
+        8748,
+        2
+      ],
+      [
+        8749,
+        8749,
+        3
+      ],
+      [
+        8751,
+        8751,
+        2
+      ],
+      [
+        8752,
+        8752,
+        3
+      ],
+      [
+        9321,
+        9331,
+        2
+      ],
+      [
+        9332,
+        9340,
+        3
+      ],
+      [
+        9341,
+        9351,
+        4
+      ],
+      [
+        9352,
+        9360,
+        2
+      ],
+      [
+        9361,
+        9397,
+        3
+      ],
+      [
+        10764,
+        10764,
+        4
+      ],
+      [
+        10868,
+        10868,
+        3
+      ],
+      [
+        10869,
+        10869,
+        2
+      ],
+      [
+        10870,
+        10870,
+        3
+      ],
+      [
+        10972,
+        10972,
+        2
+      ],
+      [
+        12443,
+        12444,
+        2
+      ],
+      [
+        12447,
+        12447,
+        2
+      ],
+      [
+        12543,
+        12543,
+        2
+      ],
+      [
+        12800,
+        12828,
+        3
+      ],
+      [
+        12829,
+        12830,
+        4
+      ],
+      [
+        12832,
+        12867,
+        3
+      ],
+      [
+        12880,
+        12880,
+        3
+      ],
+      [
+        12881,
+        12895,
+        2
+      ],
+      [
+        12924,
+        12925,
+        2
+      ],
+      [
+        12977,
+        13000,
+        2
+      ],
+      [
+        13001,
+        13003,
+        3
+      ],
+      [
+        13004,
+        13004,
+        2
+      ],
+      [
+        13005,
+        13005,
+        3
+      ],
+      [
+        13006,
+        13006,
+        2
+      ],
+      [
+        13007,
+        13007,
+        3
+      ],
+      [
+        13056,
+        13058,
+        4
+      ],
+      [
+        13059,
+        13059,
+        3
+      ],
+      [
+        13060,
+        13060,
+        4
+      ],
+      [
+        13061,
+        13062,
+        3
+      ],
+      [
+        13063,
+        13063,
+        5
+      ],
+      [
+        13064,
+        13064,
+        4
+      ],
+      [
+        13065,
+        13067,
+        3
+      ],
+      [
+        13068,
+        13069,
+        4
+      ],
+      [
+        13070,
+        13071,
+        3
+      ],
+      [
+        13072,
+        13072,
+        2
+      ],
+      [
+        13073,
+        13073,
+        3
+      ],
+      [
+        13074,
+        13075,
+        4
+      ],
+      [
+        13076,
+        13076,
+        2
+      ],
+      [
+        13077,
+        13077,
+        5
+      ],
+      [
+        13078,
+        13078,
+        6
+      ],
+      [
+        13079,
+        13079,
+        5
+      ],
+      [
+        13080,
+        13080,
+        3
+      ],
+      [
+        13081,
+        13082,
+        5
+      ],
+      [
+        13083,
+        13083,
+        4
+      ],
+      [
+        13084,
+        13086,
+        3
+      ],
+      [
+        13087,
+        13087,
+        4
+      ],
+      [
+        13088,
+        13088,
+        5
+      ],
+      [
+        13089,
+        13089,
+        4
+      ],
+      [
+        13090,
+        13092,
+        3
+      ],
+      [
+        13093,
+        13096,
+        2
+      ],
+      [
+        13097,
+        13098,
+        3
+      ],
+      [
+        13099,
+        13099,
+        5
+      ],
+      [
+        13100,
+        13100,
+        3
+      ],
+      [
+        13101,
+        13101,
+        4
+      ],
+      [
+        13102,
+        13102,
+        5
+      ],
+      [
+        13103,
+        13103,
+        3
+      ],
+      [
+        13104,
+        13105,
+        2
+      ],
+      [
+        13106,
+        13106,
+        5
+      ],
+      [
+        13107,
+        13107,
+        4
+      ],
+      [
+        13108,
+        13108,
+        5
+      ],
+      [
+        13109,
+        13109,
+        3
+      ],
+      [
+        13110,
+        13110,
+        5
+      ],
+      [
+        13111,
+        13111,
+        2
+      ],
+      [
+        13112,
+        13116,
+        3
+      ],
+      [
+        13117,
+        13117,
+        4
+      ],
+      [
+        13118,
+        13118,
+        3
+      ],
+      [
+        13119,
+        13119,
+        2
+      ],
+      [
+        13120,
+        13122,
+        3
+      ],
+      [
+        13123,
+        13123,
+        4
+      ],
+      [
+        13124,
+        13126,
+        3
+      ],
+      [
+        13127,
+        13127,
+        5
+      ],
+      [
+        13128,
+        13128,
+        4
+      ],
+      [
+        13129,
+        13129,
+        2
+      ],
+      [
+        13130,
+        13130,
+        5
+      ],
+      [
+        13131,
+        13131,
+        2
+      ],
+      [
+        13132,
+        13133,
+        4
+      ],
+      [
+        13134,
+        13136,
+        3
+      ],
+      [
+        13137,
+        13137,
+        4
+      ],
+      [
+        13138,
+        13138,
+        2
+      ],
+      [
+        13139,
+        13139,
+        3
+      ],
+      [
+        13140,
+        13140,
+        4
+      ],
+      [
+        13141,
+        13141,
+        2
+      ],
+      [
+        13142,
+        13142,
+        5
+      ],
+      [
+        13143,
+        13143,
+        3
+      ],
+      [
+        13144,
+        13153,
+        2
+      ],
+      [
+        13154,
+        13169,
+        3
+      ],
+      [
+        13170,
+        13171,
+        2
+      ],
+      [
+        13172,
+        13172,
+        3
+      ],
+      [
+        13173,
+        13175,
+        2
+      ],
+      [
+        13176,
+        13177,
+        3
+      ],
+      [
+        13178,
+        13182,
+        2
+      ],
+      [
+        13183,
+        13183,
+        4
+      ],
+      [
+        13184,
+        13191,
+        2
+      ],
+      [
+        13192,
+        13192,
+        3
+      ],
+      [
+        13193,
+        13193,
+        4
+      ],
+      [
+        13194,
+        13200,
+        2
+      ],
+      [
+        13201,
+        13204,
+        3
+      ],
+      [
+        13205,
+        13214,
+        2
+      ],
+      [
+        13215,
+        13216,
+        3
+      ],
+      [
+        13217,
+        13217,
+        2
+      ],
+      [
+        13218,
+        13220,
+        3
+      ],
+      [
+        13221,
+        13221,
+        2
+      ],
+      [
+        13222,
+        13223,
+        3
+      ],
+      [
+        13224,
+        13224,
+        4
+      ],
+      [
+        13225,
+        13225,
+        2
+      ],
+      [
+        13226,
+        13229,
+        3
+      ],
+      [
+        13230,
+        13230,
+        5
+      ],
+      [
+        13231,
+        13231,
+        6
+      ],
+      [
+        13232,
+        13249,
+        2
+      ],
+      [
+        13250,
+        13250,
+        4
+      ],
+      [
+        13251,
+        13253,
+        2
+      ],
+      [
+        13254,
+        13254,
+        4
+      ],
+      [
+        13255,
+        13255,
+        3
+      ],
+      [
+        13256,
+        13265,
+        2
+      ],
+      [
+        13266,
+        13266,
+        3
+      ],
+      [
+        13267,
+        13268,
+        2
+      ],
+      [
+        13269,
+        13270,
+        3
+      ],
+      [
+        13271,
+        13271,
+        2
+      ],
+      [
+        13272,
+        13272,
+        4
+      ],
+      [
+        13273,
+        13273,
+        3
+      ],
+      [
+        13274,
+        13277,
+        2
+      ],
+      [
+        13278,
+        13279,
+        3
+      ],
+      [
+        13280,
+        13288,
+        2
+      ],
+      [
+        13289,
+        13311,
+        3
+      ],
+      [
+        64256,
+        64258,
+        2
+      ],
+      [
+        64259,
+        64260,
+        3
+      ],
+      [
+        64261,
+        64262,
+        2
+      ],
+      [
+        64275,
+        64279,
+        2
+      ],
+      [
+        64285,
+        64285,
+        2
+      ],
+      [
+        64287,
+        64287,
+        2
+      ],
+      [
+        64298,
+        64299,
+        2
+      ],
+      [
+        64300,
+        64301,
+        3
+      ],
+      [
+        64302,
+        64310,
+        2
+      ],
+      [
+        64312,
+        64316,
+        2
+      ],
+      [
+        64318,
+        64318,
+        2
+      ],
+      [
+        64320,
+        64321,
+        2
+      ],
+      [
+        64323,
+        64324,
+        2
+      ],
+      [
+        64326,
+        64335,
+        2
+      ],
+      [
+        64477,
+        64477,
+        2
+      ],
+      [
+        64490,
+        64507,
+        2
+      ],
+      [
+        64512,
+        64605,
+        2
+      ],
+      [
+        64606,
+        64611,
+        3
+      ],
+      [
+        64612,
+        64753,
+        2
+      ],
+      [
+        64754,
+        64756,
+        3
+      ],
+      [
+        64757,
+        64829,
+        2
+      ],
+      [
+        64848,
+        64911,
+        3
+      ],
+      [
+        64914,
+        64967,
+        3
+      ],
+      [
+        65008,
+        65009,
+        3
+      ],
+      [
+        65010,
+        65016,
+        4
+      ],
+      [
+        65017,
+        65017,
+        3
+      ],
+      [
+        65018,
+        65018,
+        18
+      ],
+      [
+        65019,
+        65019,
+        8
+      ],
+      [
+        65020,
+        65020,
+        4
+      ],
+      [
+        65049,
+        65049,
+        3
+      ],
+      [
+        65072,
+        65072,
+        2
+      ],
+      [
+        65097,
+        65100,
+        2
+      ],
+      [
+        65136,
+        65138,
+        2
+      ],
+      [
+        65140,
+        65140,
+        2
+      ],
+      [
+        65142,
+        65151,
+        2
+      ],
+      [
+        65269,
+        65276,
+        2
+      ],
+      [
+        65507,
+        65507,
+        2
+      ],
+      [
+        119134,
+        119135,
+        2
+      ],
+      [
+        119136,
+        119140,
+        3
+      ],
+      [
+        119227,
+        119228,
+        2
+      ],
+      [
+        119229,
+        119232,
+        3
+      ],
+      [
+        127232,
+        127242,
+        2
+      ],
+      [
+        127248,
+        127274,
+        3
+      ],
+      [
+        127277,
+        127278,
+        2
+      ],
+      [
+        127306,
+        127309,
+        2
+      ],
+      [
+        127310,
+        127310,
+        3
+      ],
+      [
+        127311,
+        127311,
+        2
+      ],
+      [
+        127338,
+        127339,
+        2
+      ],
+      [
+        127376,
+        127376,
+        2
+      ],
+      [
+        127488,
+        127489,
+        2
+      ],
+      [
+        127552,
+        127560,
+        3
+      ]
+    ]
+  }
+}

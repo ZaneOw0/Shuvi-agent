@@ -18,6 +18,12 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { SourceLinkService } from '../services/SourceLinkService';
 import { McpConnectionCheckService } from '../services/McpConnectionCheckService';
+import { DocumentParseAssembly } from '../knowledge/infra/DocumentParseAssembly';
+import { KnowledgeAssembly } from '../knowledge/infra/KnowledgeAssembly';
+import { SemanticQualitySession } from '../knowledge/platformtests/SemanticQualitySuite';
+import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
+import { DocxIngestionService } from '../knowledge/application/DocxIngestionService';
+import { ImageIntegrationSuite } from '../knowledge/platformtests/ImageIntegrationSuite';
 
 const DOMAIN = 0x0000;
 
@@ -35,6 +41,12 @@ export default class EntryAbility extends UIAbility {
   onDestroy(): void {
     McpConnectionCheckService.session.detach();
     SourceLinkService.release();
+    DocxIngestionService.background();
+    ImageIntegrationSuite.background();
+    ImageIngestionService.background();
+    SemanticQualitySession.background();
+    KnowledgeAssembly.background();
+    DocumentParseAssembly.background();
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
   }
 
@@ -57,12 +69,19 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
+    KnowledgeAssembly.foreground();
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 
   onBackground(): void {
     McpConnectionCheckService.session.cancel();
+    DocxIngestionService.background();
+    ImageIntegrationSuite.background();
+    ImageIngestionService.background();
+    SemanticQualitySession.background();
+    KnowledgeAssembly.background();
+    DocumentParseAssembly.background();
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
   }

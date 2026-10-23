@@ -14,15 +14,64 @@
  */
 import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { Theme } from '../components/Theme';
+import { WorkbenchPage, ProfilePage } from '../components/FeaturePages';
+import { TextKnowledgeView } from '../knowledge/ui/TextKnowledgeView';
+import { TextKnowledgeAssembly } from '../knowledge/infra/TextKnowledgeAssembly';
+import { TextKnowledgeService } from '../knowledge/application/TextKnowledgeService';
+import { TextViewState, TextHit } from '../knowledge/domain/TextKnowledgeModels';
+import { DocumentParseAssembly } from '../knowledge/infra/DocumentParseAssembly';
+import { DocumentParseService } from '../knowledge/application/DocumentParseService';
+import { DocumentParseViewState } from '../knowledge/domain/DocumentParseModels';
+import { DocumentParseView } from '../knowledge/ui/DocumentParseView';
+import { KnowledgeAssembly } from '../knowledge/infra/KnowledgeAssembly';
+import { EmbeddingSettingsView } from '../knowledge/ui/EmbeddingSettingsView';
+import { EmbeddingService } from '../knowledge/application/EmbeddingService';
+import { PdfIngestionService } from '../knowledge/application/PdfIngestionService';
+import { PdfIngestionView } from '../knowledge/ui/PdfIngestionView';
+import { KnowledgeView } from '../knowledge/ui/KnowledgeView';
+import { KnowledgeSearchService } from '../knowledge/application/KnowledgeSearchService';
+import { KnowledgeHit, KnowledgeSourceKind } from '../knowledge/domain/KnowledgeSearchModels';
+import { PdfPageAdapter } from '../knowledge/infra/PdfPageAdapter';
+import { PdfSourceView } from '../knowledge/ui/PdfSourceView';
+import { PdfSourceBinding, PdfLocator, PdfKnowledgeDocument } from '../knowledge/domain/PdfKnowledgeModels';
+import { KnowledgeDerivedLifecycle } from '../knowledge/application/KnowledgeLifecycleService';
+import { KnowledgeDocumentListPort } from '../knowledge/domain/KnowledgePorts';
 import { AssistantWelcome, CalendarDraftCard } from '../components/ChatVisuals';
 import { AppIcon } from '../components/AppIcon';
 import { BrandAvatar } from '../components/BrandAvatar';
-import { WorkbenchPage, KnowledgePage, ProfilePage } from '../components/FeaturePages';
 import {
   AssistantService, CalendarDraft, ChatMessage, DEMO_SCENARIOS, DemoScenario,
   OperationResult, OperationState, RequestState
 } from '../model/AssistantModels';
 import { MockAssistantService } from '../mock/MockAssistantService';
+import { KnowledgePlatformDiagnostics } from '../knowledge/ui/KnowledgePlatformDiagnostics';
+import { PdfPageReferenceState, ResultPageReference } from '../knowledge/domain/PdfLocalModels';
+import { KnowledgeCancellation } from '../knowledge/domain/PdfKnowledgeModels';
+import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
+import { ImageIngestionView } from '../knowledge/ui/ImageIngestionView';
+import { ImageSourceView } from '../knowledge/ui/ImageSourceView';
+import { ImageOriginalAdapter } from '../knowledge/infra/ImageOriginalAdapter';
+import { ImageProcessingAdapter } from '../knowledge/infra/ImageProcessingAdapter';
+import { ImageResultReader } from '../knowledge/infra/ImageResultReader';
+import { KnowledgePlatformIdentity } from '../knowledge/infra/KnowledgeAssembly';
+import { KnowledgeStorageScope } from '../knowledge/domain/KnowledgeStorageScope';
+import { ImageDocument } from '../knowledge/domain/ImageKnowledgeModels';
+import { ImageVectorRepository } from '../knowledge/infra/ImageVectorRepository';
+import { DocxIngestionService } from '../knowledge/application/DocxIngestionService';
+import { DocxIngestionView } from '../knowledge/ui/DocxIngestionView';
+import { DocxSourceView } from '../knowledge/ui/DocxSourceView';
+import { DocxProcessingAdapter } from '../knowledge/infra/DocxProcessingAdapter';
+import { DocxResultReader } from '../knowledge/infra/DocxResultReader';
+import { DocxFailure } from '../knowledge/domain/DocxKnowledgeModels';
+import { KnowledgeFailure } from '../knowledge/domain/PdfKnowledgeModels';
+import { UnifiedKnowledgeView } from '../knowledge/ui/UnifiedKnowledgeView';
+import { ParsedDocumentView } from '../knowledge/ui/ParsedDocumentView';
+import { ParsedDocumentIngestionService } from '../knowledge/application/ParsedDocumentIngestionService';
+import { ParsedDocumentImportAdapter } from '../knowledge/infra/ParsedDocumentImportAdapter';
+import { VisionSettingsView } from '../knowledge/ui/VisionSettingsView';
+import { ImageKnowledgeView } from '../knowledge/ui/ImageKnowledgeView';
+import { KnowledgeMigrationView } from '../knowledge/ui/KnowledgeMigrationView';
+import { UnifiedSearchCard } from '../knowledge/domain/UnifiedQueryModels';
 import { FloatingAssistantPlacement } from '../model/FloatingAssistantPlacement';
 import { SearchResultCard } from '../components/SearchResultCard';
 import { MockSearchSession } from '../mock/MockSearchSession';
@@ -33,6 +82,22 @@ import { SourceLinkService } from '../services/SourceLinkService';
 @Entry
 @Component
 struct Index {
+  @State migrationOpen: boolean=false;
+  @State visionSettingsOpen: boolean=false;
+  @State imageKnowledgeOpen: boolean=false;
+  @State imageKnowledgeOccurrence: string='';
+  @State parsedImportOpen: boolean = false;
+  @State developerToolsOpen: boolean = false;
+  @State parsedOpen: boolean = false;
+  @State knowledgeOpening: boolean = false;
+  @State knowledgeMessage: string = '';
+  private knowledgeLoad: Promise<void> | undefined = undefined;
+  @State knowledgeReady: boolean = false;
+  @State parsedDocumentId: string = '';
+  @State parsedOpening: boolean = false;
+  @State parsedMessage: string = '';
+  private parsedService: ParsedDocumentIngestionService | undefined = undefined;
+  private parsedImports: ParsedDocumentImportAdapter | undefined = undefined;
   @State tab: number = 0;
   @State calendarOpen: boolean = false;
   @State input: string = '';
@@ -45,6 +110,37 @@ struct Index {
   @State requestState: RequestState = RequestState.Unsupported;
   @State scenario: DemoScenario = DemoScenario.Normal;
   @State showScenarios: boolean = false;
+  @State knowledgeState: TextViewState = new TextViewState();
+  private knowledgeService: TextKnowledgeService | undefined = undefined;
+  private knowledgeAssembly: TextKnowledgeAssembly | undefined = undefined;
+  @State parseState: DocumentParseViewState = new DocumentParseViewState();
+  private parseService: DocumentParseService | undefined = undefined;
+  @State parseOpen: boolean = false;
+  @State parseSettings: boolean = false;
+  @State embeddingOpen: boolean = false;
+  @State pdfIngestionOpen: boolean = false;
+  private pdfIngestionService: PdfIngestionService | undefined = undefined;
+  private unifiedSearchService: KnowledgeSearchService | undefined = undefined;
+  @State pdfSourceOpen: boolean = false;
+  @State pdfSourceBinding: PdfSourceBinding = new PdfSourceBinding();
+  @State pdfSourceLocator: PdfLocator = new PdfLocator();
+  private pdfPageAdapter: PdfPageAdapter | undefined = undefined;
+  private derivedLifecycle: KnowledgeDerivedLifecycle | undefined = undefined;
+  private pdfDocumentsPort: KnowledgeDocumentListPort | undefined = undefined;
+  private embeddingService: EmbeddingService | undefined = undefined;
+  @State embeddingClearEpoch: number = 0;
+  @State platformDiagnosticsOpen: boolean = false;
+  @State imageIngestionOpen: boolean = false;
+  @State imageSourceOpen: boolean = false;
+  @State docxIngestionOpen: boolean = false;
+  @State docxSourceOpen: boolean = false;
+  private docxIngestionService: DocxIngestionService | undefined = undefined;
+  @State docxOpening: boolean = false;
+  @State docxEntryMessage: string = '';
+  private imageIngestionService: ImageIngestionService | undefined = undefined;
+  private sharedKnowledge: KnowledgeAssembly | undefined = undefined;
+  private knowledgeListener: () => void=(): void=> { if (this.alive && this.knowledgeAssembly!==undefined) { this.knowledgeState=this.knowledgeAssembly.service.viewState(); } };
+  private parseAssembly: DocumentParseAssembly | undefined = undefined;
   @State drawerOpen: boolean = false;
   @State floatingAssistantEnabled: boolean = true;
   @State floatingPlacement: FloatingAssistantPlacement = new FloatingAssistantPlacement();
@@ -75,8 +171,17 @@ struct Index {
 
   aboutToDisappear(): void {
     this.alive = false;
+    this.docxIngestionService?.pause();
     this.service.cancel(this.requestId);
     this.searchSession.cancel();
+    this.knowledgeAssembly = undefined;
+    this.embeddingService?.pause(); this.closeKnowledgeSession().catch((): void => { this.parsedMessage='会话释放未确认；保留本机持有，可重试释放'; });
+  }
+  private async closeKnowledgeSession(): Promise<void> {
+    this.sharedKnowledge?.unsubscribe(this.knowledgeListener);
+    await this.sharedKnowledge?.quiesceUnified();
+    await this.docxIngestionService?.close(); await this.sharedKnowledge?.docxSources.close();
+    await this.parseAssembly?.close(); await this.sharedKnowledge?.release();
   }
 
   onBackPress(): boolean {
@@ -84,6 +189,20 @@ struct Index {
       this.drawerOpen = false;
       return true;
     }
+    if (this.migrationOpen) { this.migrationOpen=false; return true; }
+    if (this.visionSettingsOpen) { this.visionSettingsOpen=false; return true; }
+    if (this.imageKnowledgeOpen) { this.imageKnowledgeOpen=false; return true; }
+    if (this.parsedOpen) { this.parsedOpen = false; return true; }
+    if (this.docxSourceOpen) { this.docxSourceOpen = false; this.sharedKnowledge?.docxSources.close().catch((): void => {}); return true; }
+    if (this.docxIngestionOpen) { this.docxIngestionOpen = false; this.docxIngestionService?.pause(); return true; }
+    if (this.imageSourceOpen) { this.imageSourceOpen = false; this.sharedKnowledge?.imageSources.close().catch((): void => {}); return true; }
+    if (this.imageIngestionOpen) { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); return true; }
+    if (this.platformDiagnosticsOpen) { this.platformDiagnosticsOpen = false; return true; }
+    if (this.pdfSourceOpen) { this.pdfSourceOpen = false; return true; }
+    if (this.pdfIngestionOpen) { this.pdfIngestionOpen = false; return true; }
+    if (this.embeddingOpen) { this.closeEmbedding(); return true; }
+    if (this.parseOpen) { this.closeParse(); return true; }
+    if (this.tab === 2 && this.knowledgeService?.back()) { return true; }
     if (this.showScenarios) {
       this.showScenarios = false;
       return true;
@@ -109,6 +228,14 @@ struct Index {
 
   private changeTab(index: number): void {
     this.floatingPlacement.cancelDrag();
+    if (index!==this.tab) { this.migrationOpen=false; }
+    if (index!==this.tab) { this.visionSettingsOpen=false; this.imageKnowledgeOpen=false; }
+    if (index !== this.tab) { this.parsedOpen = false; }
+    if (index !== this.tab) { this.docxIngestionOpen = false; this.docxSourceOpen = false; this.docxIngestionService?.pause(); this.sharedKnowledge?.docxSources.close().catch((): void => {}); }
+    if (index !== this.tab) { this.imageIngestionOpen = false; this.imageSourceOpen = false; this.imageIngestionService?.pause(); this.sharedKnowledge?.imageSources.close().catch((): void => {}); }
+    if (index !== this.tab) { this.pdfIngestionOpen = false; }
+    if (index !== this.tab && this.embeddingOpen) { this.closeEmbedding(); }
+    if (index !== this.tab && this.parseOpen) { this.closeParse(); }
     if (index !== this.tab && this.generating) {
       this.cancelGeneration();
     }
@@ -117,10 +244,188 @@ struct Index {
     }
     this.inputController.stopEditing();
     this.tab = index;
+    if (index === 2) { this.openKnowledge(); }
     this.calendarOpen = false;
     this.showScenarios = false;
     this.drawerOpen = false;
     this.scroller.scrollEdge(Edge.Top);
+  }
+
+  private async openKnowledge(): Promise<void> {
+    const pending: Promise<void> | undefined = this.knowledgeLoad;
+    if (pending !== undefined) { return pending; }
+    this.knowledgeOpening = true; this.knowledgeMessage = '';
+    const operation: Promise<void> = this.loadKnowledge(); this.knowledgeLoad = operation;
+    try { await operation; }
+    catch (error) { this.knowledgeMessage = '资料库打开未完成，资料保留。原因：' + (error instanceof KnowledgeFailure || error instanceof DocxFailure ? error.category : 'LocalInitializationFailed'); }
+    finally { this.knowledgeLoad = undefined; this.knowledgeOpening = false; }
+  }
+  private async loadKnowledge(): Promise<void> {
+    if (this.knowledgeAssembly !== undefined) {
+      const shared = this.sharedKnowledge;
+      if (shared !== undefined && !shared.unified.ready()) { await shared.retryUnifiedInitialization(); }
+      this.knowledgeReady = shared?.unified.ready() ?? false; return;
+    }
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) { this.knowledgeMessage = '本机上下文不可用，资料未修改'; return; }
+    const shared: KnowledgeAssembly = this.sharedKnowledge ?? KnowledgeAssembly.forContext(context);
+    if (this.sharedKnowledge === undefined) { this.sharedKnowledge = shared; try { await shared.acquire(); } catch { this.sharedKnowledge = undefined; this.knowledgeMessage = '用户库打开失败，资料保留'; return; } }
+    const assembly: TextKnowledgeAssembly = shared.text;
+    shared.subscribe(this.knowledgeListener);
+    this.knowledgeAssembly = assembly;
+    try {
+       this.knowledgeService = assembly.service; this.knowledgeState = assembly.service.viewState();
+       assembly.service.attachUnifiedImport(async (): Promise<void> => { await this.openParsed(); await shared.unifiedImports.importText(); });
+       this.unifiedSearchService = shared.search;
+       this.embeddingService = shared.repository.ready() ? shared.embedding : undefined;
+      this.derivedLifecycle = shared.derivedLifecycle; this.pdfDocumentsPort = shared.repository;
+      this.knowledgeReady = shared.unified.ready();
+      if (!this.knowledgeReady) { this.knowledgeMessage = shared.unifiedMessage || '资料库暂时不可用，请重试打开'; }
+    }
+    catch {
+      this.knowledgeAssembly = undefined; this.knowledgeService = undefined;
+      this.knowledgeState = assembly.service.viewState(); this.knowledgeMessage = '用户知识库打开失败，资料保留，可重试';
+    }
+  }
+  private async openKnowledgeHit(hit: KnowledgeHit): Promise<void> {
+    if (hit.sourceKind === KnowledgeSourceKind.Docx) {
+      const shared = this.sharedKnowledge; if (shared === undefined) { return; } const document = await shared.docx.get(hit.documentId); if (document === undefined) { return; }
+      try { await shared.docxSources.open(document,hit); this.docxSourceOpen = true; } catch { this.knowledgeState.message = 'DOCX来源已变化或释放未确认'; } return;
+    }
+    if (hit.sourceKind === KnowledgeSourceKind.Image) {
+      const doc = await this.sharedKnowledge?.images.get(hit.documentId); if (doc === undefined || this.sharedKnowledge === undefined) { return; }
+      this.imageSourceOpen = true; try { await this.sharedKnowledge.imageSources.open(doc,hit); } catch { this.knowledgeState.message = '图片来源核验或释放未完成'; } return;
+    }
+    if (hit.sourceKind === KnowledgeSourceKind.Text) {
+      const text: TextHit = new TextHit(); text.documentId = hit.documentId; text.documentVersion = hit.originalVersion; text.originalHash = hit.originalHash;
+      text.generation = hit.generation; text.snapshotId = hit.snapshotId; text.chunkId = hit.chunkId; text.text = hit.text; text.ranges = hit.locator.textRanges;
+      await this.knowledgeService?.openHit(text); return;
+    }
+    if (hit.sourceKind !== KnowledgeSourceKind.Pdf) { return; }
+    const doc: PdfKnowledgeDocument | undefined = await this.sharedKnowledge?.repository.get(hit.documentId); const context = this.getUIContext().getHostContext();
+    if (doc === undefined || doc.tombstone || context === undefined) { return; }
+    if (this.sharedKnowledge === undefined) { return; }
+    const sourceJob = await this.sharedKnowledge.repository.generationJob(hit.generation);
+    if (doc.activeContentGeneration !== hit.generation || doc.binding.originalHash !== hit.originalHash) { return; }
+    let pageReference: ResultPageReference;
+    try { pageReference = await this.sharedKnowledge.pages.resolve(hit,new KnowledgeCancellation()); if (pageReference.state !== PdfPageReferenceState.Verified) { return; } } catch { this.knowledgeState.message = '原页依据或原件已失效，未跳转'; return; }
+    if (sourceJob.binding === undefined || sourceJob.snapshotId !== hit.snapshotId || sourceJob.snapshotHash !== hit.snapshotHash || sourceJob.binding.originalHash !== hit.originalHash || sourceJob.binding.originalVersion !== hit.originalVersion) { return; }
+    this.pdfSourceBinding = sourceJob.binding; this.pdfSourceLocator = hit.locator.pdfRegions[0] ?? new PdfLocator();
+    const adapter: PdfPageAdapter = new PdfPageAdapter(context.filesDir);
+    if (this.sharedKnowledge === undefined) { return; }
+    adapter.attachLease(this.sharedKnowledge.repository,this.sharedKnowledge.sourceReadLease(sourceJob.sourceId,hit.generation));
+    adapter.attachSnapshot(this.sharedKnowledge.repository,this.sharedKnowledge.assets,hit.snapshotId,hit.snapshotHash);
+    adapter.attachPageReference(pageReference);
+    adapter.attachNodeIds(await this.sharedKnowledge.repository.chunkSources(hit.chunkId,hit.generation));
+    try { if (this.pdfPageAdapter !== undefined) { await this.sharedKnowledge.sources.release(this.pdfPageAdapter); } this.sharedKnowledge.sources.adopt(adapter); this.pdfPageAdapter = adapter; this.pdfSourceOpen = true; } catch { this.knowledgeState.message = '原件读租约释放待确认，请重试释放'; }
+  }
+  private closeParse(): void {
+    this.parseService?.clearInput(); this.parseOpen = false; this.scroller.scrollEdge(Edge.Top);
+  }
+  private async openImages(): Promise<void> { await this.openParsed(); }
+  private async openParsed(importNow: boolean = false): Promise<void> {
+    this.parsedImportOpen = importNow;
+    if (this.parsedOpening) { return; } this.parsedOpen = true; this.parsedOpening = true; this.parsedMessage = ''; this.scroller.scrollEdge(Edge.Top);
+    try {
+      await this.openKnowledge(); const shared = this.sharedKnowledge;
+      if (shared === undefined) { throw new Error('用户库尚未就绪'); }
+      if (!shared.unified.ready()) { await shared.retryUnifiedInitialization(); }
+      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+      this.parsedService = shared.unifiedIngestion; this.parsedImports = shared.unifiedImports; await this.parsedService.refresh();
+      if (this.parseService === undefined) { this.parsedMessage = '解析准备不可用；TXT/MD与已发布内容可用，可重试打开'; }
+    } catch (error) { this.parsedMessage = error instanceof Error ? error.message : '统一服务打开失败，资料保留'; }
+    finally { this.parsedOpening = false; }
+  }
+  private async openVisionSettings(): Promise<void> { await this.openParsed(); this.parsedOpen=false; this.visionSettingsOpen=true; }
+  private async openImageKnowledge(): Promise<void> { await this.openParsed(); this.parsedOpen=false; this.imageKnowledgeOpen=true; }
+  private async openUnifiedCard(card: UnifiedSearchCard): Promise<void> {
+    if (!card.current) { return; }
+    try { if (card.kind==='Image') { this.imageKnowledgeOccurrence=card.occurrenceId; const images=this.sharedKnowledge?.imageKnowledge; if (images===undefined) { throw new Error('ImageSourceUnavailable'); } this.imageKnowledgeOccurrence=await images.currentOccurrence(card.imageHash,card.effectiveId,this.imageKnowledgeOccurrence); await this.openImageKnowledge(); }
+      else { this.parsedDocumentId = card.documentKey; await this.openParsed(); }
+    } catch { this.knowledgeState.message='统一来源已变或不可读，保留查询证据'; }
+  }
+  private async openMigration(): Promise<void> { await this.openParsed(); this.parsedOpen=false; this.migrationOpen=true; }
+  private async openLegacyImages(): Promise<void> {
+    await this.openKnowledge(); if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+    const context = this.getUIContext().getHostContext(); const shared = this.sharedKnowledge;
+    if (context === undefined || shared === undefined || this.parseService === undefined || !shared.images.ready()) { this.knowledgeState.message = '图片准备区不可用，原件未修改'; return; }
+    if (this.imageIngestionService === undefined) { this.imageIngestionService = new ImageIngestionService(this.parseService,shared.images,new ImageOriginalAdapter(context.filesDir),new ImageProcessingAdapter(),new KnowledgePlatformIdentity(),KnowledgeStorageScope.production()); const metadata = shared.vectorMetadata; if (metadata instanceof ImageVectorRepository) { this.imageIngestionService.attachVectorCleanup(async (id: string): Promise<void> => { const cleanup: Promise<void> = metadata.cleanupDeleted(id,shared.vectors); await cleanup; }); } await this.imageIngestionService.initialize(); }
+    this.imageIngestionService.attachResults(new ImageResultReader(context.filesDir,this.parseService));
+    this.imageIngestionService.attachVectorSync(async (id: string): Promise<void> => { await shared.workflow.sync(id); });
+    await this.imageIngestionService.adoptPrepared();
+    this.imageIngestionOpen = true;
+  }
+  private async openDocx(): Promise<void> { await this.openParsed(); }
+  private async openLegacyDocx(): Promise<void> {
+    if (this.docxOpening) { return; }
+    this.docxIngestionOpen = true; this.docxOpening = true; this.docxEntryMessage = '正在打开 DOCX 解析与入库…';
+    this.imageIngestionOpen = false; this.docxSourceOpen = false; this.scroller.scrollEdge(Edge.Top);
+    try {
+      await this.openKnowledge();
+      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+      const shared = this.sharedKnowledge; const context = this.getUIContext().getHostContext(); const parse = this.parseService;
+      if (shared === undefined || context === undefined || parse === undefined) { this.docxEntryMessage = '解析准备打开未完成。'+(this.parseState.message || this.knowledgeState.message || '本机服务暂不可用')+'；原件和已有资料保留，可重试。'; return; }
+      await shared.ensureDocxReady();
+      this.embeddingService = shared.embedding;
+      if (this.docxIngestionService === undefined) {
+        const identity: KnowledgePlatformIdentity = new KnowledgePlatformIdentity(); const service: DocxIngestionService = new DocxIngestionService(parse,shared.docx);
+        service.attachProcessing(new DocxProcessingAdapter(`${context.filesDir}/knowledge_parse_v1`,identity,new DocxResultReader(`${context.filesDir}/knowledge_parse_v1`,parse,identity)),identity);
+        service.attachManagement((id: string) => shared.docx.latestOriginal(id),(id: string) => shared.docx.abandon(id),(): Promise<void> => shared.cleanupDocx(parse),(id: string) => shared.docxVectors.cleanupDeleted(id,shared.vectors),(id: string) => shared.workflow.sync(id));
+        this.docxIngestionService = service;
+      }
+      await this.docxIngestionService.adoptPrepared(); this.docxEntryMessage = '';
+    } catch (error) {
+      const reason: string = error instanceof DocxFailure || error instanceof KnowledgeFailure ? `${error.category} · ${error.stage}` : 'LocalDocxPreparationFailed';
+      this.docxEntryMessage = 'DOCX 准备未完成：'+reason+'。原件和已有资料保留，可重试。';
+    } finally { this.docxOpening = false; }
+  }
+  private openDocxSearch(): void {
+    this.docxIngestionService?.pause(); this.embeddingService?.pause(); this.docxIngestionOpen = false;
+    this.docxSourceOpen = false; this.parseOpen = false; this.embeddingOpen = false; this.tab = 2;
+    this.scroller.scrollEdge(Edge.Top);
+  }
+  private async openDocxSource(id: string): Promise<void> { const shared = this.sharedKnowledge; if (shared === undefined) { return; } const document = await shared.docx.get(id); if (document === undefined) { return; } try { await shared.docxSources.open(document); this.docxSourceOpen = true; } catch { this.knowledgeState.message = 'DOCX原生来源不可用'; } }
+  private async openImageOriginal(document: ImageDocument): Promise<void> {
+    if (this.sharedKnowledge === undefined) { return; } this.imageSourceOpen = true;
+    try { await this.sharedKnowledge.imageSources.open(document); } catch { this.knowledgeState.message = '图片来源核验或释放未完成'; }
+  }
+  private async prepareImage(resultId: string): Promise<void> {
+    await this.consumeParsed(resultId);
+  }
+  private async consumeParsed(id: string): Promise<void> {
+    this.closeParse(); await this.openParsed();
+    try { if (this.parseService !== undefined && this.parsedImports !== undefined) { await this.parsedImports.consume(this.parseService,id); } }
+    catch (error) { this.parsedMessage = error instanceof Error ? error.message : '统一产物未完成，原件/ZIP保留'; }
+  }
+  private closeEmbedding(): void { this.embeddingClearEpoch++; this.embeddingService?.clearInput(); this.embeddingOpen = false; this.scroller.scrollEdge(Edge.Top); }
+  private async openEmbedding(): Promise<void> {
+    this.embeddingOpen = true; this.scroller.scrollEdge(Edge.Top);
+    if (this.sharedKnowledge !== undefined) { this.embeddingService = this.sharedKnowledge.repository.ready() ? this.sharedKnowledge.embedding : undefined; return; }
+    const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
+    const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
+    try { await assembly.acquire(); this.embeddingService = assembly.repository.ready() ? assembly.embedding : undefined; }
+    catch { this.sharedKnowledge = undefined; this.embeddingService = undefined; }
+  }
+  private async preparePdf(resultId: string): Promise<void> {
+    await this.consumeParsed(resultId);
+  }
+  private async openPdfJobs(): Promise<void> {
+    const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
+    if (this.sharedKnowledge === undefined) { this.sharedKnowledge = KnowledgeAssembly.forContext(context); await this.sharedKnowledge.acquire(); }
+    this.pdfIngestionService = this.sharedKnowledge.ingestion; this.derivedLifecycle = this.sharedKnowledge.derivedLifecycle;
+    await this.pdfIngestionService.refreshJobs(); this.pdfIngestionOpen = true;
+  }
+  private async openParse(settings: boolean): Promise<void> {
+    this.parseSettings = settings; this.parseOpen = true; this.scroller.scrollEdge(Edge.Top);
+    if (this.parseAssembly !== undefined) { this.parseService?.clearInput(); return; }
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) { this.parseState.message = '本机上下文不可用，解析准备未打开'; return; }
+    const assembly: DocumentParseAssembly = new DocumentParseAssembly(context, (): void => {
+      if (this.alive) { this.parseState = assembly.service.viewState(); }
+    });
+    this.parseAssembly = assembly;
+    try { await assembly.initialize(); this.parseService = assembly.service; this.parseState = assembly.service.viewState(); }
+    catch { await assembly.close(); this.parseAssembly = undefined; this.parseService = undefined; this.parseState = assembly.service.viewState(); }
   }
 
   private resizeFloatingHost(width: number, height: number): void {
@@ -405,7 +710,7 @@ struct Index {
         if (this.tab !== 0) {
           Text(this.tabNames[this.tab]).fontSize(14).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
         }
-        Text('演示模式').fontSize(11).fontColor(Theme.muted)
+        Text(this.tab === 2 || this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen ? '本机资料 · 未同步' : '演示模式').fontSize(11).fontColor(Theme.muted)
           .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
       }.width('34%')
       Row() {
@@ -419,6 +724,7 @@ struct Index {
             this.drawerOpen = true;
           })
         Blank()
+        if (this.tab === 0) {
         Row() {
           Button({ type: ButtonType.Circle }) {
             AppIcon({ source: $r('app.media.chat_sliders') })
@@ -433,6 +739,7 @@ struct Index {
             .onClick(() => this.newConversation())
         }.padding({ left: 3, right: 3 }).borderRadius(28).backgroundColor(Theme.surface)
           .shadow({ radius: 16, color: Theme.shadow, offsetY: 3 })
+        }
       }.width('100%')
     }.width('100%').constraintSize({ minHeight: 68 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
       .onAreaChange((_oldArea: Area, area: Area) => {
@@ -736,7 +1043,7 @@ struct Index {
       Button('演示场景设置  ›', { type: ButtonType.Normal }).width('100%').constraintSize({ minHeight: 44 })
         .fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
         .enabled(!this.generating && !this.executing && !this.searchBusy).onClick(() => this.openScenarios())
-      Text('当前仅支持固定样例\n演示数据会在重启后重置').fontSize(11).fontColor(Theme.muted)
+      Text('助手日程与联网搜索为演示功能\n知识库资料保存在本机').fontSize(11).fontColor(Theme.muted)
         .width('100%').padding({ top: 16 })
     }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
       .backgroundColor(Theme.inputSurface).borderRadius({ topRight: 26, bottomRight: 26 })
@@ -778,16 +1085,81 @@ struct Index {
   pageContent() {
     Column() {
       this.header()
-      if ((this.searchEnabled && this.searchScenario !== SearchScenario.Normal) ||
-        (!this.searchEnabled && this.scenario !== DemoScenario.Normal)) {
+      if (this.tab === 0 && ((this.searchEnabled && this.searchScenario !== SearchScenario.Normal) ||
+        (!this.searchEnabled && this.scenario !== DemoScenario.Normal))) {
         Text(`下一次演示：${this.searchEnabled ? this.searchScenario : this.scenario}`).fontSize(12).fontColor(Theme.amber)
           .width('100%').textAlign(TextAlign.Center).padding({ left: 16, right: 16, bottom: 8 })
       }
       Scroll(this.scroller) {
         Column() {
-          if (this.showScenarios) {
+            if (this.migrationOpen) {
+              KnowledgeMigrationView({migration:this.sharedKnowledge?.migration,queue:this.sharedKnowledge?.unifiedQueue,vectors:this.sharedKnowledge?.unifiedVectors,onBack:(): void=> { this.migrationOpen=false; }})
+            } else if (this.visionSettingsOpen) {
+              VisionSettingsView({service:this.sharedKnowledge?.unifiedSettings,queue:this.sharedKnowledge?.unifiedQueue,onBack:(): void=> { this.visionSettingsOpen=false; this.scroller.scrollEdge(Edge.Top); }})
+            } else if (this.imageKnowledgeOpen) {
+              ImageKnowledgeView({service:this.sharedKnowledge?.imageKnowledge,previewService:this.parsedService,queue:this.sharedKnowledge?.unifiedQueue,initialOccurrence:this.imageKnowledgeOccurrence,onBack:(): void=> { this.imageKnowledgeOpen=false; this.imageKnowledgeOccurrence=''; }})
+            } else if (this.parsedOpen) {
+              if (this.parsedOpening) {
+                LoadingProgress().width(32).height(32)
+                Text('正在打开资料…').padding(16)
+              } else {
+                ParsedDocumentView({ service: this.parsedService, imports: this.parsedImports, parse: this.parseService, lifecycle: this.sharedKnowledge?.unifiedLifecycle, queue: this.sharedKnowledge?.unifiedQueue,
+                  initialImportOpen: this.parsedImportOpen, initialDocument: this.parsedDocumentId, onNavigate: (): void => { this.scroller.scrollEdge(Edge.Top); },
+                  onRetryProcessing: (): void => { this.sharedKnowledge?.retryUnifiedProcessing().catch((): void => { this.parsedMessage = '自动处理暂不可用，请重试'; }); },
+                  entryFailure: this.parsedMessage, onRetry: (): void => { this.openParsed(); },
+                  onBack: (): void => { this.parsedOpen = false; this.parsedDocumentId = ''; },
+                  onParseTasks: (): void => { this.parsedOpen = false; this.openParse(true); } })
+              }
+            } else if (this.docxSourceOpen) {
+             DocxSourceView({ session: this.sharedKnowledge?.docxSources, onBack: (): void => { this.docxSourceOpen = false; } })
+            } else if (this.docxIngestionOpen) {
+              if (this.docxEntryMessage.length > 0 || this.docxOpening || this.docxIngestionService === undefined) {
+                Column({ space: 16 }) {
+                  Text('DOCX解析与入库').fontSize(20).width('100%')
+                  Text(this.docxEntryMessage || 'DOCX 服务尚未就绪，原件保留').id('docx-entry-status').width('100%')
+                  if (this.docxOpening) { LoadingProgress().width(32).height(32) }
+                  Button('重试打开DOCX').id('docx-entry-retry').enabled(!this.docxOpening).onClick((): void => { this.openDocx(); })
+                  Button('返回').id('docx-back').onClick((): void => { this.docxIngestionOpen = false; })
+                }.width('100%').padding(16)
+              } else {
+                DocxIngestionView({ service: this.docxIngestionService, embedding: this.embeddingService, onBack: (): void => { this.docxIngestionOpen = false; this.docxIngestionService?.pause(); }, onParseSettings: (): void => { this.docxIngestionOpen = false; this.openParse(true); }, onEmbeddingSettings: (): void => { this.docxIngestionOpen = false; this.openEmbedding(); }, onSearch: (): void => { this.openDocxSearch(); }, onSource: (id: string): void => { this.openDocxSource(id); } })
+              }
+           } else if (this.imageSourceOpen) {
+             ImageSourceView({ session: this.sharedKnowledge?.imageSources, onBack: (): void => { this.imageSourceOpen = false; this.sharedKnowledge?.imageSources.close().catch((): void => {}); } })
+           } else if (this.imageIngestionOpen) {
+              ImageIngestionView({ service: this.imageIngestionService, embedding: this.embeddingService, onBack: (): void => { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); }, onOriginal: (document: ImageDocument): void => { this.openImageOriginal(document); },
+               onParseSettings: (): void => { this.imageIngestionOpen = false; this.openParse(true); }, onEmbeddingSettings: (): void => { this.imageIngestionOpen = false; this.openEmbedding(); } })
+           } else if (this.platformDiagnosticsOpen) {
+              KnowledgePlatformDiagnostics({ onBack: (): void => { this.platformDiagnosticsOpen = false; }, onImageHappyPath: (): void => { this.platformDiagnosticsOpen = false; this.openImages(); } })
+          } else if (this.showScenarios) {
             this.scenarioPanel()
-          } else if (this.tab === 0) {
+           } else if (this.pdfSourceOpen) {
+              PdfSourceView({ adapter: this.pdfPageAdapter, session: this.sharedKnowledge?.sources, binding: this.pdfSourceBinding, locator: this.pdfSourceLocator, onBack: (): void => { this.pdfSourceOpen = false; } })
+           } else if (this.pdfIngestionOpen) {
+             if (this.pdfIngestionService !== undefined) {
+               PdfIngestionView({ service: this.pdfIngestionService, lifecycle: this.derivedLifecycle, onBack: (): void => { this.pdfIngestionOpen = false; } })
+             } else { Text('PDF 准备服务尚未就绪，原件和 ZIP 保留').width('100%') }
+           } else if (this.embeddingOpen) {
+             if (this.embeddingService !== undefined) {
+                EmbeddingSettingsView({ service: this.embeddingService, unifiedSettings:this.sharedKnowledge?.unifiedSettings, clearEpoch: this.embeddingClearEpoch, onBack: (): void => { this.closeEmbedding(); } })
+             } else {
+               Text('本机配置服务尚未就绪或不可用，未发送请求').width('100%')
+               Button('返回').onClick((): void => { this.closeEmbedding(); })
+             }
+           } else if (this.parseOpen) {
+             if (this.parseService !== undefined) {
+               DocumentParseView({ parseState: this.parseState, service: this.parseService,
+                 settingsMode: this.parseSettings, clearEpoch: this.parseState.inputEpoch,
+                   onClose: (): void => { this.closeParse(); }, onPreparePdf: (resultId: string): void => { this.preparePdf(resultId); },
+                    onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenImages: (): void => { this.closeParse(); this.openImages(); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); } })
+             } else {
+               Column({ space: 12 }) {
+                 Text(this.parseState.message || '正在打开独立解析准备区…').fontSize(14).width('100%')
+                 Button('重试打开解析准备').onClick((): void => { this.openParse(this.parseSettings); })
+                 Button('返回').onClick((): void => { this.closeParse(); })
+               }.width('100%').padding(20)
+             }
+           } else if (this.tab === 0) {
             if (this.messages.length === 0) {
               AssistantWelcome({ searchEnabled: this.searchEnabled })
             } else {
@@ -798,15 +1170,33 @@ struct Index {
               this.calendar()
             } else {
               WorkbenchPage({ recordCount: this.records.length,
+                onDocuments: (): void => { this.changeTab(2); this.parsedDocumentId = ''; this.openParsed(); },
                 onCalendar: () => this.calendarOpen = true,
                 onNotice: (title: string, message: string) => this.notice(title, message) })
             }
-          } else if (this.tab === 2) {
-            KnowledgePage({ onNotice: (title: string, message: string) => this.notice(title, message) })
-          } else {
-            ProfilePage({ floatingAssistantEnabled: this.floatingAssistantEnabled,
-              onFloatingAssistantChange: (enabled: boolean) => this.floatingAssistantEnabled = enabled,
-              onNotice: (title: string, message: string) => this.notice(title, message) })
+           } else if (this.tab === 2) {
+             if (this.knowledgeReady) {
+               UnifiedKnowledgeView({ session: this.sharedKnowledge?.querySession, history: this.sharedKnowledge?.unifiedHistory,
+                 onImport: (): void => { this.parsedDocumentId = ''; this.openParsed(true); },
+                 onDocuments: (): void => { this.parsedDocumentId = ''; this.openParsed(); },
+                 onOpen: (card: UnifiedSearchCard): void => { this.openUnifiedCard(card); } })
+            } else {
+              Column({ space: 12 }) {
+                Text(this.knowledgeMessage || '正在打开本机知识库…')
+                  .fontSize(15).fontColor(Theme.muted).width('100%')
+                Button(this.knowledgeOpening ? '正在打开…' : '重试打开', { type: ButtonType.Normal }).id('upd-open-retry').enabled(!this.knowledgeOpening).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 })
+                  .onClick((): void => { this.openKnowledge(); })
+              }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 20, bottom: 20 })
+            }
+           } else {
+              if (this.developerToolsOpen) { Button('本机能力诊断').id('r2-open-diagnostics').onClick((): void => { this.platformDiagnosticsOpen = true; })
+              }
+
+             ProfilePage({ floatingAssistantEnabled: this.floatingAssistantEnabled,
+               onFloatingAssistantChange: (enabled: boolean): void => { this.floatingAssistantEnabled = enabled; }, onNotice: (title: string, message: string) => this.notice(title, message),
+               onVisionSettings: (): void => { this.openVisionSettings(); },
+               onParseSettings: (): void => { this.openParse(true); }, onEmbeddingSettings: (): void => { this.openEmbedding(); } })
+             Button(this.developerToolsOpen ? '收起高级诊断' : '高级诊断', { type: ButtonType.Normal }).fontSize(13).fontColor(Theme.muted).backgroundColor(Color.Transparent).constraintSize({ minHeight: 44 }).onClick((): void => { this.developerToolsOpen = !this.developerToolsOpen; })
           }
         }.width('100%').constraintSize({ maxWidth: 640,
           minHeight: this.tab === 0 && this.messages.length === 0 && !this.showScenarios ? this.contentHeight : 0 })
