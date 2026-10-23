@@ -278,7 +278,7 @@ export function chunkerCases(): ChunkerTestCase[] {
       }
     },
     {
-      name: '含 emoji 与代理对的长文本不丢字符（已知限制：可能拆分代理对）',
+      name: '含 emoji 与代理对的长文本不丢字符且边界安全',
       run: async () => {
         const emoji: string = repeat('😀', 400);
         const source: string = emoji + '。' + paddedTo(300, 'emoji 之后的文本') + '\n\n' + emoji;
@@ -287,6 +287,9 @@ export function chunkerCases(): ChunkerTestCase[] {
         verifySlices(source, slices, SIZE, 'emoji');
         let covered: number = 0;
         for (let i = 0; i < slices.length; i++) {
+          check(!(slices[i].text.charCodeAt(0) >= 0xDC00 && slices[i].text.charCodeAt(0) <= 0xDFFF), '低代理开头');
+          check(!(slices[i].text.charCodeAt(slices[i].text.length - 1) >= 0xD800 &&
+            slices[i].text.charCodeAt(slices[i].text.length - 1) <= 0xDBFF), '高代理结尾');
           const end: number = slices[i].charOffset + slices[i].text.length;
           if (end > covered) {
             covered = end;

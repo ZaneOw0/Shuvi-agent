@@ -1,3 +1,21 @@
 {
-  "allowToBackupRestore": true
+  "allowToBackupRestore": true,
+  "excludes": [
+    "/data/storage/el2/base/files/knowledge_unified_v1/",
+    "/data/storage/el2/base/cache/knowledge_unified_v1/",
+    "/data/storage/el2/base/files/knowledge_parse_v1/",
+    "/data/storage/el2/base/cache/knowledge_parse_v1/",
+    "/data/storage/el2/database/rdb/shuvi_parse_stage_v1.db",
+    "/data/storage/el2/database/rdb/shuvi_parse_stage_v1.db-wal",
+    "/data/storage/el2/database/rdb/shuvi_parse_stage_v1.db-shm",
+    "/data/storage/el2/database/rdb/shuvi_parse_stage_v1.db-journal",
+    "/data/storage/el2/base/files/knowledge_pdf_v1/",
+    "/data/storage/el2/base/cache/knowledge_pdf_v1/",
+    "/data/storage/el2/base/files/knowledge_pdf_v1/image/",
+    "/data/storage/el2/base/cache/knowledge_pdf_v1/image/",
+    "/data/storage/el2/database/rdb/shuvi_kb_vector_v1.db",
+    "/data/storage/el2/database/rdb/shuvi_kb_vector_v1.db-wal",
+    "/data/storage/el2/database/rdb/shuvi_kb_vector_v1.db-shm",
+    "/data/storage/el2/database/rdb/shuvi_kb_vector_v1.db-journal"
+  ]
 }

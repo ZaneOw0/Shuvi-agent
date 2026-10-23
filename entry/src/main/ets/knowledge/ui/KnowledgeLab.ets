@@ -52,14 +52,14 @@ export struct KnowledgeLab {
     }
     this.busy = true;
     this.lines = [];
-    const context: common.Context | undefined = this.getUIContext().getHostContext();
-    if (context === undefined) {
-      this.log('失败：host context 为空');
-      this.busy = false;
-      return;
-    }
-    await this.runProbe(context);
     try {
+      const context: common.Context | undefined = this.getUIContext().getHostContext();
+      if (context === undefined) {
+        this.log('失败：host context 为空');
+        return;
+      }
+      await this.runProbe(context);
+      try {
       const store: RdbKnowledgeStore = await this.openStore();
       const steps = store.ddlSteps();
       for (let i = 0; i < steps.length; i++) {
@@ -98,12 +98,12 @@ export struct KnowledgeLab {
         await this.reportCounts('当前');
         await this.runQuery('查询', this.query);
       }
-    } catch (error) {
-      const businessError: BusinessError = error as BusinessError;
-      this.log(`链路失败 ${businessError.code} ${businessError.message}`);
-      hilog.error(DOMAIN, TAG, '%{public}s', `pipeline failed ${businessError.code} ${businessError.message}`);
-    }
-    this.busy = false;
+      } catch (error) {
+        const businessError: BusinessError = error as BusinessError;
+        this.log(`链路失败 ${businessError.code} ${businessError.message}`);
+        hilog.error(DOMAIN, TAG, '%{public}s', `pipeline failed ${businessError.code} ${businessError.message}`);
+      }
+    } finally { this.busy = false; }
   }
 
   private async runProbe(context: common.Context): Promise<void> {
