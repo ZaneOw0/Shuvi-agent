@@ -1,6 +1,8 @@
 import { Theme } from './Theme';
 import { AppIcon } from './AppIcon';
 import { BrandAvatar } from './BrandAvatar';
+import { DEBUG } from 'BuildProfile';
+import { McpConnectionCheck } from './McpConnectionCheck';
 
 interface FeatureRowOptions {
   title: string;
@@ -101,6 +103,9 @@ export function KnowledgePage($$: NoticePageOptions) {
 @Builder
 export function ProfilePage($$: ProfilePageOptions) {
   Column({ space: 12 }) {
+    if (DEBUG) {
+      McpConnectionCheck()
+    }
     Column({ space: 12 }) {
       BrandAvatar({ size: 72 })
       Text('属于你的休比').fontSize(24).fontWeight(FontWeight.Bold).fontColor(Theme.ink)

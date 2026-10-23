@@ -17,6 +17,7 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { SourceLinkService } from '../services/SourceLinkService';
+import { McpConnectionCheckService } from '../services/McpConnectionCheckService';
 
 const DOMAIN = 0x0000;
 
@@ -32,6 +33,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    McpConnectionCheckService.session.detach();
     SourceLinkService.release();
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
   }
@@ -60,6 +62,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onBackground(): void {
+    McpConnectionCheckService.session.cancel();
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
   }

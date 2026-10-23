@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test test/*.test.mjs",
     "start": "node --env-file-if-exists=.env dist/main.js",
+    "start:discovery": "node dist/discovery.js",
     "smoke": "node dist/smoke.js"
   },
   "dependencies": {

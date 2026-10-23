@@ -16,6 +16,7 @@
 | `src/search.ts` | 参数与供应商响应校验、Tavily 请求、超时取消和错误分类 |
 | `src/server.ts` | MCP 工具注册、HTTP 入口、会话与并发限制 |
 | `src/main.ts` | 读取本机环境配置并启动服务 |
+| `src/discovery.ts` | 固定回环 8787 的连接检查入口，不读取凭据，拒绝搜索执行 |
 | `src/smoke.ts` | 本机 MCP 验证客户端；默认只发现工具 |
 | `test/` | 不访问 Tavily、不消耗搜索额度的确定性测试 |
 | `.env.example` | 配置占位模板，包含空的凭据字段 |
@@ -53,6 +54,19 @@ npm.cmd run smoke
 这一阶段不需要 `.env` 或 Tavily 凭据，不发送真实搜索。缺少凭据时，服务仍可启动并列出工具；如果调用搜索，会明确返回 `CONFIGURATION`。
 
 当前验证脚本固定连接 8787 端口。服务支持通过 `PORT` 配置其他端口，但相应客户端地址需自行同步，首轮验收请使用默认端口。
+
+### 2.1 设备连接验收专用模式
+
+只验证连接时，建议用以下命令替代 `npm.cmd start`：
+
+```powershell
+npm.cmd run build
+npm.cmd run start:discovery
+```
+
+此入口复用真实 MCP Server 的握手与工具目录，固定监听 `127.0.0.1:8787`，不加载 `.env`、不创建 Tavily 搜索适配器。即使进程环境含凭据，工具执行也只返回 `CONFIGURATION`；不会返回假搜索结果。另一个终端仍可运行 `npm.cmd run smoke` 做握手检查，不传 `--search`。普通模式与此模式不能同时占用 8787。
+
+Shuvi 调试版通过 HDC 回环转发访问此服务，步骤与权限说明见 [Agent 接入记录](../../docs/06-Agent模块接入.md#5-阶段-b1连接检查2026-10-20)。检查完成后，用 `Ctrl+C` 关闭自己在终端启动的服务。
 
 ## 3. 第二步：开发者手动启用真实搜索
 

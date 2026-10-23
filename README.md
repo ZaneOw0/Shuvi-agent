@@ -10,6 +10,8 @@
 
 ArkUI 搜索 Mock v0.2 已实现待验收：在助手页开启「搜索」，填入「搜索样例」发送，可查看分步进度、来源、引用与异常状态。这里使用固定样例，不调用 MCP / Tavily 或模型；真实链路仍待 Agent 联调。
 
+Agent 模块接入阶段 A 已完成：固定上游 `a12b6a1` 的六个 HAR 源码模块已纳入工程并通过构建。阶段 B1 新增调试版「我的 → 检查连接」，仅做 MCP 握手与工具发现，用户已确认应用内正常路径通过；异常与取消设备验收待完成。搜索与日程仍使用 Mock，生产 Runtime 尚未接线。范围、复现步骤及验证限制见 [06 Agent 模块接入](docs/06-Agent模块接入.md)。
+
 休比（Shuvi）是面向开源鸿蒙社区竞赛开发的智能个人助理，使用 ArkTS / ArkUI 开发。产品目标、需求层级与架构建议见 [00 项目总览](docs/00-项目总览.md)。
 
 ## 功能特性
@@ -23,6 +25,7 @@ ArkUI 搜索 Mock v0.2 已实现待验收：在助手页开启「搜索」，填
 | `entry/` | 应用入口 HAP：四个一级页面、日程 Mock 流程、交互状态与前端逻辑测试 |
 | `AppScope/` | 应用级配置（`app.json5`：bundleName、版本、图标与名称） |
 | `services/search-mcp/` | 独立 Node.js 搜索 MCP Server，不进入 HAP；单独安装、构建与测试 |
+| `vendor/harmony_agent/` | 固定上游提交的六个 Agent HAR 源码模块、许可及哈希清单 |
 | `scripts/` | 本地一键启动脚本：设备/模拟器 → 签名 → 构建 → 安装运行 |
 | `specs/` | 按用户闭环划分的功能契约，三条开发线的唯一对齐点 |
 | `docs/` | 项目文档，见下方文档索引 |
@@ -49,7 +52,7 @@ scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
 
 ## 智能体编排
 
-规划中，尚未实现（对应 P1 智能体编排）。Agent 主控与子智能体协同、统一工具执行与用户确认原则见 [00 项目总览](docs/00-项目总览.md) 第 4 节。
+已引入上游 Runtime 等模块并完成编译验证，尚未初始化产品宿主或接入页面。Agent 主控与子智能体协同、统一工具执行与用户确认原则见 [00 项目总览](docs/00-项目总览.md) 第 4 节。
 
 ## RAG 知识库
 
@@ -65,6 +68,7 @@ scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
 | [03 鸿蒙核心概念速览](docs/03-鸿蒙核心概念速览.md) | HAP、HAR、HSP、Stage 模型等概念与仓库现状对照 |
 | [04 图标素材库](docs/04-图标素材库.md) | 23 个图标的用途、ArkUI 复用方式与维护规则；[本地预览页](docs/assets/icons/index.html) |
 | [05 品牌配色与 Logo](docs/05-品牌配色与Logo.md) | 角色形象、莓紫与奶油白配色、应用图标配置；[本地预览页](docs/assets/brand/index.html) |
+| [06 Agent 模块接入](docs/06-Agent模块接入.md) | 六模块固定源码快照、依赖配置、构建证据与后续接入边界 |
 
 ## 构建与签名
 
@@ -81,3 +85,4 @@ scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
 ## License
 
 本项目采用 MIT 许可，见 [LICENSE](LICENSE)。
+`vendor/harmony_agent/` 的上游模块声明使用 Apache-2.0，许可说明与标准文本保留在该目录。

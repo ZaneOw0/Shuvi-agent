@@ -30,6 +30,24 @@
           ]
         }
       ]
-    }
+    },
+    { "name": "agent_contracts", "srcPath": "./vendor/harmony_agent/agent_contracts", "targets": [
+      { "name": "default", "applyToProducts": ["default"] }
+    ] },
+    { "name": "agent_core", "srcPath": "./vendor/harmony_agent/agent_core", "targets": [
+      { "name": "default", "applyToProducts": ["default"] }
+    ] },
+    { "name": "agent_runtime", "srcPath": "./vendor/harmony_agent/agent_runtime", "targets": [
+      { "name": "default", "applyToProducts": ["default"] }
+    ] },
+    { "name": "mcp_client", "srcPath": "./vendor/harmony_agent/mcp_client", "targets": [
+      { "name": "default", "applyToProducts": ["default"] }
+    ] },
+    { "name": "agent_connectors", "srcPath": "./vendor/harmony_agent/agent_connectors", "targets": [
+      { "name": "default", "applyToProducts": ["default"] }
+    ] },
+    { "name": "agent_storage", "srcPath": "./vendor/harmony_agent/agent_storage", "targets": [
+      { "name": "default", "applyToProducts": ["default"] }
+    ] }
   ]
 }

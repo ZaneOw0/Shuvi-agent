@@ -1,0 +1,9 @@
+{
+  "name": "@harmony_agent/agent-contracts",
+  "version": "0.3.0",
+  "description": "Versioned ArkTS contracts for the harmony_agent agent runtime",
+  "main": "Index.ets",
+  "author": "harmony_agent",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}
