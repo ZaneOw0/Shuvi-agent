@@ -1,0 +1,13 @@
+{
+  "schema": "R017-FROZEN-OFFICIAL-FAST-1",
+  "oracle": "huggingface/tokenizers 0.22.1; Tokenizer.from_file; add_special_tokens=true; no truncation or padding",
+  "tokenizerSha256": "21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08",
+  "counts": [
+    ["ascii", 4], ["english", 9], ["chinese", 16], ["emoji", 8], ["formula", 21],
+    ["compat-expansion", 9], ["combining", 5], ["whitespace", 5], ["deletion", 5],
+    ["special-only", 7], ["mask-lstrip", 5], ["normalized-special-not-matched", 4],
+    ["segment-prefixes", 9], ["json-not-body", 7], ["prefix-included", 12],
+    ["supplementary-expansion", 8], ["pdf512", 515], ["pdf512-expansion", 2050],
+    ["bound-8192", 8192], ["bound-8193", 8193], ["special-bound-8192", 8192], ["unseen-scalars", 6]
+  ]
+}
