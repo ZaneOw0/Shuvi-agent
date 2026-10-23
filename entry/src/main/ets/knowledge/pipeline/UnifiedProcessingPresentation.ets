@@ -2,7 +2,7 @@ import { ParsedDocumentRecord } from '../domain/ParsedDocumentModels';
 import { UnifiedProcessingJob, UnifiedJobState } from '../domain/UnifiedKnowledgeModels';
 
 export function processingStageName(stage: string): string {
-  return stage==='BodyEmbedding'?'正文向量入库':stage==='ImageEmbedding'?'图片描述向量入库':stage==='Vision'?'图片描述与标签':'自动处理';
+  return stage==='BodyEmbedding'?'正文可检索化':stage==='ImageEmbedding'?'图片可检索化':stage==='Vision'?'图片描述与标签':'自动处理';
 }
 export function processingStateName(state: UnifiedJobState): string {
   return state===UnifiedJobState.Complete?'已完成':state===UnifiedJobState.Running?'处理中':state===UnifiedJobState.Unknown?'结果待核对':state===UnifiedJobState.Failed?'失败':state===UnifiedJobState.Paused?'已暂停':state===UnifiedJobState.Canceled?'已停止':state===UnifiedJobState.Pending?'已排队':'等待设置或处理';

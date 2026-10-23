@@ -8,7 +8,7 @@ import { parsedDocumentChunks } from '../pipeline/ParsedDocumentChunker';
 export class ParsedDocumentIngestionService {
   state: ParsedImportState = new ParsedImportState(); private repository: ParsedRepositoryPort; private assets: ParsedAssetPort; private identity: ParsedIdentityPort;
   private cancel: ParsedCancellation | undefined; private listeners: Array<() => void> = [];
-  private preview: ParsedAssetPreview | undefined;
+  private previews: ParsedAssetPreview[] = [];
   private previewEpoch: number = 0;
   private openEpoch: number = 0;
   private published: ((document: ParsedDocument) => Promise<void>) | undefined;
@@ -18,8 +18,21 @@ export class ParsedDocumentIngestionService {
   unsubscribe(listener: () => void): void { this.listeners = this.listeners.filter((l: () => void): boolean => l !== listener); }
   private emit(): void { for (const listener of this.listeners) { listener(); } }
   pause(): void { if (this.cancel !== undefined) { this.cancel.invalid = true; } }
-  async previewImage(id: string): Promise<string> { await this.closePreview(); const epoch: number = this.previewEpoch; const preview: ParsedAssetPreview = await this.assets.openPreview(id,new ParsedCancellation()); if (epoch !== this.previewEpoch) { await this.assets.closePreview(preview); throw new ParsedFailure('PreviewCanceled','preview'); } this.preview = preview; return preview.path; }
-  async closePreview(): Promise<void> { this.previewEpoch++; if (this.preview !== undefined) { await this.assets.closePreview(this.preview); this.preview = undefined; } }
+  async previewImage(id: string): Promise<string> { const opened: ParsedAssetPreview[] = await this.previewImages([id]); return opened.length > 0 ? opened[0].path : ''; }
+  // 详情页图片网格需要同时持有同页多张预览租约；任一步失败都要释放已开租约。
+  async previewImages(ids: string[]): Promise<ParsedAssetPreview[]> {
+    await this.closePreview();
+    const epoch: number = this.previewEpoch; const opened: ParsedAssetPreview[] = [];
+    try {
+      for (const id of ids) { opened.push(await this.assets.openPreview(id,new ParsedCancellation())); }
+    } catch (error) {
+      for (const preview of opened) { await this.assets.closePreview(preview); }
+      if (error instanceof Error) { throw error; } throw new ParsedFailure('PreviewOpenFailed','asset');
+    }
+    if (epoch !== this.previewEpoch) { for (const preview of opened) { await this.assets.closePreview(preview); } throw new ParsedFailure('PreviewCanceled','preview'); }
+    this.previews = opened; return opened;
+  }
+  async closePreview(): Promise<void> { this.previewEpoch++; const opened: ParsedAssetPreview[] = this.previews; this.previews = []; for (const preview of opened) { await this.assets.closePreview(preview); } }
   async refresh(): Promise<void> { this.state.documents = await this.repository.list(); this.emit(); }
   async retryLocal(): Promise<void> {
     if (this.state.busy) { return; } const current: ParsedDocument = this.state.document;
