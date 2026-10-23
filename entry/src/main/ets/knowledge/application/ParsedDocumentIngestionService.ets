@@ -45,7 +45,8 @@ export class ParsedDocumentIngestionService {
     const snapshot = await this.assets.saveSnapshot(document,new ParsedCancellation()); const chunks: ParsedTextChunk[] = await parsedDocumentChunks(document,this.identity,new ParsedCancellation());
     if (!await this.repository.publish(document,chunks,`${document.generation}-manifest`,snapshot.manifest.contentHash,owner.epoch,owner.activeGeneration)) { throw new ParsedFailure('PublicationStale','retry'); }
     await this.open(owner.id); await this.refresh();
-    if (this.published!==undefined) { try { await this.published(this.state.document); this.state.enhancement='QueuedOrAwaitingConfig'; } catch { this.state.enhancement='QueueCheckpointFailed'; } this.emit(); }
+    const published: ((document: ParsedDocument) => Promise<void>) | undefined = this.published;
+    if (published!==undefined) { try { await published(this.state.document); this.state.enhancement='QueuedOrAwaitingConfig'; } catch { this.state.enhancement='QueueCheckpointFailed'; } this.emit(); }
   }
   async open(id: string): Promise<void> {
     const epoch: number=++this.openEpoch; await this.closePreview();
@@ -79,7 +80,8 @@ export class ParsedDocumentIngestionService {
       if (!await this.repository.publish(d,chunks,`${generation}-manifest`,snapshot.manifest.contentHash,record.epoch,record.activeGeneration)) { throw new ParsedFailure('PublicationStale','ingest'); }
       this.state.document = await this.assets.readSnapshot(`${generation}-manifest`,cancel); this.state.chunks = await this.repository.chunks(id);
       this.state.stage = 'Published'; this.state.enhancement = 'AwaitingConfig'; this.state.message = d.warnings.length > 0 ? '正文/OCR已发布；部分来源或图片有限制' : '正文/OCR已发布';
-      if (this.published!==undefined) { try { await this.published(this.state.document); this.state.enhancement='QueuedOrAwaitingConfig'; } catch { this.state.enhancement='QueueCheckpointFailed'; this.state.message+='；增强排队待重试，正文保留'; } }
+      const published: ((document: ParsedDocument) => Promise<void>) | undefined = this.published;
+      if (published!==undefined) { try { await published(this.state.document); this.state.enhancement='QueuedOrAwaitingConfig'; } catch { this.state.enhancement='QueueCheckpointFailed'; this.state.message+='；增强排队待重试，正文保留'; } }
     } catch (error) {
       this.state.stage = cancel.invalid ? 'Paused' : 'Failed'; this.state.message = error instanceof ParsedFailure ? `${error.category} / ${error.stage}` : 'LocalImportFailed；原件与已发布内容保留';
       if (error instanceof Error) { throw error; } throw new ParsedFailure('LocalImportFailed','ingest');

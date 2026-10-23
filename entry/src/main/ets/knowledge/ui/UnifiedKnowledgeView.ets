@@ -124,13 +124,13 @@ export struct UnifiedKnowledgeView {
           if (this.errorDetails) { Text(this.directError || this.relatedError).fontColor(Theme.ink).id('upd-query-error-reason').fontSize(12).fontColor(Theme.muted).width('100%') }
         }
         Text('内容匹配').fontColor(Theme.ink).fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.ink).width('100%').margin({ top: 8 })
-        ForEach(this.direct, (c: UnifiedSearchCard): void => { UnifiedKnowledgeResultCard({ card: c, onOpen: this.onOpen }) }, (c: UnifiedSearchCard): string => c.key)
+        ForEach(this.direct, (c: UnifiedSearchCard): void => { UnifiedKnowledgeResultCard({ card: c, onOpen: this.onOpen, id: 'upd-card-' + c.key }) }, (c: UnifiedSearchCard): string => c.key)
         if (this.direct.length === 0 && !this.directBusy && this.directError.length === 0) {
           Text('没有找到包含这些文字的内容').fontColor(Theme.ink).fontSize(14).fontColor(Theme.muted).width('100%')
         }
         if (this.directMore && !this.directBusy && this.directError.length === 0) { Button('查看更多').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-direct-more').width('100%').onClick((): void => { this.page('Direct'); }) }
         Text('相关资料').fontColor(Theme.ink).fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.ink).width('100%').margin({ top: 8 })
-        ForEach(this.related, (c: UnifiedSearchCard): void => { UnifiedKnowledgeResultCard({ card: c, onOpen: this.onOpen }) }, (c: UnifiedSearchCard): string => c.key)
+        ForEach(this.related, (c: UnifiedSearchCard): void => { UnifiedKnowledgeResultCard({ card: c, onOpen: this.onOpen, id: 'upd-card-' + c.key }) }, (c: UnifiedSearchCard): string => c.key)
         if (this.related.length === 0 && !this.relatedBusy && this.relatedError.length === 0) {
           Text(this.semantic === 'Complete' ? '暂未找到相关资料' : '按标签查找，也可以试试语义搜索。').fontColor(Theme.ink).fontSize(14).fontColor(Theme.muted).width('100%')
         }

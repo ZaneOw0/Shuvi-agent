@@ -36,7 +36,8 @@ export class DocxIngestionService implements DocumentParseStateListener {
   async refresh(): Promise<void> {
     this.documents = await this.repository.list(); this.jobs = await this.repository.jobs();
     for (const d of this.documents) {
-      const o: DocxOriginal = this.latestOriginal === undefined ? await this.repository.original(d.activeOriginal) : await this.latestOriginal(d.id); this.selectedSources.set(d.id,o.sourceId); this.sourceBindings.set(d.id,`${o.sourceId}|${o.assetId}|${o.hash}|${o.version}|${d.epoch}|${d.activeGeneration}`);
+      const latestForList: ((id: string) => Promise<DocxOriginal>) | undefined = this.latestOriginal;
+      const o: DocxOriginal = latestForList === undefined ? await this.repository.original(d.activeOriginal) : await latestForList(d.id); this.selectedSources.set(d.id,o.sourceId); this.sourceBindings.set(d.id,`${o.sourceId}|${o.assetId}|${o.hash}|${o.version}|${d.epoch}|${d.activeGeneration}`);
       if (this.snapshot?.documentId === d.id && (d.tombstone || this.snapshot.original.assetId !== o.assetId || this.snapshot.original.hash !== o.hash || this.snapshot.original.version !== o.version || this.currentJob !== undefined && (this.currentJob.epoch !== d.epoch || this.currentJob.expectedActive !== d.activeGeneration))) { this.snapshot = undefined; this.currentJob = undefined; }
     }
     this.changed();
@@ -44,7 +45,8 @@ export class DocxIngestionService implements DocumentParseStateListener {
   private async source(documentId: string): Promise<DocumentOriginal> {
     const document: DocxDocument | undefined = await this.repository.get(documentId);
     if (document === undefined || document.tombstone) { throw new DocxFailure('DocumentUnavailable','docx'); }
-    const original: DocxOriginal = this.latestOriginal === undefined ? await this.repository.original(document.activeOriginal) : await this.latestOriginal(documentId);
+    const latestForOpen: ((id: string) => Promise<DocxOriginal>) | undefined = this.latestOriginal;
+    const original: DocxOriginal = latestForOpen === undefined ? await this.repository.original(document.activeOriginal) : await latestForOpen(documentId);
     const source: DocumentOriginal | undefined = this.parse.state.snapshot.originals.find((o: DocumentOriginal): boolean => o.id === original.sourceId && o.assetId === original.assetId && o.hash === original.hash && o.version === original.version && o.format === DocumentParseFormat.Docx);
     if (source === undefined) { throw new DocxFailure('ParseOriginalUnavailable','docx'); } return source;
   }
@@ -183,13 +185,35 @@ export class DocxIngestionService implements DocumentParseStateListener {
     const claim: DocxAssetClaim = new DocxAssetClaim(); claim.documentId = documentId; claim.assetId = o.assetId; claim.hash = o.hash; claim.bytes = o.bytes; claim.owner = 'DocumentParseService'; claim.role = 'Original';
     await this.parse.withDocxOriginal<void>(source.id,async (): Promise<void> => { await this.repository.register(o,[claim]); }); this.pause(); this.message = '新原件候选已保存；旧活动保留，需独立解析及当前覆盖确认'; await this.refresh();
   }
-  async archive(id: string, archived: boolean): Promise<void> { this.pause(); await this.repository.archive(id,archived); await this.vectorSync?.(id); this.message = archived ? '已归档，不默认参与检索' : '已恢复已有内容，无新上传'; await this.refresh(); }
-  async deleteDocument(id: string, confirmed: boolean): Promise<void> { if (!confirmed) { throw new DocxFailure('DeletionConfirmationRequired','manage'); } this.pause(); await this.repository.deleteDocument(id); await this.vectorCleanup?.(id); await this.cleanupAssets?.(); this.message = '本机删除已撤资格；原件/ZIP按owner分阶段清理，不代表云删除'; await this.refresh(); }
-  async abandon(id: string): Promise<void> { if (this.abandonCandidate === undefined) { throw new DocxFailure('CandidateManagementUnavailable','manage'); } this.pause(); await this.abandonCandidate(id); await this.cleanupAssets?.(); await this.refresh(); }
+  async archive(id: string, archived: boolean): Promise<void> {
+    this.pause(); await this.repository.archive(id,archived);
+    const sync: ((id: string) => Promise<void>) | undefined = this.vectorSync;
+    if (sync !== undefined) { await sync(id); }
+    this.message = archived ? '已归档，不默认参与检索' : '已恢复已有内容，无新上传'; await this.refresh();
+  }
+  async deleteDocument(id: string, confirmed: boolean): Promise<void> {
+    if (!confirmed) { throw new DocxFailure('DeletionConfirmationRequired','manage'); }
+    this.pause(); await this.repository.deleteDocument(id);
+    const cleanupVector: ((id: string) => Promise<void>) | undefined = this.vectorCleanup;
+    if (cleanupVector !== undefined) { await cleanupVector(id); }
+    const cleanupFiles: (() => Promise<void>) | undefined = this.cleanupAssets;
+    if (cleanupFiles !== undefined) { await cleanupFiles(); }
+    this.message = '本机删除已撤资格；原件/ZIP按owner分阶段清理，不代表云删除'; await this.refresh();
+  }
+  async abandon(id: string): Promise<void> {
+    const abandonOriginal: ((id: string) => Promise<void>) | undefined = this.abandonCandidate;
+    if (abandonOriginal === undefined) { throw new DocxFailure('CandidateManagementUnavailable','manage'); }
+    this.pause(); await abandonOriginal(id);
+    const cleanupFiles: (() => Promise<void>) | undefined = this.cleanupAssets;
+    if (cleanupFiles !== undefined) { await cleanupFiles(); }
+    await this.refresh();
+  }
   async retryCleanup(): Promise<void> {
     await this.processing?.retryRelease?.();
     for (const lease of this.heldProcessingLeases.slice()) { const receipt: DocxReleaseReceipt = new DocxReleaseReceipt(); receipt.leaseId = lease; receipt.resource = 'Released'; await this.repository.releaseRead(receipt); this.heldProcessingLeases = this.heldProcessingLeases.filter((id: string): boolean => id !== lease); }
-    await this.cleanupAssets?.(); await this.refresh();
+    const cleanupFiles: (() => Promise<void>) | undefined = this.cleanupAssets;
+    if (cleanupFiles !== undefined) { await cleanupFiles(); }
+    await this.refresh();
   }
   progress(documentId: string): string {
     const id: string = this.selectedSources.get(documentId) ?? (documentId.startsWith('docx-') ? documentId.slice(5) : '');

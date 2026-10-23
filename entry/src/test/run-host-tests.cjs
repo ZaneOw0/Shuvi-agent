@@ -304,7 +304,9 @@ test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => 
     'entry/src/main/ets/knowledge/domain/TextKnowledgeModels.ets': '530e82f28659c7febdfe74c9e7c7f265c0217ba9ed933fad5b168a0310c1be7f',
     // Approved unified-parsing connection points: attachBeforeCleanup/attachUnifiedImport
     // and the KnowledgeStoreHost cleanup guard. No M1 storage or wire bytes changed.
-    'entry/src/main/ets/knowledge/application/TextKnowledgeService.ets': 'c5d8eb092a1247838ee9ca6cca372496c9ad798fdf762bf0b8795ccf9ae98805',
+    // 2026-10-23: alias optional callbacks to local consts for the await-thenable lint rule;
+    // call order, guards, storage and wire bytes are unchanged.
+    'entry/src/main/ets/knowledge/application/TextKnowledgeService.ets': '22e63639e714f8b82ec132f4978f27b4a6b43a001491f3d6d16ced6c5547ad36',
     'entry/src/main/ets/knowledge/infra/TextFileAdapter.ets': '9e9ae7b5975872169eb04c823734d48e7f49e6f87a066fde362ea1d4e336e82e',
     'entry/src/main/ets/knowledge/pipeline/TextNormalizer.ets': 'dc4e861e99dc69883350b4d23e9289e455e9a3e7bb8eb880a7e6dad8595a3760',
     'entry/src/test/eval/text-m1-golden.json': 'f060e0ed13451a56e89625b32946b906b718d9238996bc85d30e8edd7e1f9494',

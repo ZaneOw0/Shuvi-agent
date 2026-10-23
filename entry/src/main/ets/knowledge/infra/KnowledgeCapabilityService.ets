@@ -45,7 +45,8 @@ export class KnowledgeCapabilityService {
     if (KnowledgeCapabilityService.record.state === KnowledgeCapabilityState.Releasing) { throw new KnowledgeFailure('NativeReleaseUnconfirmed','native-selftest'); }
     if (KnowledgeCapabilityService.record.state === KnowledgeCapabilityState.Available) { return; }
     if (KnowledgeCapabilityService.checking === undefined) { KnowledgeCapabilityService.checking = KnowledgeCapabilityService.checkArchive(); }
-    try { await KnowledgeCapabilityService.checking; }
+    const checking: Promise<void> = KnowledgeCapabilityService.checking;
+    try { await checking; }
     catch (error) {
       if (KnowledgeCapabilityService.archive().state !== KnowledgeCapabilityState.Releasing) { KnowledgeCapabilityService.record.state = KnowledgeCapabilityState.Failed; KnowledgeCapabilityService.record.reason = 'SelfTestAborted'; }
       if (error instanceof Error) { throw error; } throw new KnowledgeFailure('SelfTestAborted','native-selftest');

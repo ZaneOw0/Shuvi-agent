@@ -37,7 +37,8 @@ export class VectorRdbRepository implements KnowledgeVectorPort, VectorWorkflowS
   async open(): Promise<void> {
     if (!this.scope.testing) {
       if (VectorRdbRepository.selfCheck === undefined) { VectorRdbRepository.selfCheck = VectorRdbRepository.checkSession(this.context); }
-      await VectorRdbRepository.selfCheck;
+      const selfCheck: Promise<void> = VectorRdbRepository.selfCheck;
+      await selfCheck;
     }
     await this.write<void>(async (): Promise<void> => {
       if (this.store !== undefined) { return; } this.status = 'Checking';

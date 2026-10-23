@@ -97,7 +97,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
     this.credential = credential; this.assets = assets; this.filesRoot = `${filesDir}/knowledge_parse_v1`;
   }
   pause(): void { for (const session of this.sessions) { session.cancel(); session.close(); } this.sessions = []; this.credential.clearTransient(); }
-  private async fetch(request: rcp.Request, authenticated: boolean, action: DocumentParseAction, incoming: rcp.IncomingDataCallback): Promise<rcp.Response> {
+  private async fetch(request: rcp.Request, authenticated: boolean, action: DocumentParseAction, incoming: (buffer: ArrayBuffer) => Promise<void>): Promise<rcp.Response> {
     if (action.original.format === DocumentParseFormat.Docx && (!documentGrantMatches(action.original,action.grant,action.task.credentialRevision) || action.task.originalId !== action.original.id || action.task.hash !== action.original.hash || action.task.version !== action.original.version)) { throw new DocumentParseFailure('当前DOCX完整原件许可或参数不符','请求前'); }
     if (documentIsImage(action.original.format) && action.original.bytes === 0 && (!authenticated || request.method !== 'GET')) { throw new DocumentParseFailure('缺原件仅允许复核原批次','请求前'); }
     if (documentIsImage(action.original.format) && ([ImageParsePermit.policy,ImageParsePermit.productionPolicy].indexOf(action.grant.policy) < 0 || action.grant.parameters !== ImageParsePermit.parameters || action.grant.revoked || action.grant.originalId !== action.original.id || action.grant.hash !== action.original.hash || action.grant.version !== action.original.version || action.grant.format !== action.original.format || action.grant.credentialRevision !== action.task.credentialRevision || action.task.originalId !== action.original.id || action.task.hash !== action.original.hash || action.task.version !== action.original.version || !action.grant.acknowledgement.fullFile || !action.grant.acknowledgement.freeEligible || action.grant.issuedAt < 1 || action.original.bytes > 0 && !documentGrantMatches(action.original,action.grant,action.task.credentialRevision))) { throw new DocumentParseFailure('当前图片许可身份或参数不符','请求前'); }
@@ -169,7 +169,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
   }
   private async control(request: rcp.Request, action: DocumentParseAction): Promise<string> {
     const chunks: Uint8Array[] = []; const cap: MineruBoundedBytes = new MineruBoundedBytes();
-    const incoming: rcp.IncomingDataCallback = (buffer: ArrayBuffer): void => {
+    const incoming = async (buffer: ArrayBuffer): Promise<void> => {
       action.cancel.check(); cap.reserve(buffer.byteLength, DocumentParseBudget.jsonBytes); chunks.push(new Uint8Array(buffer).slice());
     };
     await this.fetch(request, true, action, incoming); const bytes: Uint8Array = new Uint8Array(cap.count); let offset: number = 0;
@@ -199,7 +199,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
         const reader: MineruUploadReader = new MineruUploadReader(file, action);
         const request: rcp.Request = new rcp.Request(address, 'PUT'); request.content = new rcp.UploadFromFile(reader);
         const headers: rcp.RequestHeaders = { 'content-length': `${action.original.bytes}`, 'content-type': MINERU_UPLOAD_NO_CONTENT_TYPE }; request.headers = headers;
-        const cap: MineruBoundedBytes = new MineruBoundedBytes(); const discard: rcp.IncomingDataCallback = (bytes: ArrayBuffer): void => { action.cancel.check(); cap.reserve(bytes.byteLength, DocumentParseBudget.jsonBytes); };
+        const cap: MineruBoundedBytes = new MineruBoundedBytes(); const discard = async (bytes: ArrayBuffer): Promise<void> => { action.cancel.check(); cap.reserve(bytes.byteLength, DocumentParseBudget.jsonBytes); };
         await this.fetch(request, false, action, discard); await reader.validate();
       } finally { await fileIo.close(file); }
     });
@@ -223,7 +223,7 @@ export class MineruTransportAdapter implements MineruTaskPort {
       await this.credential.withLease(binding, async (address: string): Promise<void> => {
         mineruValidateDestination(address, 'RESULT');
         const request: rcp.Request = new rcp.Request(address, 'GET');
-        const incoming: rcp.IncomingDataCallback = async (buffer: ArrayBuffer): Promise<void> => { await sink.write(buffer); };
+        const incoming = async (buffer: ArrayBuffer): Promise<void> => { await sink.write(buffer); };
         const response: rcp.Response = await this.fetch(request, false, action, incoming);
         await sink.waitForWrites();
         const length: string | string[] | undefined = response.headers['content-length'];

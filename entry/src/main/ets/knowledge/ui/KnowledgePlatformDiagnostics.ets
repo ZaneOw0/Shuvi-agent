@@ -81,16 +81,18 @@ export struct KnowledgePlatformDiagnostics {
   private async execute(local: boolean = false, vector: boolean = false, embedding: boolean = false, basis: boolean = false): Promise<void> {
     if (this.running) { return; } this.running = true; this.results = []; this.summary = 'Running';
     const scope: KnowledgeStorageScope = KnowledgeStorageScope.isolated(Date.now().toString(16).padStart(16,'0'));
+    const lines: string[] = [];
     try {
       const context = this.getUIContext().getHostContext();
       if (local && context === undefined) { this.summary = 'ContextMissing'; return; }
       const suite: PdfNativeSuiteResult = basis && context !== undefined ? await embeddingRunBasisSuite(context,scope) : embedding && context !== undefined ? await knowledgeRunEmbeddingSuite(context,scope) : vector && context !== undefined ? await knowledgeRunVectorSuite(context,scope) : local && context !== undefined ? await knowledgeRunLocalSuite(context,scope) : await pdfRunNativeSuite(scope);
       for (const row of suite.cases) {
         const line: string = `R2 run=${suite.run} suite=${suite.version} case=${row.id} pass=${row.passed ? 1 : 0} reason=${row.reason} code=${row.code} in=${row.input} out=${row.output} calls=${row.calls} residual=${row.residuals} end=${row.ends}`;
-        hilog.info(0x0001,'SHUVI_R2','%{public}s',line); this.results = this.results.concat([line]);
+        hilog.info(0x0001,'SHUVI_R2','%{public}s',line); lines.push(line);
       }
+      this.results = lines;
       this.summary = `${suite.cases.filter((row: PdfNativeCaseResult): boolean => row.passed).length}/${suite.cases.length}`;
-    } finally { this.running = false; }
+    } finally { this.results = lines; this.running = false; }
   }
   private async audit(): Promise<void> {
     const context = this.getUIContext().getHostContext(); if (context === undefined || this.running) { return; } this.running = true;

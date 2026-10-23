@@ -105,7 +105,8 @@ export class PdfIngestionService {
     binding.taskId = task.id; binding.dataId = task.dataId; binding.resultAssetId = result.assetId; binding.zipHash = result.hash; binding.zipBytes = result.bytes; binding.requestMode = grant?.parameters ?? 'NotRecorded'; binding.backend = 'NotRecorded'; binding.producerVersion = 'NotRecorded'; return binding;
   }
   async prepare(parse: DocumentParseService, resultId: string): Promise<void> {
-    if (this.unifiedConsumer !== undefined) { await this.unifiedConsumer(parse,resultId); return; }
+    const consumer: ((parse: DocumentParseService, result: string) => Promise<void>) | undefined = this.unifiedConsumer;
+    if (consumer !== undefined) { await consumer(parse,resultId); return; }
     if (this.state.busy || this.state.releasing) { return; }
     this.state = new PdfIngestionState(); this.snapshot = undefined; this.state.busy = true; this.state.stage = PdfStage.Validating; const cancel: KnowledgeCancellation = new KnowledgeCancellation(); this.active = cancel; this.emit(); let readLeaseId: string = '';
     let currentJob: PdfIngestionJob | undefined = undefined;

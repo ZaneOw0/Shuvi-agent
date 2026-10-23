@@ -29,7 +29,9 @@ export class EmbeddingTokenAdapter implements EmbeddingTokenCounterPort, Unified
   async unifiedEvidence(config: EmbeddingConfig, text: string, hash: string): Promise<TokenEligibilityEvidence> { return this.count(config.modelId,'document',text,hash,UNIFIED_TEXT_POLICY); }
   async unifiedQueryEvidence(config: EmbeddingConfig, text: string, hash: string): Promise<TokenEligibilityEvidence> { return this.count(config.modelId,'query',text,hash,UNIFIED_QUERY_POLICY); }
   private async count(modelId: string, role: string, text: string, textHash: string, policy: string): Promise<TokenEligibilityEvidence> {
-    if (this.loading === undefined) { this.loading = this.load(); } await this.loading;
+    if (this.loading === undefined) { this.loading = this.load(); }
+    const loading: Promise<void> = this.loading;
+    await loading;
     const input: BgeM3CountInput = new BgeM3CountInput(); input.fullInput = text; input.modelId = modelId; input.policyVersion = policy;
     if (role === 'document') { input.role = BgeM3InputRole.Document; } else if (role === 'query') { input.role = BgeM3InputRole.Query; } else if (role === 'probe') { input.role = BgeM3InputRole.Probe; } else { throw new KnowledgeFailure('InputRoleInvalid','input-count'); }
     const result: BgeM3CountEvidence = await taskpool.execute<[string,BgeM3CountInput],BgeM3CountEvidence>(embeddingCountWorker,this.weights,input);

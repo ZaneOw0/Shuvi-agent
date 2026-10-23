@@ -59,7 +59,7 @@ class LegacyProjectionProducer implements ParsedProducerPort {
         }
       }
       return await this.adapter.produce(request,document,generation,assets,cancel);
-    } finally { for (const archive of archives) { await archive.release(); } }
+    } finally { for (const archive of archives) { const releasing: Promise<void> = archive.release(); await releasing; } }
   }
 }
 export class LegacyParsedDocumentReader implements ParsedLegacyReadPort, PdfImageDescriptorPort {

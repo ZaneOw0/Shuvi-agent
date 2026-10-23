@@ -32,7 +32,7 @@ export class KnowledgeQuerySession {
     this.invalidate(); const epoch=this.state.epoch; this.state=new UnifiedSearchState(); this.state.epoch=epoch; this.state.session=this.identity.id(); this.state.historyId=this.identity.id(); this.state.question=prepareTextQuery(question).actualInput; this.state.includeArchived=archived; this.state.direct.id='Direct'; this.state.related.id='Related'; this.state.direct.busy=true; this.state.related.busy=true;
     this.directCandidates=[]; this.relatedCandidates=[]; this.directImages.clear(); this.registry.clear(); this.positions=[0,0]; this.pages.clear(); this.semanticPromise=undefined; this.scope=undefined; this.historyRevision=0;
     this.configBinding=embeddingConfigBinding(this.config.currentConfig());
-    const cancel: ParsedCancellation=new ParsedCancellation(); this.cancel=cancel; this.emit(); this.local=this.follow<void>(this.loadLocal(epoch,cancel)); await this.local;
+    const cancel: ParsedCancellation=new ParsedCancellation(); this.cancel=cancel; this.emit(); const local: Promise<void>=this.follow<void>(this.loadLocal(epoch,cancel)); this.local=local; await local;
   }
   private current(epoch: number, cancel: ParsedCancellation): boolean { if (this.configBinding!==embeddingConfigBinding(this.config.currentConfig())) { cancel.invalid=true; if (this.state.epoch===epoch) { this.state.semanticState='ConfigChanged'; this.state.direct.busy=false; this.state.related.busy=false; this.emit(); } } return this.state.epoch===epoch && !cancel.invalid; }
   private async loadLocal(epoch: number, cancel: ParsedCancellation): Promise<void> {
@@ -69,7 +69,7 @@ export class KnowledgeQuerySession {
     return this.follow<UnifiedQueryApproval>(this.reviewCurrent());
   }
   private async reviewCurrent(): Promise<UnifiedQueryApproval> {
-    if (this.local!==undefined) { await this.local; } const cancel=this.cancel; const epoch=this.state.epoch;
+    const local: Promise<void> | undefined=this.local; if (local!==undefined) { await Promise.resolve(local); } const cancel=this.cancel; const epoch=this.state.epoch;
     if (cancel===undefined || this.scope===undefined || !this.scope.complete) { throw new ParsedFailure('CurrentLocalScopeRequired','query-review'); }
     if (this.scopePort.captureLocal!==undefined) { const current=await this.scopePort.captureLocal(this.config.currentConfig(),this.state.includeArchived,cancel); if (current.localHash!==this.scope.localHash || !this.current(epoch,cancel)) { throw new ParsedFailure('LocalMembershipChangedStartNewSession','query-review'); } }
     if (this.state.review!==undefined) { this.state.review.revoked=true; await this.engine.revoke(this.state.review.session,this.state.review.epoch); this.state.review=undefined; this.emit(); }
@@ -81,7 +81,7 @@ export class KnowledgeQuerySession {
     if (this.semanticPromise!==undefined) { return this.semanticPromise; } const a=this.state.review; const cancel=this.cancel;
     if (a===undefined || cancel===undefined || !consent || !cost || a.epoch!==this.state.epoch || a.actual!==this.state.question) { throw new ParsedFailure('CurrentQueryConsentRequired','query'); }
     const epoch=this.state.epoch; a.approved=true; a.costAccepted=true;
-    this.semanticPromise=this.follow<void>(this.approveAndRun(a,epoch,cancel,cost)); await this.semanticPromise;
+    const semantic: Promise<void>=this.follow<void>(this.approveAndRun(a,epoch,cancel,cost)); this.semanticPromise=semantic; await semantic;
   }
   private async approveAndRun(a: UnifiedQueryApproval, epoch: number, cancel: ParsedCancellation, cost: boolean): Promise<void> {
     try { await this.engine.approve(a,cost); if (!this.current(epoch,cancel)) { return; } this.state.semanticState='Loading'; this.state.related.exhausted=false; this.emit(); await this.runSemantic(a,epoch,cancel); }

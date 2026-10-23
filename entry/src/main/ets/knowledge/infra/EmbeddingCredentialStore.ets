@@ -81,7 +81,9 @@ export class EmbeddingCredentialStore implements EmbeddingCredentialPort {
       request.headers = headers; check();
       if (admission === undefined) { return await session.fetch(request); }
       const response: EmbeddingFetchLaunch = new EmbeddingFetchLaunch();
-      await admission((): void => { check(); response.pending = session.fetch(request); });
+      const launch = (): void => { check(); response.pending = session.fetch(request); };
+      const admitted: Promise<void> = admission(launch);
+      await Promise.resolve(admitted);
       if (response.pending === undefined) { throw new KnowledgeFailure('NoRequestAdmissionDidNotLaunch','embedding'); } return await response.pending;
     } finally { bytes.fill(0); request.headers = undefined; this.active = this.active.filter((item: Uint8Array): boolean => item !== bytes); this.requests = this.requests.filter((item: rcp.Request): boolean => item !== request); }
   }

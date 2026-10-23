@@ -15,9 +15,9 @@ export class ResidualHistorySession {
   constructor(context: common.Context,scope: KnowledgeStorageScope) { const host = KnowledgeStoreHost.forContext(context,scope); this.text = new TextRdbRepository(context,host); this.pdf = new ResidualDeferredHistoryRepository(host); this.search = new KnowledgeSearchService(this.text,this.pdf,new KnowledgePlatformIdentity()); }
   async open(): Promise<void> { await this.text.open(); await this.pdf.open(); }
   async start(): Promise<void> { this.search.state.question = 'deferred local fixture'; this.operation = this.search.search(); await this.pdf.entered; this.firstId = this.search.state.historyId; }
-  async settle(reject: boolean): Promise<void> { this.pdf.settle(reject); await this.operation; }
+  async settle(reject: boolean): Promise<void> { this.pdf.settle(reject); const operation: Promise<void> | undefined = this.operation; if (operation !== undefined) { await Promise.resolve(operation); } }
   async audit(): Promise<void> { const rows = (await this.pdf.history(new KnowledgeHistoryCursor(),20)).records; const once = rows.filter((row): boolean => row.id === this.firstId).length; const pass: boolean = !this.search.state.historyPending && once === 1; hilog.info(0x0001,'SHUVI_R2','%{public}s',`R2_RESIDUAL_HISTORY once=${once} pending=${this.search.state.historyPending ? 1 : 0} saves=${this.pdf.saves} requests=0`); if (!pass) { throw new Error('PendingHistoryNotRecovered'); } }
-  async close(): Promise<void> { this.pdf.settle(false); await this.operation; await this.pdf.close(); await this.text.close(); }
+  async close(): Promise<void> { this.pdf.settle(false); const operation: Promise<void> | undefined = this.operation; if (operation !== undefined) { await Promise.resolve(operation); } await this.pdf.close(); await this.text.close(); }
 }
 @Component
 export struct ResidualHistoryView {

@@ -247,10 +247,10 @@ export class KnowledgeAssembly {
   }
   async retryUnifiedProcessing(): Promise<void> { await this.unifiedQueue.stop(); await this.retryUnifiedInitialization(); await this.unifiedLifecycle.sync(); await this.unifiedQueue.initialize(); await this.unifiedIngestion.refresh(); }
   async acquire(): Promise<void> {
-    const operation = this.gate.then(async (): Promise<void> => { if (this.initializing === undefined) { this.initializing = this.start(); } await this.initializing; this.leases++; }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
+    const operation = this.gate.then(async (): Promise<void> => { if (this.initializing === undefined) { this.initializing = this.start(); } const initializing: Promise<void> = this.initializing; await initializing; this.leases++; }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
   }
   async release(): Promise<void> {
-    const operation = this.gate.then(async (): Promise<void> => { if (this.leases <= 0) { return; } if (this.leases === 1) { this.closing = this.closeSession(); try { await this.closing; } finally { this.closing = undefined; } } this.leases--; }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
+    const operation = this.gate.then(async (): Promise<void> => { if (this.leases <= 0) { return; } if (this.leases === 1) { this.closing = this.closeSession(); const closing: Promise<void> = this.closing; try { await closing; } finally { this.closing = undefined; } } this.leases--; }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
   }
   async retrySourceReleases(): Promise<void> { await this.sources.retry(); if (this.repository.ready()) { await this.repository.retrySourceReleases(this.sessionId); this.pages.releaseRetried(); } }
   async cleanupDocx(parse: DocumentParseService): Promise<void> {

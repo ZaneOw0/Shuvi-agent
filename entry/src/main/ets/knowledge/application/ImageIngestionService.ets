@@ -70,7 +70,8 @@ export class ImageIngestionService extends ImageOriginalImportService implements
   }
   detach(): void { this.pause(); this.owner.unsubscribe(this); ImageIngestionService.sessions = ImageIngestionService.sessions.filter((service: ImageIngestionService): boolean => service !== this); }
   async prepareResult(resultId: string): Promise<void> {
-    if (this.unifiedConsumer !== undefined) { await this.unifiedConsumer(this.owner,resultId); return; }
+    const consumer: ((parse: DocumentParseService, result: string) => Promise<void>) | undefined = this.unifiedConsumer;
+    if (consumer !== undefined) { await consumer(this.owner,resultId); return; }
     if (this.actionBusy()) { return; }
     try {
       const state = this.owner.viewState().snapshot; const result = state.results.find((r: DocumentParseResultEnvelope): boolean => r.assetId === resultId);
@@ -201,7 +202,8 @@ export class ImageIngestionService extends ImageOriginalImportService implements
   }
   async archive(documentId: string, archived: boolean): Promise<void> {
     this.pause(); await this.repository.archive(documentId,archived); this.message = archived ? '已归档；未重新上传或嵌入' : '已恢复关键词；向量资格需本机读回同步';
-    try { await this.vectorSync?.(documentId); } catch { this.message += '；向量同步待重试'; } await this.refresh();
+    const sync: ((documentId: string) => Promise<void>) | undefined = this.vectorSync;
+    try { if (sync !== undefined) { await sync(documentId); } } catch { this.message += '；向量同步待重试'; } await this.refresh();
   }
   async deleteDocument(documentId: string, confirmed: boolean): Promise<void> {
     if (!confirmed) { return; } this.pause(); await this.repository.deleteDocument(documentId); this.message = '已删除索引，原件清理待安全释放；历史保留失效文本'; await this.retryCleanup(); await this.refresh();
@@ -210,7 +212,7 @@ export class ImageIngestionService extends ImageOriginalImportService implements
     const handled: Set<string> = new Set<string>();
     for (const intent of await this.repository.cleanups()) {
       if (intent.state === 'Done') { continue; }
-      if (!handled.has(intent.documentId)) { handled.add(intent.documentId); try { await this.vectorCleanup?.(intent.documentId); } catch { this.message = '已删除/待清理：向量或来源仍持有'; continue; } }
+      if (!handled.has(intent.documentId)) { handled.add(intent.documentId); const cleanupVector: ((documentId: string) => Promise<void>) | undefined = this.vectorCleanup; try { if (cleanupVector !== undefined) { await cleanupVector(intent.documentId); } } catch { this.message = '已删除/待清理：向量或来源仍持有'; continue; } }
       let failure: string = '';
       const claim = await this.repository.claimCleanup(intent.id); if (claim === undefined) { this.message = '已删除/待清理：仍有读租约或向量资产'; continue; }
       try {

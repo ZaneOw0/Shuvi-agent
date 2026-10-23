@@ -246,14 +246,14 @@ export struct KnowledgeView {
             Column({ space: 8 }) {
               Text(record.result.input.fullQuestion).fontSize(15).width('100%')
               ForEach(record.result.hits, (citation: KnowledgeHit) => {
-                KnowledgeResultCard({ hit: citation, onOpenHit: this.onOpenHit }).id(`r2-citation-${record.id}-${citation.chunkId}`)
+                KnowledgeResultCard({ hit: citation, onOpenHit: this.onOpenHit, id: `r2-citation-${record.id}-${citation.chunkId}` })
               }, (citation: KnowledgeHit): string => citation.id)
             }.width('100%').padding({ top: 10,bottom: 10 }).border({ width: { bottom: 1 },color: Theme.line })
           }, (record: KnowledgeHistory): string => `${record.source}:${record.id}`)
           Button('更多历史').onClick((): void => { this.loadHistory(false); })
         }
         ForEach(this.hits, (hit: KnowledgeHit) => {
-          KnowledgeResultCard({ hit: hit, onOpenHit: this.onOpenHit }).id(`r2-hit-${hit.chunkId}`)
+          KnowledgeResultCard({ hit: hit, onOpenHit: this.onOpenHit, id: `r2-hit-${hit.chunkId}` })
         }, (hit: KnowledgeHit): string => hit.id)
         Text(`向量资格：${this.embedding?.corpusGate() ?? 'Unavailable'}；M1 不向量化；未输入 Key 不请求`).fontSize(13).fontColor(Theme.amber).width('100%')
       }

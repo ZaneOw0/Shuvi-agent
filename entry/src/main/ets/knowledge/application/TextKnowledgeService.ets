@@ -38,7 +38,8 @@ export class TextKnowledgeService {
   async initialize(deferRecovery: boolean = false): Promise<void> {
     await this.repository.open();
     if (this.beforeCleanup !== undefined) {
-      try { await this.beforeCleanup(); }
+      const beforeCleanup: (() => Promise<void>) | undefined = this.beforeCleanup;
+      try { if (beforeCleanup !== undefined) { await beforeCleanup(); } }
       catch { this.state.message = '统一引用保护未就绪，已暂停旧资产清理；资料保留'; await this.refresh(); this.emit(); return; }
     }
     if (deferRecovery) { await this.refresh(); } else { await this.recoverLocal(); }
@@ -94,7 +95,8 @@ export class TextKnowledgeService {
     this.emit(); return true;
   }
   async importFiles(): Promise<void> {
-    if (this.unifiedImport !== undefined) { await this.unifiedImport(); return; }
+    const unifiedImport: (() => Promise<void>) | undefined = this.unifiedImport;
+    if (unifiedImport !== undefined) { await unifiedImport(); return; }
     if (this.state.busy || this.closing) { return; }
     this.batchCanceled = false;
     this.state.busy = true; this.state.message = ''; this.emit();

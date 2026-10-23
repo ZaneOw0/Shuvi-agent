@@ -155,7 +155,8 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
       }
       for (const file of selected.files) {
         documentBudgetCheck(file.bytes, selected.files.length, batchBytes, documentUsage(this.state.snapshot));
-        if (this.capacity !== undefined) { await this.capacity(file.bytes); cancel.check(); }
+        const localCapacity: ((bytes: number) => Promise<void>) | undefined = this.capacity;
+        if (localCapacity !== undefined) { await localCapacity(file.bytes); cancel.check(); }
         const id: string = this.clock === undefined ? `m2-${Date.now()}-${this.state.snapshot.originals.length}` : this.clock.id();
         const pending: DocumentParseCleanup = new DocumentParseCleanup(); pending.id = `cleanup-${id}-copy`;
         pending.assets = [`original-${id}`, `part-${id}`]; pending.originalBytes = file.bytes;
