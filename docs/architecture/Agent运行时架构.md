@@ -1,6 +1,6 @@
 # Agent 运行时架构
 
-> 状态：已实现待验收（debug 普通对话与显式关键词搜索已装配；真实搜索设备验收、核账与正式部署待完成）。
+> 状态：已实现待验收（debug 普通对话与显式关键词搜索已接入页面，主要模拟器交互获用户确认；设备证据归档、核账与正式部署待完成）。
 > 更新日期：2026-10-24。应用搜索的两个 Runtime 任务与调试边界见 [spec 03 §6.11](../../specs/03-联网搜索.md)；下文通用网关装配并非唯一产品调用方式。
 > 适用版本：`modules/harmony_agent/UPSTREAM.json` 固定的 `f177176`。
 
@@ -16,13 +16,17 @@ flowchart TD
   Runtime --> Model[模型连接器与 ModelTransportPort]
   Runtime --> Tools[MCP 工具适配器]
   Runtime --> Storage[执行恢复与记忆存储]
-  Model --> Gateway[独立模型网关或后续传输实现]
+  Model --> Direct[当前设备直连 DeepSeek]
+  Model -. 可替换路线 .-> Gateway[独立 Windows 模型网关]
   Tools --> Client[ArkTS MCP Client]
   Client --> Search[Node 搜索 MCP Server]
   Search --> Provider[搜索供应商]
+  UI --> RAG[独立知识库应用服务：导入与检索]
 ```
 
-这是接入目标。当前产品页面仍使用日程/搜索 Mock，另有 MCP 连接检查；上图完整生产链路尚未接入页面。迁移状态与实测证据见 [项目进度](../08-项目进度与验收.md)。
+上图表示当前接线与可替换路线。debug 页面已能提交普通对话及授权搜索；日程/搜索 Mock 仍是独立演示模式，MCP 连接检查只做发现。知识库服务尚未接入 Runtime。真实搜索依赖电脑 Node 服务，并非正式部署；迁移状态与分层证据见 [项目进度](../08-项目进度与验收.md)。
+
+普通对话使用确定性单 LLM 步骤，不带历史上下文。搜索使用用户明确填写的关键词，通过授权后派发；保存来源后再启动独立模型任务生成回答，允许仅重试回答。它不是模型自主规划、多 Agent 协作或一个可跨任务自动恢复的事务。一次派发后的搜索限额持久化保留，账单导入与额度释放尚未实现。
 
 ## 2. 控制入口和执行边界
 
@@ -36,7 +40,7 @@ Planner 输出需要校验，不能凭类型断言变成可执行计划。工具
 
 Ability 所在的应用宿主创建并注入凭据、执行存储、记忆存储、MCP 连接与 Runtime 工厂。`createSingleAgentHostRuntime` 管理资源打开、失败回滚和关闭次序。页面不持有密钥或直接打开数据库。
 
-模型接口允许替换具体网络实现，但当前 `createShuviApplicationBackend` 的现成组合仍走 Local AI Gateway 路线。端口存在不代表生产适配器已经齐全；更换部署方式须落实具体实现、配置和测试。[接入说明](../integration/agent/接入与边界.md) 列出了现有入口和未完成项。
+模型接口允许替换具体网络实现。导入的 `createShuviApplicationBackend` 通用组合保留 Local AI Gateway 路线；当前页面通过应用层 `ChatRuntimeFactory` / 搜索装配与 `DeepSeekModelTransport` 走设备直连，二者不能混为唯一入口。Ability 负责生命周期，凭据仅在本次会话有效；退后台停止，返回不自动续跑。[接入说明](../integration/agent/接入与边界.md) 列出了装配与未完成项。
 
 ## 4. 策略与研究边界
 

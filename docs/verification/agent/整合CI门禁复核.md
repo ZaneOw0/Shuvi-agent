@@ -2,11 +2,21 @@
 
 > 状态：已实现待验收（门禁判定已修复；完整 lint 尚未通过）。
 > 更新日期：2026-10-24。
-> 修复前远端复核对应 `chore/integrate-agent-gateway` / `32ad881`，PR #18；历史阶段结果保留。本轮提交包含后续代码与测试环境兼容修复，本机验证结果见下一节；远端结果需以包含修复的新一轮 CI 为准。
+> 最新远端复核对应 `chore/integrate-agent-gateway` / `30bb008`，PR #18；诊断降为 0，分析器覆盖异常仍阻塞。修复前 `32ad881` 与更早记录保留用于追溯。
+
+## 修复提交后的远端结果（2026-10-24）
+
+修复提交 `30bb008a9657161d6a36ce230d527279cef82b92` 已推送。[运行 40097037001](https://github.com/ZaneOw0/Shuvi-agent/actions/runs/40097037001) 于北京时间 21:11 开始，21:12 结束，结论 FAILURE。工具链预检、来源校验与 MCP 样例协议测试、搜索服务构建与自动测试通过；“门禁（代码检查 + 构建）”在 lint 阶段失败。
+
+远端 Code Linter 版本 `6.0.240`，摘要为 `passed: false`、`exitCode: 1`、`issueCount: 0`，问题为 `Analyzer failed or coverage incomplete: arkPerfCheck.log`。这证实修复已进入 CI、报告诊断由 31 项降为 0；不能据空报告认定完整分析通过。产品构建尚未执行到，后续 Agent/UX 和 Windows 网关步骤跳过。
+
+runner 证据目录：`D:\actions-runner\_work\Shuvi-agent\Shuvi-agent\.local\ci-lint\20261024-211140-849-15bae9e4`。下载的失败步骤日志：`.local/ci-review/run-40097037001/failed.log`；只读复现：`gh run view 40097037001 --repo ZaneOw0/Shuvi-agent --log-failed`。该日志只有摘要，尚未取得该次 runner 的原始 `arkPerfCheck.log`，因此不能把本机的异常条数和具体文件冒充为此次远端诊断。
+
+下一步由 CI/平台核对原始分析器日志及安装环境。保留现有门禁判定；本机缺少 RAG 离线材料属于另一个已知阻塞，本轮远端未运行到该测试，不能归为此次 CI 的实际失败原因。
 
 ## 本机修复进展（2026-10-24，基于 32ad881 的工作区）
 
-本节是代码修复后的本机结果；下面的远端运行与早期诊断属于修复前历史。修复随本轮提交交付，尚未取得包含修复的新一轮远端 CI 结果，完整门禁仍未通过。
+本节记录提交 `30bb008` 前的修复工作区验证；最新远端结果见上一节，后面的 `32ad881` 与早期诊断保留为历史。完整门禁仍未通过。
 
 ### 已实施的修复
 
@@ -57,7 +67,7 @@ lint 复现使用下节同一 `scripts/ci-lint.ps1` 命令；不能改为只检�
 
 此外，自动审批拒绝了恢复回执解析异常吞没行为的候选改动；未执行该改动。当前参数摘要计算失败仍向上传播，无法建立关联的调用不被伪造成有可靠回执。
 
-## 最新 CI 复核（2026-10-24）
+## 修复前 CI 复核（2026-10-24，32ad881）
 
 [运行 40090824978](https://github.com/ZaneOw0/Shuvi-agent/actions/runs/40090824978) 于北京时间 19:40 开始，head 为 `32ad88166163c6c2ceee2c9ae5bdbe71d5a24cfb`，attempt 1。工具链预检、来源校验与 MCP fixture、搜索服务构建与测试通过；“门禁（代码检查 + 构建）”在 lint 失败，尚未执行该步产品构建；后续 Agent/Hypium/UX 和网关步骤跳过。
 
