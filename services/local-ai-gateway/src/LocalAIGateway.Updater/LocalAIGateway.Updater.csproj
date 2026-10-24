@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>aigw-updater</AssemblyName>
+    <RootNamespace>LocalAIGateway.Updater</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LocalAIGateway.Core\LocalAIGateway.Core.csproj" />
+    <ProjectReference Include="..\LocalAIGateway.Launcher\LocalAIGateway.Launcher.csproj" />
+    <ProjectReference Include="..\LocalAIGateway.Windows\LocalAIGateway.Windows.csproj" />
+  </ItemGroup>
+</Project>

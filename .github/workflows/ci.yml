@@ -24,11 +24,67 @@ jobs:
     # 仅同仓库分支触发；fork PR 不在自托管 runner 上执行外部代码
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, harmonyos]
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 工具链预检
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nodeHome = Join-Path $env:CLT_HOME 'tool\node'
+          $env:PATH = "$nodeHome;$env:PATH"
+          $nodeHome | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          node -e "if (process.versions.node.split('.')[0] !== '24') throw new Error('Node 24 required'); console.log(process.version)"
+          if ($LASTEXITCODE -ne 0) { throw 'Node preflight failed' }
+          if (-not $env:DEVECO_SDK_HOME -or -not (Test-Path -LiteralPath $env:DEVECO_SDK_HOME)) {
+            throw 'Runner must set DEVECO_SDK_HOME to its API 26 SDK directory'
+          }
+          foreach ($tool in @('hvigorw.bat', 'ohpm.bat', 'codelinter.bat')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $env:CLT_HOME "bin\$tool") -PathType Leaf)) {
+              throw "Missing runner tool: $tool"
+            }
+          }
+          if (-not $env:CODELINTER_LOG_DIR -or -not (Test-Path -LiteralPath $env:CODELINTER_LOG_DIR -PathType Container)) {
+            throw 'Runner must set CODELINTER_LOG_DIR to the actual CLT engine log directory'
+          }
+          if (-not (Test-Path -LiteralPath "$env:JAVA_HOME\bin\java.exe" -PathType Leaf)) {
+            throw 'JAVA_HOME does not contain java.exe'
+          }
+          Push-Location services/local-ai-gateway
+          try {
+            dotnet --version
+            if ($LASTEXITCODE -ne 0) { throw 'Gateway global.json SDK is required on runner' }
+          } finally { Pop-Location }
+
+      - name: 来源校验与 MCP 样例协议测试
+        shell: cmd
+        run: |
+          node scripts/verify-agent-host.cjs || exit /b 1
+          node scripts/verify-gateway-import.cjs || exit /b 1
+          node scripts/verify-agent-docs.cjs || exit /b 1
+          node scripts/test-agent-fixture.cjs || exit /b 1
+          node --test scripts/tests/verify-lint-report.test.cjs || exit /b 1
+
+      - name: 搜索服务构建与自动测试（无真实供应商调用）
+        shell: cmd
+        working-directory: services/search-mcp
+        run: |
+          call npm.cmd ci || exit /b 1
+          call npm.cmd test || exit /b 1
 
       - name: 门禁（代码检查 + 构建）
         shell: cmd
         run: scripts\ci-windows.cmd
+
+      - name: Agent 宿主构建、Hypium 与 UX 逻辑回归
+        shell: powershell
+        run: |
+          .\scripts\ci-agent.ps1 -HvigorPath "$env:CLT_HOME\bin\hvigorw.bat" -OhpmPath "$env:CLT_HOME\bin\ohpm.bat" -SdkHome $env:DEVECO_SDK_HOME -JavaHome $env:JAVA_HOME
+
+      - name: Windows 网关构建与自动测试
+        shell: powershell
+        run: .\scripts\ci-gateway.ps1

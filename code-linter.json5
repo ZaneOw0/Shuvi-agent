@@ -9,6 +9,9 @@
     "**/node_modules/**/*",
     "**/oh_modules/**/*",
     "**/build/**/*",
+    "**/.local/**/*",
+    "**/.test/**/*",
+    "**/.hvigor/**/*",
     "**/.preview/**/*"
   ],
   "ruleSet": [

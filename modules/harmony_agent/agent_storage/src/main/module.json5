@@ -1,0 +1,7 @@
+{
+  "module": {
+    "name": "agent_storage",
+    "type": "har",
+    "deviceTypes": ["phone", "tablet", "2in1"]
+  }
+}

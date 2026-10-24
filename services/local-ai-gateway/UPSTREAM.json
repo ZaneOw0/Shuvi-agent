@@ -1,0 +1,1713 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/AlterGo-xzy/local-ai-gateway",
+  "commit": "21017a1e91a1067119f4772762295c3e343cef40",
+  "importedAt": "2026-10-23",
+  "authorization": {
+    "confirmedBy": "repository maintainer via conversation",
+    "confirmedAt": "2026-10-23",
+    "scope": "User confirmed written authorization to copy, modify and distribute source and documentation within the visibility of Shuvi-agent.",
+    "evidence": "User confirmation only; the written authorization itself is retained by the team and is not embedded here.",
+    "licenseUnchanged": true
+  },
+  "exclusions": [
+    ".git",
+    ".github (workflow integration pending)",
+    "artifacts",
+    "runtime",
+    "installed configuration",
+    "credentials",
+    "build and dependency caches"
+  ],
+  "modifications": [
+    "README.md renamed README.upstream.md; five upstream planning documents prefixed with historical-source notice."
+  ],
+  "files": [
+    {
+      "sourcePath": ".gitignore",
+      "path": ".gitignore",
+      "sourceSha256": "9e197f5ee0cf5e5facfd104b8c319b68176665f1b907127927ee31af92eb5fa3",
+      "importedSha256": "9e197f5ee0cf5e5facfd104b8c319b68176665f1b907127927ee31af92eb5fa3"
+    },
+    {
+      "sourcePath": "Directory.Build.props",
+      "path": "Directory.Build.props",
+      "sourceSha256": "8c5025e941c2696f2ed261fa6eb2625763be7f2c7be8c633a8c0e77869280ad6",
+      "importedSha256": "8c5025e941c2696f2ed261fa6eb2625763be7f2c7be8c633a8c0e77869280ad6"
+    },
+    {
+      "sourcePath": "Directory.Packages.props",
+      "path": "Directory.Packages.props",
+      "sourceSha256": "6496b6c76797774ba26e44bb15d99e85901ad1b5793d545aea6b073cf7351fcd",
+      "importedSha256": "6496b6c76797774ba26e44bb15d99e85901ad1b5793d545aea6b073cf7351fcd"
+    },
+    {
+      "sourcePath": "HANDOFF.md",
+      "path": "HANDOFF.md",
+      "sourceSha256": "52e53a7ce79f35a1dbf2380e49551eca133e4e2d38d638d7bd713d665ea2e184",
+      "importedSha256": "021154f6c98e6946c2e223741f0d621ba6f5cf0f7d8b75547a5e6a0c155312b9"
+    },
+    {
+      "sourcePath": "LICENSE",
+      "path": "LICENSE",
+      "sourceSha256": "3fee183333b4a0de148c6ca150a8727133a04cbdf066894ed1c91cc64f8884bb",
+      "importedSha256": "3fee183333b4a0de148c6ca150a8727133a04cbdf066894ed1c91cc64f8884bb"
+    },
+    {
+      "sourcePath": "LocalAIGateway.slnx",
+      "path": "LocalAIGateway.slnx",
+      "sourceSha256": "ced5d24c3b548ad0d05341a8865e634b77515f13560fe8bd155272c1329b2b02",
+      "importedSha256": "ced5d24c3b548ad0d05341a8865e634b77515f13560fe8bd155272c1329b2b02"
+    },
+    {
+      "sourcePath": "PROJECT_MASTER_PLAN.md",
+      "path": "PROJECT_MASTER_PLAN.md",
+      "sourceSha256": "ccaec41603b8fe6a8210dc34f7fe76443f30a7e71e17d31c089b8df5fca9e2b3",
+      "importedSha256": "592520e272c22d7c747c1877f686a8a270ab3bbf7513773b758d6fed4e7079d3"
+    },
+    {
+      "sourcePath": "PROJECT_STATUS.md",
+      "path": "PROJECT_STATUS.md",
+      "sourceSha256": "3504af1fc7f746ff636cc8a6cd61e50b9d4ab8c8c3364afc72413bbddfc67a8c",
+      "importedSha256": "6b204f505e7d0eb719630213a7a3ad9624bee75c0a95c4da98a87d7f5ba10a1a"
+    },
+    {
+      "sourcePath": "README.md",
+      "path": "README.upstream.md",
+      "sourceSha256": "84cb0cda4bb6886d4f42c6506957372518f5c6eb34cb7e1c99c11fe6fc8cb556",
+      "importedSha256": "face6996618b2b9a44f38277bf1923a76f7bc55b36a8494dfdc45975801639a1"
+    },
+    {
+      "sourcePath": "TECHNICAL_DECISIONS.md",
+      "path": "TECHNICAL_DECISIONS.md",
+      "sourceSha256": "31bbc98c512eca1931206ac6d634363e541d74ba52b59d3751a30e13c4be16a7",
+      "importedSha256": "5a2f5e16d07fe610a4f8db8133c88621b32b797d896aad2fe6559d83691b1985"
+    },
+    {
+      "sourcePath": "THIRD-PARTY-NOTICES.md",
+      "path": "THIRD-PARTY-NOTICES.md",
+      "sourceSha256": "c23cfe80ec5939a6a2e36278d41223a8d72a9cb83162d99a21840ce744f25c0c",
+      "importedSha256": "c23cfe80ec5939a6a2e36278d41223a8d72a9cb83162d99a21840ce744f25c0c"
+    },
+    {
+      "sourcePath": "global.json",
+      "path": "global.json",
+      "sourceSha256": "b132d105648c7dbe49f2c391fe0b9898027e470ddc7cfd4d7239af5df63401fa",
+      "importedSha256": "b132d105648c7dbe49f2c391fe0b9898027e470ddc7cfd4d7239af5df63401fa"
+    },
+    {
+      "sourcePath": "runtime-manifests/licenses/tokenizers-0.23.1-LICENSE.txt",
+      "path": "runtime-manifests/licenses/tokenizers-0.23.1-LICENSE.txt",
+      "sourceSha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "importedSha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "sourcePath": "runtime-manifests/m3b-download-verification.json",
+      "path": "runtime-manifests/m3b-download-verification.json",
+      "sourceSha256": "e47f93a9b7c05a36cdd897b1b52eccf39c1df7ddd957418a05d5df2b3f8539ed",
+      "importedSha256": "e47f93a9b7c05a36cdd897b1b52eccf39c1df7ddd957418a05d5df2b3f8539ed"
+    },
+    {
+      "sourcePath": "runtime-manifests/m3b-proxy-without-enterprise.candidate.json",
+      "path": "runtime-manifests/m3b-proxy-without-enterprise.candidate.json",
+      "sourceSha256": "0bb5e21d4b8b20e5d2f0cc6df4a74362ce3c3a595fa49bfb1ee3e92d6c94e361",
+      "importedSha256": "0bb5e21d4b8b20e5d2f0cc6df4a74362ce3c3a595fa49bfb1ee3e92d6c94e361"
+    },
+    {
+      "sourcePath": "runtime-manifests/m3b-text-runtime.lock.json",
+      "path": "runtime-manifests/m3b-text-runtime.lock.json",
+      "sourceSha256": "5e8f3bc4ec7708aa08788d2680618e5dbfb68aceb8679f67d1f1dfede252025b",
+      "importedSha256": "5e8f3bc4ec7708aa08788d2680618e5dbfb68aceb8679f67d1f1dfede252025b"
+    },
+    {
+      "sourcePath": "scripts/assemble-m3b-runtime.ps1",
+      "path": "scripts/assemble-m3b-runtime.ps1",
+      "sourceSha256": "41b874f704e431b0db887c161880cdff154967b4c1356445af83e14f0a7bedad",
+      "importedSha256": "41b874f704e431b0db887c161880cdff154967b4c1356445af83e14f0a7bedad"
+    },
+    {
+      "sourcePath": "scripts/build.ps1",
+      "path": "scripts/build.ps1",
+      "sourceSha256": "0f12ed605971bb5d3efad99a5b89a840c93f61df79daacf4369b1382b10ac35e",
+      "importedSha256": "0f12ed605971bb5d3efad99a5b89a840c93f61df79daacf4369b1382b10ac35e"
+    },
+    {
+      "sourcePath": "scripts/new-m3b-runtime-lock.ps1",
+      "path": "scripts/new-m3b-runtime-lock.ps1",
+      "sourceSha256": "60102f327e4fdeebf8ef21e563b763a95394f9f31a920ebfb1913245a026169d",
+      "importedSha256": "60102f327e4fdeebf8ef21e563b763a95394f9f31a920ebfb1913245a026169d"
+    },
+    {
+      "sourcePath": "scripts/package.ps1",
+      "path": "scripts/package.ps1",
+      "sourceSha256": "11e1e16eebe9ca66256d5994d5efa971618a0ee580eedec8f1ce4bcd7d559831",
+      "importedSha256": "11e1e16eebe9ca66256d5994d5efa971618a0ee580eedec8f1ce4bcd7d559831"
+    },
+    {
+      "sourcePath": "scripts/prune-m3b-runtime.ps1",
+      "path": "scripts/prune-m3b-runtime.ps1",
+      "sourceSha256": "5cde1e3b0bb7bc828868c078f8693fbc86c5695e17ff22cb4b7ae3160fd46d74",
+      "importedSha256": "5cde1e3b0bb7bc828868c078f8693fbc86c5695e17ff22cb4b7ae3160fd46d74"
+    },
+    {
+      "sourcePath": "scripts/scan-sensitive-data.ps1",
+      "path": "scripts/scan-sensitive-data.ps1",
+      "sourceSha256": "4ff4e9de0ded9049e12ba4be7743e33992e1e34063398c9d962259071a801099",
+      "importedSha256": "4ff4e9de0ded9049e12ba4be7743e33992e1e34063398c9d962259071a801099"
+    },
+    {
+      "sourcePath": "scripts/smoke-m3b-runtime.ps1",
+      "path": "scripts/smoke-m3b-runtime.ps1",
+      "sourceSha256": "85d450c087999b66ae93854de254d6011c9b63bc0be8e821717fa306914ea378",
+      "importedSha256": "85d450c087999b66ae93854de254d6011c9b63bc0be8e821717fa306914ea378"
+    },
+    {
+      "sourcePath": "scripts/test-m3d-runtime.ps1",
+      "path": "scripts/test-m3d-runtime.ps1",
+      "sourceSha256": "8d79c9a7092470a6a2530b6493833bee4a604657566e4a91910946ded2588ebd",
+      "importedSha256": "8d79c9a7092470a6a2530b6493833bee4a604657566e4a91910946ded2588ebd"
+    },
+    {
+      "sourcePath": "scripts/test-m3e-runtime.ps1",
+      "path": "scripts/test-m3e-runtime.ps1",
+      "sourceSha256": "3f42d5e12dcfae0b71dd07b1dedc364d397b17c357ca40701a16bc95019ed6fc",
+      "importedSha256": "3f42d5e12dcfae0b71dd07b1dedc364d397b17c357ca40701a16bc95019ed6fc"
+    },
+    {
+      "sourcePath": "scripts/test-m3g-installed-runtime.ps1",
+      "path": "scripts/test-m3g-installed-runtime.ps1",
+      "sourceSha256": "7409130cd34c092d094d375791859107d7877bdf3e16677bb6622b1e28f60089",
+      "importedSha256": "7409130cd34c092d094d375791859107d7877bdf3e16677bb6622b1e28f60089"
+    },
+    {
+      "sourcePath": "scripts/test-m5a-usage-callback.ps1",
+      "path": "scripts/test-m5a-usage-callback.ps1",
+      "sourceSha256": "c1a6f3468c1ea9b7535791b45182f9b5f79aa705174bad5f78c569924a6c6c51",
+      "importedSha256": "c1a6f3468c1ea9b7535791b45182f9b5f79aa705174bad5f78c569924a6c6c51"
+    },
+    {
+      "sourcePath": "scripts/test-m5b-tray.ps1",
+      "path": "scripts/test-m5b-tray.ps1",
+      "sourceSha256": "f27d1e58c8cae73c2090afb7b73087e2a51100bff63f6f693a02e919258f7907",
+      "importedSha256": "f27d1e58c8cae73c2090afb7b73087e2a51100bff63f6f693a02e919258f7907"
+    },
+    {
+      "sourcePath": "scripts/test-m5b-usage-query.ps1",
+      "path": "scripts/test-m5b-usage-query.ps1",
+      "sourceSha256": "2105b7aaf821d380109a71b9ed6129b799edb3156a8fff582e5893ce23ff4f3b",
+      "importedSha256": "2105b7aaf821d380109a71b9ed6129b799edb3156a8fff582e5893ce23ff4f3b"
+    },
+    {
+      "sourcePath": "scripts/test-m5c-backup.ps1",
+      "path": "scripts/test-m5c-backup.ps1",
+      "sourceSha256": "f8aa10b21f0cce0e8ce13e61a8384f3bc78fe49687eec00210fbfc03423e621f",
+      "importedSha256": "f8aa10b21f0cce0e8ce13e61a8384f3bc78fe49687eec00210fbfc03423e621f"
+    },
+    {
+      "sourcePath": "scripts/test-m5d-update.ps1",
+      "path": "scripts/test-m5d-update.ps1",
+      "sourceSha256": "007570e848b0ab6d8f50446c5de85caf29be448e74104f588d7e53dd042f9221",
+      "importedSha256": "007570e848b0ab6d8f50446c5de85caf29be448e74104f588d7e53dd042f9221"
+    },
+    {
+      "sourcePath": "scripts/test-m5e-uninstall.ps1",
+      "path": "scripts/test-m5e-uninstall.ps1",
+      "sourceSha256": "c05ceb032ae9a47c87ce0a469c833af5a353688fe06e63e47b6ff6253bb4e4cf",
+      "importedSha256": "c05ceb032ae9a47c87ce0a469c833af5a353688fe06e63e47b6ff6253bb4e4cf"
+    },
+    {
+      "sourcePath": "scripts/test-m6a-edge-retry.ps1",
+      "path": "scripts/test-m6a-edge-retry.ps1",
+      "sourceSha256": "5c239038823a01c5ef62baa91025027ba9bfc771fb8f84424a8c96b9c46dfdbe",
+      "importedSha256": "5c239038823a01c5ef62baa91025027ba9bfc771fb8f84424a8c96b9c46dfdbe"
+    },
+    {
+      "sourcePath": "scripts/test-m6b-circuit-breaker.ps1",
+      "path": "scripts/test-m6b-circuit-breaker.ps1",
+      "sourceSha256": "2174227ccc1b110328b0a37738e223baaf8e04a0b51af302f2fdcae680eceb68",
+      "importedSha256": "2174227ccc1b110328b0a37738e223baaf8e04a0b51af302f2fdcae680eceb68"
+    },
+    {
+      "sourcePath": "scripts/test-m6c-ordered-fallback.ps1",
+      "path": "scripts/test-m6c-ordered-fallback.ps1",
+      "sourceSha256": "68ede09eaaad0c0bfa3fa113742c04cd55481b178d34a3cbc3efa706564da8d1",
+      "importedSha256": "68ede09eaaad0c0bfa3fa113742c04cd55481b178d34a3cbc3efa706564da8d1"
+    },
+    {
+      "sourcePath": "scripts/test-m6d-weighted-round-robin.ps1",
+      "path": "scripts/test-m6d-weighted-round-robin.ps1",
+      "sourceSha256": "41d73864d8e83623ec0d8d820bb12992571e8bed6352be386c78dafd9f86ca32",
+      "importedSha256": "41d73864d8e83623ec0d8d820bb12992571e8bed6352be386c78dafd9f86ca32"
+    },
+    {
+      "sourcePath": "scripts/test-m6e-rate-limits.ps1",
+      "path": "scripts/test-m6e-rate-limits.ps1",
+      "sourceSha256": "df29efa62258e035fef81aeda376e94eeabf7b4f4c5bd703e0f057447e6fa14f",
+      "importedSha256": "df29efa62258e035fef81aeda376e94eeabf7b4f4c5bd703e0f057447e6fa14f"
+    },
+    {
+      "sourcePath": "scripts/test-release-install-experience.ps1",
+      "path": "scripts/test-release-install-experience.ps1",
+      "sourceSha256": "06025b2fdd17074847942319af336eedf1777e5036c58760ef344a78d5d2527a",
+      "importedSha256": "06025b2fdd17074847942319af336eedf1777e5036c58760ef344a78d5d2527a"
+    },
+    {
+      "sourcePath": "scripts/test-release-log-lifecycle.ps1",
+      "path": "scripts/test-release-log-lifecycle.ps1",
+      "sourceSha256": "2975caf1bee1828996251314897cebe468f61d007ffdf7ee0aeac9958db4b558",
+      "importedSha256": "2975caf1bee1828996251314897cebe468f61d007ffdf7ee0aeac9958db4b558"
+    },
+    {
+      "sourcePath": "scripts/test-scan-sensitive-data.ps1",
+      "path": "scripts/test-scan-sensitive-data.ps1",
+      "sourceSha256": "ac71c1d26bf24e87f683cc87bf3d338dda075e2645a2c24777f24d6839890e14",
+      "importedSha256": "ac71c1d26bf24e87f683cc87bf3d338dda075e2645a2c24777f24d6839890e14"
+    },
+    {
+      "sourcePath": "scripts/verify-m3b-runtime.ps1",
+      "path": "scripts/verify-m3b-runtime.ps1",
+      "sourceSha256": "bc8037da526b969a1e77df32b3e8ff51b4bd21114387108b714e881397fdf3a9",
+      "importedSha256": "bc8037da526b969a1e77df32b3e8ff51b4bd21114387108b714e881397fdf3a9"
+    },
+    {
+      "sourcePath": "scripts/verify-m3f-package.ps1",
+      "path": "scripts/verify-m3f-package.ps1",
+      "sourceSha256": "700a83a8bd342dba8edc944a5af5c79baf1fb69501ff04b5dd8c217a35b12c5d",
+      "importedSha256": "700a83a8bd342dba8edc944a5af5c79baf1fb69501ff04b5dd8c217a35b12c5d"
+    },
+    {
+      "sourcePath": "scripts/verify-package.ps1",
+      "path": "scripts/verify-package.ps1",
+      "sourceSha256": "ba0c9009d5a2fd8b5115ded0e7e16b4732c1c69c95c2cc3b266c55c262148516",
+      "importedSha256": "ba0c9009d5a2fd8b5115ded0e7e16b4732c1c69c95c2cc3b266c55c262148516"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Cli/CliApplication.cs",
+      "path": "src/LocalAIGateway.Cli/CliApplication.cs",
+      "sourceSha256": "6c5db97db00ae42545f2d26b532dc4936723a180ec2d4eb5efb09a16d4c89c8e",
+      "importedSha256": "6c5db97db00ae42545f2d26b532dc4936723a180ec2d4eb5efb09a16d4c89c8e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Cli/CliCommandExecutor.cs",
+      "path": "src/LocalAIGateway.Cli/CliCommandExecutor.cs",
+      "sourceSha256": "5b0a5f0ef9c72565899621d3f6c7a9d90078a359121195eacbbd0a454fd69177",
+      "importedSha256": "5b0a5f0ef9c72565899621d3f6c7a9d90078a359121195eacbbd0a454fd69177"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Cli/CliHelp.cs",
+      "path": "src/LocalAIGateway.Cli/CliHelp.cs",
+      "sourceSha256": "9cef3e4c592b7264506806a76214e8b4983eae4b6caa63989b547a6615b881e0",
+      "importedSha256": "9cef3e4c592b7264506806a76214e8b4983eae4b6caa63989b547a6615b881e0"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Cli/CliServices.cs",
+      "path": "src/LocalAIGateway.Cli/CliServices.cs",
+      "sourceSha256": "24f7abdd0a203b4aae4956b4132a5f05e2214c62c1550d05e228a892c80b2225",
+      "importedSha256": "24f7abdd0a203b4aae4956b4132a5f05e2214c62c1550d05e228a892c80b2225"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Cli/CommandLineDefinition.cs",
+      "path": "src/LocalAIGateway.Cli/CommandLineDefinition.cs",
+      "sourceSha256": "818d4e1a9e56a7f2dc8f4c47e81afe1b69e3e0ee39723126253085f177b2aa5d",
+      "importedSha256": "818d4e1a9e56a7f2dc8f4c47e81afe1b69e3e0ee39723126253085f177b2aa5d"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Cli/LocalAIGateway.Cli.csproj",
+      "path": "src/LocalAIGateway.Cli/LocalAIGateway.Cli.csproj",
+      "sourceSha256": "9361422e332560398683cd8e49621e205d7b1eff8568111c9600307cf48a7dce",
+      "importedSha256": "9361422e332560398683cd8e49621e205d7b1eff8568111c9600307cf48a7dce"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Cli/Program.cs",
+      "path": "src/LocalAIGateway.Cli/Program.cs",
+      "sourceSha256": "9979f6dc63c598f76a0f7583551c1b6fb586aef1d6483fd578aec72228e7431d",
+      "importedSha256": "9979f6dc63c598f76a0f7583551c1b6fb586aef1d6483fd578aec72228e7431d"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Cli/Properties/AssemblyInfo.cs",
+      "path": "src/LocalAIGateway.Cli/Properties/AssemblyInfo.cs",
+      "sourceSha256": "39e5a366dc2275b8bd5962f95380c2759a9a8a13339b395aa84c9c14ac8ae69f",
+      "importedSha256": "39e5a366dc2275b8bd5962f95380c2759a9a8a13339b395aa84c9c14ac8ae69f"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Cli/UninstallSelectionResolver.cs",
+      "path": "src/LocalAIGateway.Cli/UninstallSelectionResolver.cs",
+      "sourceSha256": "a6377fd02ebc8d572576cbf3018455f5ea4bfd39802e4e5a18efa73b5bcd092f",
+      "importedSha256": "a6377fd02ebc8d572576cbf3018455f5ea4bfd39802e4e5a18efa73b5bcd092f"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Backend/BackendHostException.cs",
+      "path": "src/LocalAIGateway.Core/Backend/BackendHostException.cs",
+      "sourceSha256": "fd47a998029530391f7ea072a8aa646381758524c31d335d9cfdf4a07d2404c2",
+      "importedSha256": "fd47a998029530391f7ea072a8aa646381758524c31d335d9cfdf4a07d2404c2"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Backend/IBackendHost.cs",
+      "path": "src/LocalAIGateway.Core/Backend/IBackendHost.cs",
+      "sourceSha256": "befa7db36acf423accb61ce1ff3a617ccf377d9a3d2934ea7ea2429e7de77027",
+      "importedSha256": "befa7db36acf423accb61ce1ff3a617ccf377d9a3d2934ea7ea2429e7de77027"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Backup/BackupCoordinator.cs",
+      "path": "src/LocalAIGateway.Core/Backup/BackupCoordinator.cs",
+      "sourceSha256": "343d78a6b350bd7bd0683ac145a3527d524365deed85471a691e7b382b197555",
+      "importedSha256": "343d78a6b350bd7bd0683ac145a3527d524365deed85471a691e7b382b197555"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Backup/BackupFileCleaner.cs",
+      "path": "src/LocalAIGateway.Core/Backup/BackupFileCleaner.cs",
+      "sourceSha256": "28bf0e4e6967036c2e50fc88c5908be7380bd10425c49f5b5ed358814e90d91e",
+      "importedSha256": "28bf0e4e6967036c2e50fc88c5908be7380bd10425c49f5b5ed358814e90d91e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Backup/BackupJson.cs",
+      "path": "src/LocalAIGateway.Core/Backup/BackupJson.cs",
+      "sourceSha256": "b98b7082d07a52141315776721b608be602c65b323bc4da9f531458e3c4b79ae",
+      "importedSha256": "b98b7082d07a52141315776721b608be602c65b323bc4da9f531458e3c4b79ae"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Backup/BackupModels.cs",
+      "path": "src/LocalAIGateway.Core/Backup/BackupModels.cs",
+      "sourceSha256": "db247b425862b7da4027c4b72fb9d67261e7f41060a7619c0d67cec135a188ec",
+      "importedSha256": "db247b425862b7da4027c4b72fb9d67261e7f41060a7619c0d67cec135a188ec"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/ConfigurationExceptions.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/ConfigurationExceptions.cs",
+      "sourceSha256": "6e93c9a6bdd9a97faf0c8122fc7dba22ac5f4d63920e98587e60d67d26465845",
+      "importedSha256": "6e93c9a6bdd9a97faf0c8122fc7dba22ac5f4d63920e98587e60d67d26465845"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/ConfigurationJson.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/ConfigurationJson.cs",
+      "sourceSha256": "591bb39855b79e5163dafd38f4cc7820b1576d01ab9c9b6744d33dd943614157",
+      "importedSha256": "591bb39855b79e5163dafd38f4cc7820b1576d01ab9c9b6744d33dd943614157"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/ConfigurationPaths.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/ConfigurationPaths.cs",
+      "sourceSha256": "9821c154b1f4094106ebab78356cd75486e5d47c33d12030c1eb8d443bc65d31",
+      "importedSha256": "9821c154b1f4094106ebab78356cd75486e5d47c33d12030c1eb8d443bc65d31"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/ConfigurationStore.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/ConfigurationStore.cs",
+      "sourceSha256": "f1bc6af394cf740a76819838925fe740615a07ffbe1099433e4c3583b7d01e36",
+      "importedSha256": "f1bc6af394cf740a76819838925fe740615a07ffbe1099433e4c3583b7d01e36"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/ConfigurationValidation.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/ConfigurationValidation.cs",
+      "sourceSha256": "252ab5061f822688dd54dff72dfbe5152b9e0898014e3dbe9f4954eb8bb998e2",
+      "importedSha256": "252ab5061f822688dd54dff72dfbe5152b9e0898014e3dbe9f4954eb8bb998e2"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/CredentialTargets.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/CredentialTargets.cs",
+      "sourceSha256": "ed797137f1908d312ad5e31a53fd2010d7935dee4470f039f60e8ba57e9ef33a",
+      "importedSha256": "ed797137f1908d312ad5e31a53fd2010d7935dee4470f039f60e8ba57e9ef33a"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/GatewayConfiguration.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/GatewayConfiguration.cs",
+      "sourceSha256": "639d9594f24ca872b11492e8321738279b330349fe24bd6e597ab845f0516aaf",
+      "importedSha256": "639d9594f24ca872b11492e8321738279b330349fe24bd6e597ab845f0516aaf"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/GatewayConfigurationManager.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/GatewayConfigurationManager.cs",
+      "sourceSha256": "cb699617876ace04c8ffc8edd17cff5738bc883e21aefe6e04cf7c7bb7df2771",
+      "importedSha256": "cb699617876ace04c8ffc8edd17cff5738bc883e21aefe6e04cf7c7bb7df2771"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/IConfigurationFileSecurity.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/IConfigurationFileSecurity.cs",
+      "sourceSha256": "52677d46127b17c4f3324bf5635b7881871aa60da2a214295de72a412c190a64",
+      "importedSha256": "52677d46127b17c4f3324bf5635b7881871aa60da2a214295de72a412c190a64"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/ModelRoutingStrategy.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/ModelRoutingStrategy.cs",
+      "sourceSha256": "c0e6d5e06d347bc5132a287ec923d3e4472e2ced7ae1f021420287bb306ca3c2",
+      "importedSha256": "c0e6d5e06d347bc5132a287ec923d3e4472e2ced7ae1f021420287bb306ca3c2"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Configuration/ProviderType.cs",
+      "path": "src/LocalAIGateway.Core/Configuration/ProviderType.cs",
+      "sourceSha256": "4b479b6310b49dce9234b35566b17085792c188d5d008de007dad475cf30c70a",
+      "importedSha256": "4b479b6310b49dce9234b35566b17085792c188d5d008de007dad475cf30c70a"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Control/ControlFrameCodec.cs",
+      "path": "src/LocalAIGateway.Core/Control/ControlFrameCodec.cs",
+      "sourceSha256": "2eaa6c6d8d9379b015525fe168970eaf3f538e70928546aa7e83b20de027236b",
+      "importedSha256": "2eaa6c6d8d9379b015525fe168970eaf3f538e70928546aa7e83b20de027236b"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Control/ControlJson.cs",
+      "path": "src/LocalAIGateway.Core/Control/ControlJson.cs",
+      "sourceSha256": "11a3f7617dd388dcbc06ee7163d04e6f931f11f08e79fecb9e145f50668b80e1",
+      "importedSha256": "11a3f7617dd388dcbc06ee7163d04e6f931f11f08e79fecb9e145f50668b80e1"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Control/ControlProtocol.cs",
+      "path": "src/LocalAIGateway.Core/Control/ControlProtocol.cs",
+      "sourceSha256": "b118f3eec4a9737a9fedd28a7594c5eecc690d51e5e7bf5ea00364601e475c5b",
+      "importedSha256": "b118f3eec4a9737a9fedd28a7594c5eecc690d51e5e7bf5ea00364601e475c5b"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Credentials/ICredentialStore.cs",
+      "path": "src/LocalAIGateway.Core/Credentials/ICredentialStore.cs",
+      "sourceSha256": "4183cff966517c45c3301e4438078b694ff2845c9888301d53ae76848aa7d5f5",
+      "importedSha256": "4183cff966517c45c3301e4438078b694ff2845c9888301d53ae76848aa7d5f5"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Credentials/RuntimeClientTokenGenerator.cs",
+      "path": "src/LocalAIGateway.Core/Credentials/RuntimeClientTokenGenerator.cs",
+      "sourceSha256": "d71499df671103b47e99b6f072ec14e3f19e5bcdd81f8e1fd37e668baf811aa5",
+      "importedSha256": "d71499df671103b47e99b6f072ec14e3f19e5bcdd81f8e1fd37e668baf811aa5"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Installation/CurrentUserInstallationPlan.cs",
+      "path": "src/LocalAIGateway.Core/Installation/CurrentUserInstallationPlan.cs",
+      "sourceSha256": "a285836bb2676a40f5f2a322b401f3144533ff56d8cf0f2591ffb7d7036d6633",
+      "importedSha256": "a285836bb2676a40f5f2a322b401f3144533ff56d8cf0f2591ffb7d7036d6633"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Installation/InstallationException.cs",
+      "path": "src/LocalAIGateway.Core/Installation/InstallationException.cs",
+      "sourceSha256": "b263089ca8dbd55056752a4756d316e743d6edf86fe45e9f696edb69306e4bc6",
+      "importedSha256": "b263089ca8dbd55056752a4756d316e743d6edf86fe45e9f696edb69306e4bc6"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Installation/PackageManifest.cs",
+      "path": "src/LocalAIGateway.Core/Installation/PackageManifest.cs",
+      "sourceSha256": "cf06defa52e46f84124219a2c0927386fecb0d5a619a9b7d99d1fbda47e9cacf",
+      "importedSha256": "cf06defa52e46f84124219a2c0927386fecb0d5a619a9b7d99d1fbda47e9cacf"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Installation/PackageManifestException.cs",
+      "path": "src/LocalAIGateway.Core/Installation/PackageManifestException.cs",
+      "sourceSha256": "d660f218d5cf0b24806047bf60eeecd26dba07abbbce0b8d629ec3e6b6aaf1f0",
+      "importedSha256": "d660f218d5cf0b24806047bf60eeecd26dba07abbbce0b8d629ec3e6b6aaf1f0"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Installation/PackageManifestJson.cs",
+      "path": "src/LocalAIGateway.Core/Installation/PackageManifestJson.cs",
+      "sourceSha256": "41c0cdb4584b911db280233dbe4b5c2edaba6f4425fde488d7229383435f01df",
+      "importedSha256": "41c0cdb4584b911db280233dbe4b5c2edaba6f4425fde488d7229383435f01df"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/LocalAIGateway.Core.csproj",
+      "path": "src/LocalAIGateway.Core/LocalAIGateway.Core.csproj",
+      "sourceSha256": "8d654c44b7bebb6b31a9f2f606927f45b5072193adc4eef8cce3f3cf3b278df3",
+      "importedSha256": "8d654c44b7bebb6b31a9f2f606927f45b5072193adc4eef8cce3f3cf3b278df3"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Properties/AssemblyInfo.cs",
+      "path": "src/LocalAIGateway.Core/Properties/AssemblyInfo.cs",
+      "sourceSha256": "793a2fc9d043e9cc56e5d7e4bd6332b16476b5ee544b24149d104ca878a99762",
+      "importedSha256": "793a2fc9d043e9cc56e5d7e4bd6332b16476b5ee544b24149d104ca878a99762"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Runtime/ISingleInstanceProvider.cs",
+      "path": "src/LocalAIGateway.Core/Runtime/ISingleInstanceProvider.cs",
+      "sourceSha256": "c1e95e0735822455520db384d42cb0d60f605ba9661e28a7c111115a2fa9ac10",
+      "importedSha256": "c1e95e0735822455520db384d42cb0d60f605ba9661e28a7c111115a2fa9ac10"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Uninstall/UninstallModels.cs",
+      "path": "src/LocalAIGateway.Core/Uninstall/UninstallModels.cs",
+      "sourceSha256": "a28b002bae72b6896ead0dc98b3c38c0c865150e2bb907efd407d7f3e35c13ac",
+      "importedSha256": "a28b002bae72b6896ead0dc98b3c38c0c865150e2bb907efd407d7f3e35c13ac"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Update/PackageSignature.cs",
+      "path": "src/LocalAIGateway.Core/Update/PackageSignature.cs",
+      "sourceSha256": "90e5e0d6f88f2a9937f35eb65756a9ea3ed13118984e25d2c105e0feb1ea358b",
+      "importedSha256": "90e5e0d6f88f2a9937f35eb65756a9ea3ed13118984e25d2c105e0feb1ea358b"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Update/PackageSignatureJson.cs",
+      "path": "src/LocalAIGateway.Core/Update/PackageSignatureJson.cs",
+      "sourceSha256": "9f1fbbad2d485a746e132328936f2e8e891d38b8aafe3083d739d0abaadae947",
+      "importedSha256": "9f1fbbad2d485a746e132328936f2e8e891d38b8aafe3083d739d0abaadae947"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Update/PackageSignaturePolicy.cs",
+      "path": "src/LocalAIGateway.Core/Update/PackageSignaturePolicy.cs",
+      "sourceSha256": "527c2cad4cab67c74a9d351eced4ce91ddf99fa17c370d0b194a39b92bd2a780",
+      "importedSha256": "527c2cad4cab67c74a9d351eced4ce91ddf99fa17c370d0b194a39b92bd2a780"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Update/PackageVersionComparer.cs",
+      "path": "src/LocalAIGateway.Core/Update/PackageVersionComparer.cs",
+      "sourceSha256": "b2cee2f25043744dc0f91e0471a62e66c34b0280b46a05d6905a76981e9c692a",
+      "importedSha256": "b2cee2f25043744dc0f91e0471a62e66c34b0280b46a05d6905a76981e9c692a"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Update/TrustedUpdateKeysJson.cs",
+      "path": "src/LocalAIGateway.Core/Update/TrustedUpdateKeysJson.cs",
+      "sourceSha256": "bbe4b3dc835497c58c38427477dbcf8a094517b5ed506ee9acea0ad57bd33896",
+      "importedSha256": "bbe4b3dc835497c58c38427477dbcf8a094517b5ed506ee9acea0ad57bd33896"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/Update/UpdateException.cs",
+      "path": "src/LocalAIGateway.Core/Update/UpdateException.cs",
+      "sourceSha256": "8a7a8c5def70bd953734525d00fdbf9483fe8af356fad0e884c2927f7820001d",
+      "importedSha256": "8a7a8c5def70bd953734525d00fdbf9483fe8af356fad0e884c2927f7820001d"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Core/UsageData/UsageSummary.cs",
+      "path": "src/LocalAIGateway.Core/UsageData/UsageSummary.cs",
+      "sourceSha256": "7af5f06dcfe0086732219954089a76d46d9fb65fdbe5135fb8a90a3a573c7e03",
+      "importedSha256": "7af5f06dcfe0086732219954089a76d46d9fb65fdbe5135fb8a90a3a573c7e03"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientIntegrationApplier.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientIntegrationApplier.cs",
+      "sourceSha256": "9c578a701808d2f328e55f5ce7a36fe5f04a2dd612e0bc1731d328e9cacf7de9",
+      "importedSha256": "9c578a701808d2f328e55f5ce7a36fe5f04a2dd612e0bc1731d328e9cacf7de9"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientIntegrationApply.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientIntegrationApply.cs",
+      "sourceSha256": "ed9eb407b100c38e68a58fc7b1ef82f59cc943af23437b4a633b9c08abd0cf45",
+      "importedSha256": "ed9eb407b100c38e68a58fc7b1ef82f59cc943af23437b4a633b9c08abd0cf45"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientIntegrationException.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientIntegrationException.cs",
+      "sourceSha256": "f50acb131e015fc72569f83a31601e12b4c2d8a9654d12f8ef9ae60ac62f8056",
+      "importedSha256": "f50acb131e015fc72569f83a31601e12b4c2d8a9654d12f8ef9ae60ac62f8056"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientIntegrationFileException.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientIntegrationFileException.cs",
+      "sourceSha256": "352419edbad594f2561903e4e83a38ef0e9fbda960223a2ec438b733167566cb",
+      "importedSha256": "352419edbad594f2561903e4e83a38ef0e9fbda960223a2ec438b733167566cb"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientIntegrationKind.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientIntegrationKind.cs",
+      "sourceSha256": "4c0c2083df39a1bebce378d8a8231b55ffb596457c2513028e8c45f3221a601e",
+      "importedSha256": "4c0c2083df39a1bebce378d8a8231b55ffb596457c2513028e8c45f3221a601e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientIntegrationLifecycle.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientIntegrationLifecycle.cs",
+      "sourceSha256": "88e918995751947fefb231656b54cbaa8dc08ade215ad6a54c572c24cd357eb2",
+      "importedSha256": "88e918995751947fefb231656b54cbaa8dc08ade215ad6a54c572c24cd357eb2"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientIntegrationLifecycleManager.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientIntegrationLifecycleManager.cs",
+      "sourceSha256": "06be460a02e3ef5abb90332e4aab9d71c420a49a09a0fa770028bfd1d0771cbf",
+      "importedSha256": "06be460a02e3ef5abb90332e4aab9d71c420a49a09a0fa770028bfd1d0771cbf"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientIntegrationPreview.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientIntegrationPreview.cs",
+      "sourceSha256": "26b70f74b6efc741eeb425eb9b99522e3a96b22f490870c62ac3678a923d0ddf",
+      "importedSha256": "26b70f74b6efc741eeb425eb9b99522e3a96b22f490870c62ac3678a923d0ddf"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientIntegrationPreviewer.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientIntegrationPreviewer.cs",
+      "sourceSha256": "be2378e9506f5e897b499e842454d43d2c5ba2316e37d7c8b3abb853dead885e",
+      "importedSha256": "be2378e9506f5e897b499e842454d43d2c5ba2316e37d7c8b3abb853dead885e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientKind.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientKind.cs",
+      "sourceSha256": "482246f8dccd9e80ceabca3ff93aa34a028a21be2a3418cf9998e09c0fcb49ce",
+      "importedSha256": "482246f8dccd9e80ceabca3ff93aa34a028a21be2a3418cf9998e09c0fcb49ce"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientLaunchException.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientLaunchException.cs",
+      "sourceSha256": "6b20b91d91c5d95e4fdb83bce89e4413e5b1a0f0f4e5dcbf13031be5df194ba7",
+      "importedSha256": "6b20b91d91c5d95e4fdb83bce89e4413e5b1a0f0f4e5dcbf13031be5df194ba7"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientLaunchRequest.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientLaunchRequest.cs",
+      "sourceSha256": "aacc7a9e40a9a8bf24083f776e5228ef8b55c51c3f7d550f9e08c30a9de8417a",
+      "importedSha256": "aacc7a9e40a9a8bf24083f776e5228ef8b55c51c3f7d550f9e08c30a9de8417a"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientLaunchRequestFactory.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientLaunchRequestFactory.cs",
+      "sourceSha256": "9f9b50e094c24fd63911f6b5ee34563d37c521cf39966827ed304c4db7fea480",
+      "importedSha256": "9f9b50e094c24fd63911f6b5ee34563d37c521cf39966827ed304c4db7fea480"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientLaunchValidation.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientLaunchValidation.cs",
+      "sourceSha256": "dffca1ae99befc5ddc877abfb1499984c73d7b36477c948fb9cc68891e66b511",
+      "importedSha256": "dffca1ae99befc5ddc877abfb1499984c73d7b36477c948fb9cc68891e66b511"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/ClientProcessRunner.cs",
+      "path": "src/LocalAIGateway.Launcher/ClientProcessRunner.cs",
+      "sourceSha256": "430bb877a0502fbbb8783891f4a029ce9d79c4422d16607e6740402b71de6e8d",
+      "importedSha256": "430bb877a0502fbbb8783891f4a029ce9d79c4422d16607e6740402b71de6e8d"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/GatewayClientLauncher.cs",
+      "path": "src/LocalAIGateway.Launcher/GatewayClientLauncher.cs",
+      "sourceSha256": "d778244c6a85e8a6f26ff6a6eb892ca5be3ca327282cd8b70c30d25306910bc6",
+      "importedSha256": "d778244c6a85e8a6f26ff6a6eb892ca5be3ca327282cd8b70c30d25306910bc6"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/IClientExecutableResolver.cs",
+      "path": "src/LocalAIGateway.Launcher/IClientExecutableResolver.cs",
+      "sourceSha256": "05890affc11e668a395b1db8e78773bb6edc543f3ba4990a98bfcfa669d5686e",
+      "importedSha256": "05890affc11e668a395b1db8e78773bb6edc543f3ba4990a98bfcfa669d5686e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/IClientLaunchService.cs",
+      "path": "src/LocalAIGateway.Launcher/IClientLaunchService.cs",
+      "sourceSha256": "ce28f8473ee91103d4fe5d4329ee7de5e55fc21bb9e99737c488cfec5ebc30cc",
+      "importedSha256": "ce28f8473ee91103d4fe5d4329ee7de5e55fc21bb9e99737c488cfec5ebc30cc"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/LauncherArguments.cs",
+      "path": "src/LocalAIGateway.Launcher/LauncherArguments.cs",
+      "sourceSha256": "5fc1d76cfa005edf7a1c9b0cf4da2760ee5c2c0e06a91d7dfc3253d1142bda6f",
+      "importedSha256": "5fc1d76cfa005edf7a1c9b0cf4da2760ee5c2c0e06a91d7dfc3253d1142bda6f"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/LocalAIGateway.Launcher.csproj",
+      "path": "src/LocalAIGateway.Launcher/LocalAIGateway.Launcher.csproj",
+      "sourceSha256": "e4109c116213db867af2c995f02325cfbdee7da6a7b64db0bcaccd154d2cd726",
+      "importedSha256": "e4109c116213db867af2c995f02325cfbdee7da6a7b64db0bcaccd154d2cd726"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/Program.cs",
+      "path": "src/LocalAIGateway.Launcher/Program.cs",
+      "sourceSha256": "1a2c8d5188b865c83d1bfc5546f5484ff759650a97b76c67ee6f7ba142d1e10d",
+      "importedSha256": "1a2c8d5188b865c83d1bfc5546f5484ff759650a97b76c67ee6f7ba142d1e10d"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/Properties/AssemblyInfo.cs",
+      "path": "src/LocalAIGateway.Launcher/Properties/AssemblyInfo.cs",
+      "sourceSha256": "83ac836bda8c69e5fac9fdb3dc20a95e9ae40580a45beec0459374c3ecfc9acf",
+      "importedSha256": "83ac836bda8c69e5fac9fdb3dc20a95e9ae40580a45beec0459374c3ecfc9acf"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/Uninstall/CompleteUninstallExecutor.cs",
+      "path": "src/LocalAIGateway.Launcher/Uninstall/CompleteUninstallExecutor.cs",
+      "sourceSha256": "eef3bc4fdeb7e0b69bf09234e9f9de3cbd4bd7c6326ff6485b2493b83665a4f2",
+      "importedSha256": "eef3bc4fdeb7e0b69bf09234e9f9de3cbd4bd7c6326ff6485b2493b83665a4f2"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Launcher/WindowsClientExecutableResolver.cs",
+      "path": "src/LocalAIGateway.Launcher/WindowsClientExecutableResolver.cs",
+      "sourceSha256": "7ca2925d134e5aa857c88c51b27cc30ad966c66a848ae3a76b332e4d985b48e6",
+      "importedSha256": "7ca2925d134e5aa857c88c51b27cc30ad966c66a848ae3a76b332e4d985b48e6"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/Assets/aigw_usage_callback.py",
+      "path": "src/LocalAIGateway.LiteLlm/Assets/aigw_usage_callback.py",
+      "sourceSha256": "3714e5d0cfb1ed30861f96d7c4794351505a7af71579c5dc12ffdb28541fddb8",
+      "importedSha256": "3714e5d0cfb1ed30861f96d7c4794351505a7af71579c5dc12ffdb28541fddb8"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/ILiteLlmProcessFactory.cs",
+      "path": "src/LocalAIGateway.LiteLlm/ILiteLlmProcessFactory.cs",
+      "sourceSha256": "db364101d342508edc757b9f7688fdb431fc4eedd61865229a9d6bcdab021ab6",
+      "importedSha256": "db364101d342508edc757b9f7688fdb431fc4eedd61865229a9d6bcdab021ab6"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/LiteLlmBackendHost.cs",
+      "path": "src/LocalAIGateway.LiteLlm/LiteLlmBackendHost.cs",
+      "sourceSha256": "5ff078fb382ee5833f81a4451b28a2f2369c1111a0f37171f7481a54663a7267",
+      "importedSha256": "5ff078fb382ee5833f81a4451b28a2f2369c1111a0f37171f7481a54663a7267"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/LiteLlmConfigurationCompiler.cs",
+      "path": "src/LocalAIGateway.LiteLlm/LiteLlmConfigurationCompiler.cs",
+      "sourceSha256": "1e5cac57f72825ec8f719be19914da294fd521077bf434417ee7a660674bc983",
+      "importedSha256": "1e5cac57f72825ec8f719be19914da294fd521077bf434417ee7a660674bc983"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/LiteLlmConfigurationPlan.cs",
+      "path": "src/LocalAIGateway.LiteLlm/LiteLlmConfigurationPlan.cs",
+      "sourceSha256": "ee5329f9076faee47a33b6be932c8ef8efd80fad9f3ea4eba686c38d6035bb82",
+      "importedSha256": "ee5329f9076faee47a33b6be932c8ef8efd80fad9f3ea4eba686c38d6035bb82"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/LiteLlmException.cs",
+      "path": "src/LocalAIGateway.LiteLlm/LiteLlmException.cs",
+      "sourceSha256": "3624cde0e77cb8ae91b28218b5efeccbb7cb4fa41262a053ee95d62fafa5e9d8",
+      "importedSha256": "3624cde0e77cb8ae91b28218b5efeccbb7cb4fa41262a053ee95d62fafa5e9d8"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/LiteLlmProcessStartSpec.cs",
+      "path": "src/LocalAIGateway.LiteLlm/LiteLlmProcessStartSpec.cs",
+      "sourceSha256": "93fd830aaaec3700ef43c678be3301a51e39b1917396e72e4c68cd12a1ea2196",
+      "importedSha256": "93fd830aaaec3700ef43c678be3301a51e39b1917396e72e4c68cd12a1ea2196"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/LiteLlmUsageCallbackAssets.cs",
+      "path": "src/LocalAIGateway.LiteLlm/LiteLlmUsageCallbackAssets.cs",
+      "sourceSha256": "a74ec6e160feebc287f1d905b3917bc50845efdbef7c621396253fab6e15875f",
+      "importedSha256": "a74ec6e160feebc287f1d905b3917bc50845efdbef7c621396253fab6e15875f"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/LocalAIGateway.LiteLlm.csproj",
+      "path": "src/LocalAIGateway.LiteLlm/LocalAIGateway.LiteLlm.csproj",
+      "sourceSha256": "915b74585287aa97a2ab1474b280ed612e59c73212d909600aeec192d1518043",
+      "importedSha256": "915b74585287aa97a2ab1474b280ed612e59c73212d909600aeec192d1518043"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/Properties/AssemblyInfo.cs",
+      "path": "src/LocalAIGateway.LiteLlm/Properties/AssemblyInfo.cs",
+      "sourceSha256": "098795b6065e6ca84c13ae4d4e24655c8b921a24fc2e17859d5d3a3478fdfb3c",
+      "importedSha256": "098795b6065e6ca84c13ae4d4e24655c8b921a24fc2e17859d5d3a3478fdfb3c"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/WindowsLiteLlmProcessFactory.cs",
+      "path": "src/LocalAIGateway.LiteLlm/WindowsLiteLlmProcessFactory.cs",
+      "sourceSha256": "ccf8c41d78940525fef93c1bc5e1370693eff1281634e229e3fc4c10a761a4f1",
+      "importedSha256": "ccf8c41d78940525fef93c1bc5e1370693eff1281634e229e3fc4c10a761a4f1"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.LiteLlm/WindowsSuspendedJobProcess.cs",
+      "path": "src/LocalAIGateway.LiteLlm/WindowsSuspendedJobProcess.cs",
+      "sourceSha256": "35546a8a9e97b0b57daf8fb4b0bba504d119fa1420693d557518f3e60980949c",
+      "importedSha256": "35546a8a9e97b0b57daf8fb4b0bba504d119fa1420693d557518f3e60980949c"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/Backend/StaticBackendHost.cs",
+      "path": "src/LocalAIGateway.Runtime/Backend/StaticBackendHost.cs",
+      "sourceSha256": "1bd38007acb8939a90b74a2b9330ca33a20de00dc608267d6c2d74c2a332eaec",
+      "importedSha256": "1bd38007acb8939a90b74a2b9330ca33a20de00dc608267d6c2d74c2a332eaec"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayAuthentication.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayAuthentication.cs",
+      "sourceSha256": "9b0dcd11a0ed2fb123043d3ef263d076270f4aa1fd215668e74f1d570e8d7b4f",
+      "importedSha256": "9b0dcd11a0ed2fb123043d3ef263d076270f4aa1fd215668e74f1d570e8d7b4f"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayCircuitBreaker.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayCircuitBreaker.cs",
+      "sourceSha256": "c27eb682c5fcccd5ce16d8390ceb8e9242d421cae61091e0874cc90c0713d26e",
+      "importedSha256": "c27eb682c5fcccd5ce16d8390ceb8e9242d421cae61091e0874cc90c0713d26e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayControlServer.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayControlServer.cs",
+      "sourceSha256": "b0b6f726d10bb29835000a69fb038eff6a969a240522136ac9a739752985ec9e",
+      "importedSha256": "b0b6f726d10bb29835000a69fb038eff6a969a240522136ac9a739752985ec9e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayDaemonHost.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayDaemonHost.cs",
+      "sourceSha256": "63e683ca7145114b78d785664f4acf34c2d47c97005412582386df0f7617ca9f",
+      "importedSha256": "63e683ca7145114b78d785664f4acf34c2d47c97005412582386df0f7617ca9f"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayErrorWriter.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayErrorWriter.cs",
+      "sourceSha256": "e78d84e3992474f99cfbeaf11597793e62a8413079ff1dd6aa2a08775bd7f5ff",
+      "importedSha256": "e78d84e3992474f99cfbeaf11597793e62a8413079ff1dd6aa2a08775bd7f5ff"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayHttpTransformer.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayHttpTransformer.cs",
+      "sourceSha256": "32dc25337b792b3eb7fd07c68b83f5f5b365ebbb585a7108557e2974d9b992b3",
+      "importedSha256": "32dc25337b792b3eb7fd07c68b83f5f5b365ebbb585a7108557e2974d9b992b3"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayOperationalLog.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayOperationalLog.cs",
+      "sourceSha256": "853f93ceb2971d65eddccbc09a1493f0ed6e6364cf2cdf57b57f5c84beb4dff9",
+      "importedSha256": "853f93ceb2971d65eddccbc09a1493f0ed6e6364cf2cdf57b57f5c84beb4dff9"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayRequestHandler.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayRequestHandler.cs",
+      "sourceSha256": "bfd5cf2f7f6a11af66db508a79fe648e1b13ba62ac1dbd491dd5ab23f388ff37",
+      "importedSha256": "bfd5cf2f7f6a11af66db508a79fe648e1b13ba62ac1dbd491dd5ab23f388ff37"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayRequestLimitRegistry.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayRequestLimitRegistry.cs",
+      "sourceSha256": "0e835fe8fcdfb3e636f230843c235300872c005fa9c1f6cbe4d8756ff93d9e77",
+      "importedSha256": "0e835fe8fcdfb3e636f230843c235300872c005fa9c1f6cbe4d8756ff93d9e77"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayResponseUsageTracker.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayResponseUsageTracker.cs",
+      "sourceSha256": "1778bc4a3b48fbfe7ccd348184c53a58930e9b1bd3954f80a09e21ef1a5bc2bc",
+      "importedSha256": "1778bc4a3b48fbfe7ccd348184c53a58930e9b1bd3954f80a09e21ef1a5bc2bc"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayRetryPolicy.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayRetryPolicy.cs",
+      "sourceSha256": "e563a89fdde899eebc80ff53c15cf989df445d6ffefad7632d35b9a937bd791a",
+      "importedSha256": "e563a89fdde899eebc80ff53c15cf989df445d6ffefad7632d35b9a937bd791a"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayRouteCoordinator.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayRouteCoordinator.cs",
+      "sourceSha256": "0c7986b2d96545f8a80270f343668f6e051264a91b3ad38791365e0d3fb86fd2",
+      "importedSha256": "0c7986b2d96545f8a80270f343668f6e051264a91b3ad38791365e0d3fb86fd2"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayRuntimeHost.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayRuntimeHost.cs",
+      "sourceSha256": "cbe91a6bc5edb298cc84e4c8ca1cf0297e6123d7938808985ff81df7339acd9a",
+      "importedSha256": "cbe91a6bc5edb298cc84e4c8ca1cf0297e6123d7938808985ff81df7339acd9a"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/GatewayRuntimeOptions.cs",
+      "path": "src/LocalAIGateway.Runtime/GatewayRuntimeOptions.cs",
+      "sourceSha256": "346a1a40687a1bb92cc7de1e33d73e5b6d82652146cc2aff23977276c42e5122",
+      "importedSha256": "346a1a40687a1bb92cc7de1e33d73e5b6d82652146cc2aff23977276c42e5122"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/LocalAIGateway.Runtime.csproj",
+      "path": "src/LocalAIGateway.Runtime/LocalAIGateway.Runtime.csproj",
+      "sourceSha256": "44731ab88ecc4416c54316ead586471094fd3d97dc6266472f8e0377496f4b01",
+      "importedSha256": "44731ab88ecc4416c54316ead586471094fd3d97dc6266472f8e0377496f4b01"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/ModelRequestRewriter.cs",
+      "path": "src/LocalAIGateway.Runtime/ModelRequestRewriter.cs",
+      "sourceSha256": "afa1c405c2c19bbf8c6c502d8888e8a1f9c5f3a5a6acf50d3d2dcb7c9173369e",
+      "importedSha256": "afa1c405c2c19bbf8c6c502d8888e8a1f9c5f3a5a6acf50d3d2dcb7c9173369e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/Program.cs",
+      "path": "src/LocalAIGateway.Runtime/Program.cs",
+      "sourceSha256": "96c95eebc2bee35745faded0f13a53b5d145077e3e728421586f4739b318a9b7",
+      "importedSha256": "96c95eebc2bee35745faded0f13a53b5d145077e3e728421586f4739b318a9b7"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/Properties/AssemblyInfo.cs",
+      "path": "src/LocalAIGateway.Runtime/Properties/AssemblyInfo.cs",
+      "sourceSha256": "a631f41d6aa38387002af847738d1c38bc029786d05f777c769f79ea62a4dad3",
+      "importedSha256": "a631f41d6aa38387002af847738d1c38bc029786d05f777c769f79ea62a4dad3"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/PublicEndpointPolicy.cs",
+      "path": "src/LocalAIGateway.Runtime/PublicEndpointPolicy.cs",
+      "sourceSha256": "0cee1a203bb80cb8accfe67270b8bf7024c2cf43dea0cf97399874f513af807e",
+      "importedSha256": "0cee1a203bb80cb8accfe67270b8bf7024c2cf43dea0cf97399874f513af807e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Runtime/RuntimeExceptions.cs",
+      "path": "src/LocalAIGateway.Runtime/RuntimeExceptions.cs",
+      "sourceSha256": "2db3c50f1c18536d965d7dbec2462349a5666304fe9ac5a62b1cd6cc963016ad",
+      "importedSha256": "2db3c50f1c18536d965d7dbec2462349a5666304fe9ac5a62b1cd6cc963016ad"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/LocalAIGateway.Tray.csproj",
+      "path": "src/LocalAIGateway.Tray/LocalAIGateway.Tray.csproj",
+      "sourceSha256": "739908c40517be6cbd841bf4ce36ef9a6299ecd8b9431cc6d8cef4f5e4585fa7",
+      "importedSha256": "739908c40517be6cbd841bf4ce36ef9a6299ecd8b9431cc6d8cef4f5e4585fa7"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/Program.cs",
+      "path": "src/LocalAIGateway.Tray/Program.cs",
+      "sourceSha256": "276e326aa37f2de54683b8f7f2e45e538fa55ec65c57b1839892219982951b85",
+      "importedSha256": "276e326aa37f2de54683b8f7f2e45e538fa55ec65c57b1839892219982951b85"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/Properties/AssemblyInfo.cs",
+      "path": "src/LocalAIGateway.Tray/Properties/AssemblyInfo.cs",
+      "sourceSha256": "d9d7746ea6f6c267f5ef9b8397bc4bff48de7a07962cdd4dbec6a595151ade17",
+      "importedSha256": "d9d7746ea6f6c267f5ef9b8397bc4bff48de7a07962cdd4dbec6a595151ade17"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/TrayApplicationLayout.cs",
+      "path": "src/LocalAIGateway.Tray/TrayApplicationLayout.cs",
+      "sourceSha256": "64ca48d47e15d15fbe6b7d856eb10124643b4a7483c728b46c440da67ba9f0d2",
+      "importedSha256": "64ca48d47e15d15fbe6b7d856eb10124643b4a7483c728b46c440da67ba9f0d2"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/TrayApplicationLifetime.cs",
+      "path": "src/LocalAIGateway.Tray/TrayApplicationLifetime.cs",
+      "sourceSha256": "40477a9ec43b8afec7bab1073522489d8cf6665373ae9bd0bb95c82b60840f43",
+      "importedSha256": "40477a9ec43b8afec7bab1073522489d8cf6665373ae9bd0bb95c82b60840f43"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/TrayCoordinator.cs",
+      "path": "src/LocalAIGateway.Tray/TrayCoordinator.cs",
+      "sourceSha256": "81505b484507682624380e6319a227096e210c763714e814ec0820420dd98d15",
+      "importedSha256": "81505b484507682624380e6319a227096e210c763714e814ec0820420dd98d15"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/TrayDashboardWindow.xaml",
+      "path": "src/LocalAIGateway.Tray/TrayDashboardWindow.xaml",
+      "sourceSha256": "9408b5546f2a1bd5b7d9d5b10e3630d1fa3ebf8a4756341f273645ff4d72859f",
+      "importedSha256": "9408b5546f2a1bd5b7d9d5b10e3630d1fa3ebf8a4756341f273645ff4d72859f"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/TrayDashboardWindow.xaml.cs",
+      "path": "src/LocalAIGateway.Tray/TrayDashboardWindow.xaml.cs",
+      "sourceSha256": "980be1fcdce561b36d7251ad2e5194e185240af0ab85ef42267534c4829f2e48",
+      "importedSha256": "980be1fcdce561b36d7251ad2e5194e185240af0ab85ef42267534c4829f2e48"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/TrayProfileStore.cs",
+      "path": "src/LocalAIGateway.Tray/TrayProfileStore.cs",
+      "sourceSha256": "40c9d61cca6d39b71ebc2bbdf026d93c09422db1e6d69ee54878cd76f8cad24e",
+      "importedSha256": "40c9d61cca6d39b71ebc2bbdf026d93c09422db1e6d69ee54878cd76f8cad24e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/TrayShell.cs",
+      "path": "src/LocalAIGateway.Tray/TrayShell.cs",
+      "sourceSha256": "f89301d0dc226db1bea750e277c3c1c896155c0ea57e1c0956a521cb2cb50478",
+      "importedSha256": "f89301d0dc226db1bea750e277c3c1c896155c0ea57e1c0956a521cb2cb50478"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Tray/TrayState.cs",
+      "path": "src/LocalAIGateway.Tray/TrayState.cs",
+      "sourceSha256": "68b0bfe071eadeec2e8a1ed6c666d14882164458bcc1069c4b9d11fa2946a7d1",
+      "importedSha256": "68b0bfe071eadeec2e8a1ed6c666d14882164458bcc1069c4b9d11fa2946a7d1"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Updater/LocalAIGateway.Updater.csproj",
+      "path": "src/LocalAIGateway.Updater/LocalAIGateway.Updater.csproj",
+      "sourceSha256": "50c81f8ba22006ccf138aaca59c7b94fd67b48dd2a7714acb1a273a27fa59060",
+      "importedSha256": "50c81f8ba22006ccf138aaca59c7b94fd67b48dd2a7714acb1a273a27fa59060"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Updater/Program.cs",
+      "path": "src/LocalAIGateway.Updater/Program.cs",
+      "sourceSha256": "70bd7de1a60e29cd2334b3f6efa2692ea5a668bcb86807ebfb528c77475f29f9",
+      "importedSha256": "70bd7de1a60e29cd2334b3f6efa2692ea5a668bcb86807ebfb528c77475f29f9"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Backup/Assets/aigw_backup_crypto.py",
+      "path": "src/LocalAIGateway.Windows/Backup/Assets/aigw_backup_crypto.py",
+      "sourceSha256": "7713baa94e741b0703cf6908e172a936c8dc53f1bfec152d357804ddaf0a05cc",
+      "importedSha256": "7713baa94e741b0703cf6908e172a936c8dc53f1bfec152d357804ddaf0a05cc"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Backup/PrivatePythonBackupCryptography.cs",
+      "path": "src/LocalAIGateway.Windows/Backup/PrivatePythonBackupCryptography.cs",
+      "sourceSha256": "2725dcb37cac1a34ff1f8b1fefffd863c5d93999c45ee2a3dab65b9379937da5",
+      "importedSha256": "2725dcb37cac1a34ff1f8b1fefffd863c5d93999c45ee2a3dab65b9379937da5"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Control/WindowsControlPipeName.cs",
+      "path": "src/LocalAIGateway.Windows/Control/WindowsControlPipeName.cs",
+      "sourceSha256": "a6917aae289cec26c3673ef679394adb9a4df0ef202692fe397b0c120b253626",
+      "importedSha256": "a6917aae289cec26c3673ef679394adb9a4df0ef202692fe397b0c120b253626"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Control/WindowsNamedPipeControlClient.cs",
+      "path": "src/LocalAIGateway.Windows/Control/WindowsNamedPipeControlClient.cs",
+      "sourceSha256": "fa078879411b260aa9f5ea0eb13afcf5c3e4a67227d595ef486039ada84853af",
+      "importedSha256": "fa078879411b260aa9f5ea0eb13afcf5c3e4a67227d595ef486039ada84853af"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Installation/CurrentUserAutostart.cs",
+      "path": "src/LocalAIGateway.Windows/Installation/CurrentUserAutostart.cs",
+      "sourceSha256": "581b87e61eccea94becca5fd310171a062e4202a0aa83210a4039de0d2832f42",
+      "importedSha256": "581b87e61eccea94becca5fd310171a062e4202a0aa83210a4039de0d2832f42"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Installation/CurrentUserInstallationCoordinator.cs",
+      "path": "src/LocalAIGateway.Windows/Installation/CurrentUserInstallationCoordinator.cs",
+      "sourceSha256": "8222adce7757732aff4914d561c504473c864f6e5cee03c95397cbaec4a31f31",
+      "importedSha256": "8222adce7757732aff4914d561c504473c864f6e5cee03c95397cbaec4a31f31"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Installation/CurrentUserShellIntegration.cs",
+      "path": "src/LocalAIGateway.Windows/Installation/CurrentUserShellIntegration.cs",
+      "sourceSha256": "f6e20a558be1fcb3e83f73fa0fcba5328ea6f040b1677023247f4c741a8e6107",
+      "importedSha256": "f6e20a558be1fcb3e83f73fa0fcba5328ea6f040b1677023247f4c741a8e6107"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Installation/WindowsPackageInstaller.cs",
+      "path": "src/LocalAIGateway.Windows/Installation/WindowsPackageInstaller.cs",
+      "sourceSha256": "e51bf5b191a4b0ddc27670fa6b1fc6b5a8aba95d655aabd15d5e590110a0e76e",
+      "importedSha256": "e51bf5b191a4b0ddc27670fa6b1fc6b5a8aba95d655aabd15d5e590110a0e76e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/LocalAIGateway.Windows.csproj",
+      "path": "src/LocalAIGateway.Windows/LocalAIGateway.Windows.csproj",
+      "sourceSha256": "02a248f2161dae532814c7841bd9740619c208b7b697f7a4651d8e6763351c10",
+      "importedSha256": "02a248f2161dae532814c7841bd9740619c208b7b697f7a4651d8e6763351c10"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Properties/AssemblyInfo.cs",
+      "path": "src/LocalAIGateway.Windows/Properties/AssemblyInfo.cs",
+      "sourceSha256": "2e6157fa9f8a1d0e723984627733fe39675cecf6336909f8dd4d26ef15ade91e",
+      "importedSha256": "2e6157fa9f8a1d0e723984627733fe39675cecf6336909f8dd4d26ef15ade91e"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Runtime/GatewayDaemonController.cs",
+      "path": "src/LocalAIGateway.Windows/Runtime/GatewayDaemonController.cs",
+      "sourceSha256": "2fcd79aed3916c25491f70c35f637e07a8a49ded4f4d20d86d61f6cd76c01890",
+      "importedSha256": "2fcd79aed3916c25491f70c35f637e07a8a49ded4f4d20d86d61f6cd76c01890"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Runtime/WindowsDetachedProcess.cs",
+      "path": "src/LocalAIGateway.Windows/Runtime/WindowsDetachedProcess.cs",
+      "sourceSha256": "1a576fd7deb70bfe9830d9b6456edb79cf6924b154b07b96ae588b7bf2bae58d",
+      "importedSha256": "1a576fd7deb70bfe9830d9b6456edb79cf6924b154b07b96ae588b7bf2bae58d"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Uninstall/CurrentUserUninstallCoordinator.cs",
+      "path": "src/LocalAIGateway.Windows/Uninstall/CurrentUserUninstallCoordinator.cs",
+      "sourceSha256": "d85aae2898be034fe99f21c2e499d09e5a2764acc187ac2488386c9e0ee5cc53",
+      "importedSha256": "d85aae2898be034fe99f21c2e499d09e5a2764acc187ac2488386c9e0ee5cc53"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Uninstall/OwnedCredentialCleaner.cs",
+      "path": "src/LocalAIGateway.Windows/Uninstall/OwnedCredentialCleaner.cs",
+      "sourceSha256": "5273bb13799849ea04902ed418ab7a52e949b2a23e80430f6858794a81aa1dc4",
+      "importedSha256": "5273bb13799849ea04902ed418ab7a52e949b2a23e80430f6858794a81aa1dc4"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Uninstall/OwnedStateDataCleaner.cs",
+      "path": "src/LocalAIGateway.Windows/Uninstall/OwnedStateDataCleaner.cs",
+      "sourceSha256": "31da36f98ccef52512f5a5c6fdd3a4ee3e553ea863993a29be28ecad950580df",
+      "importedSha256": "31da36f98ccef52512f5a5c6fdd3a4ee3e553ea863993a29be28ecad950580df"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Uninstall/UninstallerProcessClient.cs",
+      "path": "src/LocalAIGateway.Windows/Uninstall/UninstallerProcessClient.cs",
+      "sourceSha256": "f0d5018022d2f91a8e84155328b3e7a6de1211fdc03e9cfe5cbd51b2dffa4025",
+      "importedSha256": "f0d5018022d2f91a8e84155328b3e7a6de1211fdc03e9cfe5cbd51b2dffa4025"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Update/Assets/aigw_update_verify.py",
+      "path": "src/LocalAIGateway.Windows/Update/Assets/aigw_update_verify.py",
+      "sourceSha256": "08b270ae70a447ea20d9e6ab7dca383998e328f1eac5f29241c4b198783a5810",
+      "importedSha256": "08b270ae70a447ea20d9e6ab7dca383998e328f1eac5f29241c4b198783a5810"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Update/PrivatePythonEd25519Verifier.cs",
+      "path": "src/LocalAIGateway.Windows/Update/PrivatePythonEd25519Verifier.cs",
+      "sourceSha256": "d2635a0c0fcb1a632bd9a797ebe20ccc10ae3c574bbbd1417e4ec0778b2d215c",
+      "importedSha256": "d2635a0c0fcb1a632bd9a797ebe20ccc10ae3c574bbbd1417e4ec0778b2d215c"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Update/ProcessUpdateHealthChecker.cs",
+      "path": "src/LocalAIGateway.Windows/Update/ProcessUpdateHealthChecker.cs",
+      "sourceSha256": "4166e66bd7981f66add44cf8acb79af039f2f2fb12f20225e803b2f98758cb81",
+      "importedSha256": "4166e66bd7981f66add44cf8acb79af039f2f2fb12f20225e803b2f98758cb81"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Update/UpdaterProcessClient.cs",
+      "path": "src/LocalAIGateway.Windows/Update/UpdaterProcessClient.cs",
+      "sourceSha256": "07c959572c17d85e70aeb80b783f9e26fd0b6931c1e453b78c34d3ae901ea5c3",
+      "importedSha256": "07c959572c17d85e70aeb80b783f9e26fd0b6931c1e453b78c34d3ae901ea5c3"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/Update/WindowsPackageUpdateService.cs",
+      "path": "src/LocalAIGateway.Windows/Update/WindowsPackageUpdateService.cs",
+      "sourceSha256": "9c98fb077ca813cb3e52b57f2d6bf525826349ec1acd9222448ea36fc83ad164",
+      "importedSha256": "9c98fb077ca813cb3e52b57f2d6bf525826349ec1acd9222448ea36fc83ad164"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/UsageData/Assets/aigw_usage_query.py",
+      "path": "src/LocalAIGateway.Windows/UsageData/Assets/aigw_usage_query.py",
+      "sourceSha256": "4678f5351efd0fcc53a96c1bd9ee46b3c5a61323b5177462c3c13cbe1a8a8c36",
+      "importedSha256": "4678f5351efd0fcc53a96c1bd9ee46b3c5a61323b5177462c3c13cbe1a8a8c36"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/UsageData/PrivatePythonUsageSummaryReader.cs",
+      "path": "src/LocalAIGateway.Windows/UsageData/PrivatePythonUsageSummaryReader.cs",
+      "sourceSha256": "9f28a5c9b14b5c47db26307accd328db8b856029800544705859632cb79ed42b",
+      "importedSha256": "9f28a5c9b14b5c47db26307accd328db8b856029800544705859632cb79ed42b"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/WindowsConfigurationFileSecurity.cs",
+      "path": "src/LocalAIGateway.Windows/WindowsConfigurationFileSecurity.cs",
+      "sourceSha256": "d34ccf366af10f4d88661ba4711f212e361a6d23d63871390927599b170fcac8",
+      "importedSha256": "d34ccf366af10f4d88661ba4711f212e361a6d23d63871390927599b170fcac8"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/WindowsCredentialStore.cs",
+      "path": "src/LocalAIGateway.Windows/WindowsCredentialStore.cs",
+      "sourceSha256": "f863141995c603a5d76b6855efde259d25b0f3acc3e0411a84210aaa80155ac4",
+      "importedSha256": "f863141995c603a5d76b6855efde259d25b0f3acc3e0411a84210aaa80155ac4"
+    },
+    {
+      "sourcePath": "src/LocalAIGateway.Windows/WindowsCurrentUserSingleInstanceProvider.cs",
+      "path": "src/LocalAIGateway.Windows/WindowsCurrentUserSingleInstanceProvider.cs",
+      "sourceSha256": "7d773f260f937682b650e43f52be4f6e342a9c03b92e7287db320764584d73ba",
+      "importedSha256": "7d773f260f937682b650e43f52be4f6e342a9c03b92e7287db320764584d73ba"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/DirectUninstallServiceTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/DirectUninstallServiceTests.cs",
+      "sourceSha256": "6fa884acc29e1f2d8c445dce42bf9cf9bbf87aa1cb0d895f0ffdbb1471aecb2e",
+      "importedSha256": "6fa884acc29e1f2d8c445dce42bf9cf9bbf87aa1cb0d895f0ffdbb1471aecb2e"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/ErrorContractTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/ErrorContractTests.cs",
+      "sourceSha256": "118cf09096c1a32f879ae47d5fc3d90469ff4b6756c8593a1e419ec96684097b",
+      "importedSha256": "118cf09096c1a32f879ae47d5fc3d90469ff4b6756c8593a1e419ec96684097b"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/HelpCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/HelpCommandTests.cs",
+      "sourceSha256": "c76e2001225ea68a23f3db619959046cc819cf9948de6751276ed9d71913066d",
+      "importedSha256": "c76e2001225ea68a23f3db619959046cc819cf9948de6751276ed9d71913066d"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/LocalAIGateway.Cli.Tests.csproj",
+      "path": "tests/LocalAIGateway.Cli.Tests/LocalAIGateway.Cli.Tests.csproj",
+      "sourceSha256": "2c9f19935677b3e276379d8a5cab988af5a970a147b76b8516c4c22232b155de",
+      "importedSha256": "2c9f19935677b3e276379d8a5cab988af5a970a147b76b8516c4c22232b155de"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M1ConfigurationCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M1ConfigurationCommandTests.cs",
+      "sourceSha256": "fdb7ac2591f55292c7ef60fad70ded1f69a4d30edcb6d1baf2f5ff8355d3564f",
+      "importedSha256": "fdb7ac2591f55292c7ef60fad70ded1f69a4d30edcb6d1baf2f5ff8355d3564f"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M3gLifecycleCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M3gLifecycleCommandTests.cs",
+      "sourceSha256": "3e5be0889f6dd3c232067b95354609c7754ba4ed0091282785aef5f5fad602d5",
+      "importedSha256": "3e5be0889f6dd3c232067b95354609c7754ba4ed0091282785aef5f5fad602d5"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M4bClientRunCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M4bClientRunCommandTests.cs",
+      "sourceSha256": "34048bec13ac884d6cf587218180eb940ccb2fe00cfd307ffb90a59f1463dba5",
+      "importedSha256": "34048bec13ac884d6cf587218180eb940ccb2fe00cfd307ffb90a59f1463dba5"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M4cIntegrationPreviewCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M4cIntegrationPreviewCommandTests.cs",
+      "sourceSha256": "70e0c0005a789cd4335decd2577f9888a7b7a6590c185fc70d125fd76c247295",
+      "importedSha256": "70e0c0005a789cd4335decd2577f9888a7b7a6590c185fc70d125fd76c247295"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M4dIntegrationApplyCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M4dIntegrationApplyCommandTests.cs",
+      "sourceSha256": "dcb17547b9e3d7b534f1860f3d3b887c1796fb8ab241405aa99d339dd2b4e188",
+      "importedSha256": "dcb17547b9e3d7b534f1860f3d3b887c1796fb8ab241405aa99d339dd2b4e188"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M4eIntegrationLifecycleCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M4eIntegrationLifecycleCommandTests.cs",
+      "sourceSha256": "8b1fb75d56c0c23e05415188120ab489a41e4a77fecda46ed6f2b810140987ed",
+      "importedSha256": "8b1fb75d56c0c23e05415188120ab489a41e4a77fecda46ed6f2b810140987ed"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M5bUsageCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M5bUsageCommandTests.cs",
+      "sourceSha256": "0abc414b1bb1a7d87371238d9073f2bf4403647097406e2edf9d4cc394ad7bd4",
+      "importedSha256": "0abc414b1bb1a7d87371238d9073f2bf4403647097406e2edf9d4cc394ad7bd4"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M5cBackupCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M5cBackupCommandTests.cs",
+      "sourceSha256": "78d24920fbe09f0fee647bf852c8b67976fc2ff756af2d1dea81a0085405fd4b",
+      "importedSha256": "78d24920fbe09f0fee647bf852c8b67976fc2ff756af2d1dea81a0085405fd4b"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M5dUpdateCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M5dUpdateCommandTests.cs",
+      "sourceSha256": "7bb26664b8213479613bd2816a79cbdceb38740971ad82b29e50d46a49362b66",
+      "importedSha256": "7bb26664b8213479613bd2816a79cbdceb38740971ad82b29e50d46a49362b66"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/M5eUninstallCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/M5eUninstallCommandTests.cs",
+      "sourceSha256": "c1d27e4ab641d2ef0911c7c9d07a1040fdb8c672d8a374426a026a065ad39237",
+      "importedSha256": "c1d27e4ab641d2ef0911c7c9d07a1040fdb8c672d8a374426a026a065ad39237"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/UninstallSelectionResolverTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/UninstallSelectionResolverTests.cs",
+      "sourceSha256": "b4c69efa9fbb22e55983137d002f3d584aa21dfd4cc2f29df814a3595f1fee4a",
+      "importedSha256": "b4c69efa9fbb22e55983137d002f3d584aa21dfd4cc2f29df814a3595f1fee4a"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Cli.Tests/VersionCommandTests.cs",
+      "path": "tests/LocalAIGateway.Cli.Tests/VersionCommandTests.cs",
+      "sourceSha256": "41e304c19f833f4681952553cbdd0bfb83752663d9feeae00752adca63e77b54",
+      "importedSha256": "41e304c19f833f4681952553cbdd0bfb83752663d9feeae00752adca63e77b54"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/BackupFileCleanerTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/BackupFileCleanerTests.cs",
+      "sourceSha256": "dd1430aea90a9ade7c286f3246cd6e49a10124b7ae7cdca4eff5884797d64f73",
+      "importedSha256": "dd1430aea90a9ade7c286f3246cd6e49a10124b7ae7cdca4eff5884797d64f73"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/ConfigurationJsonTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/ConfigurationJsonTests.cs",
+      "sourceSha256": "99cf012caa9aadea296159b8d085fd677810fd45304b2a55d67a0ab6cb2327ae",
+      "importedSha256": "99cf012caa9aadea296159b8d085fd677810fd45304b2a55d67a0ab6cb2327ae"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/ConfigurationPathsTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/ConfigurationPathsTests.cs",
+      "sourceSha256": "98ab5bf3905ddba8b52569e1e2a08506c2b261bfe79ec9ae465ef7f23dd8d97c",
+      "importedSha256": "98ab5bf3905ddba8b52569e1e2a08506c2b261bfe79ec9ae465ef7f23dd8d97c"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/ConfigurationStoreTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/ConfigurationStoreTests.cs",
+      "sourceSha256": "8b302058fdebe1f28bedfad234619c71a20ea6ea5ff95f9a9f33151f62c73573",
+      "importedSha256": "8b302058fdebe1f28bedfad234619c71a20ea6ea5ff95f9a9f33151f62c73573"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/ConfigurationValidatorTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/ConfigurationValidatorTests.cs",
+      "sourceSha256": "3d925e24d190114cb24319688a187b03ac47a8cef404fff759fe3aa6499888da",
+      "importedSha256": "3d925e24d190114cb24319688a187b03ac47a8cef404fff759fe3aa6499888da"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/ControlProtocolTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/ControlProtocolTests.cs",
+      "sourceSha256": "c5a3f526c6310ec8387e60af296cc689cbfbc9fa225bd8997376b2cdd2173d9b",
+      "importedSha256": "c5a3f526c6310ec8387e60af296cc689cbfbc9fa225bd8997376b2cdd2173d9b"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/CurrentUserInstallationPlanTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/CurrentUserInstallationPlanTests.cs",
+      "sourceSha256": "83c32637a02725933e881f7374911308fbcdba3b7cf394a61d69801abefb9cdf",
+      "importedSha256": "83c32637a02725933e881f7374911308fbcdba3b7cf394a61d69801abefb9cdf"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/GatewayConfigurationManagerTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/GatewayConfigurationManagerTests.cs",
+      "sourceSha256": "5e0013a4c82b36ddfd8b2a23a3cdcecfba7300afcc48c403150fdf4069757bb1",
+      "importedSha256": "5e0013a4c82b36ddfd8b2a23a3cdcecfba7300afcc48c403150fdf4069757bb1"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/LocalAIGateway.Core.Tests.csproj",
+      "path": "tests/LocalAIGateway.Core.Tests/LocalAIGateway.Core.Tests.csproj",
+      "sourceSha256": "cb5427ddd928a8bab707fa5f9158fbbce887693ac869a658dcbf89405db384f0",
+      "importedSha256": "cb5427ddd928a8bab707fa5f9158fbbce887693ac869a658dcbf89405db384f0"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/M5cBackupCoordinatorTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/M5cBackupCoordinatorTests.cs",
+      "sourceSha256": "07aabe7ab64163aff5094e987d264d0c645e4ed5b73a6c253f7f5bfd2380f57d",
+      "importedSha256": "07aabe7ab64163aff5094e987d264d0c645e4ed5b73a6c253f7f5bfd2380f57d"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/PackageManifestJsonTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/PackageManifestJsonTests.cs",
+      "sourceSha256": "716b6c5c4de3cb16c14b8b2c25da3854bc39315aa7987a379cb849a951034561",
+      "importedSha256": "716b6c5c4de3cb16c14b8b2c25da3854bc39315aa7987a379cb849a951034561"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/PackageSignatureTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/PackageSignatureTests.cs",
+      "sourceSha256": "222299724c57d8c01ab7c8692592046e3cbeda1282f5a418f7d188b2efa201bd",
+      "importedSha256": "222299724c57d8c01ab7c8692592046e3cbeda1282f5a418f7d188b2efa201bd"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/PackageVersionComparerTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/PackageVersionComparerTests.cs",
+      "sourceSha256": "373feac1c2d7daa787651b015261e359938f75742f7ad73a95e2223f8696b41f",
+      "importedSha256": "373feac1c2d7daa787651b015261e359938f75742f7ad73a95e2223f8696b41f"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Core.Tests/RuntimeClientTokenGeneratorTests.cs",
+      "path": "tests/LocalAIGateway.Core.Tests/RuntimeClientTokenGeneratorTests.cs",
+      "sourceSha256": "541e3b14caf784fb5cad1561b82792ceb7ec97471f1091be719a4814aa089766",
+      "importedSha256": "541e3b14caf784fb5cad1561b82792ceb7ec97471f1091be719a4814aa089766"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Launcher.Tests/ClientIntegrationApplierTests.cs",
+      "path": "tests/LocalAIGateway.Launcher.Tests/ClientIntegrationApplierTests.cs",
+      "sourceSha256": "22c1c1e435cdca1def0c73ffeae55d5bcb15afe4def0be273f93d45d4b17474a",
+      "importedSha256": "22c1c1e435cdca1def0c73ffeae55d5bcb15afe4def0be273f93d45d4b17474a"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Launcher.Tests/ClientIntegrationLifecycleManagerTests.cs",
+      "path": "tests/LocalAIGateway.Launcher.Tests/ClientIntegrationLifecycleManagerTests.cs",
+      "sourceSha256": "5d513d5c6c5b86a8ad5699818c30731fa5c4c374c9ce916786e4cd6177a2ac5a",
+      "importedSha256": "5d513d5c6c5b86a8ad5699818c30731fa5c4c374c9ce916786e4cd6177a2ac5a"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Launcher.Tests/ClientIntegrationPreviewerTests.cs",
+      "path": "tests/LocalAIGateway.Launcher.Tests/ClientIntegrationPreviewerTests.cs",
+      "sourceSha256": "9832c822872d2810a9a909819ca7deb0f10ed01d0a4ec7818df17eef371db126",
+      "importedSha256": "9832c822872d2810a9a909819ca7deb0f10ed01d0a4ec7818df17eef371db126"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Launcher.Tests/ClientLaunchRequestFactoryTests.cs",
+      "path": "tests/LocalAIGateway.Launcher.Tests/ClientLaunchRequestFactoryTests.cs",
+      "sourceSha256": "60628e96be60fe983cca216e9e86dfafa8238404792de41f608c58672cf24165",
+      "importedSha256": "60628e96be60fe983cca216e9e86dfafa8238404792de41f608c58672cf24165"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Launcher.Tests/ClientProcessRunnerTests.cs",
+      "path": "tests/LocalAIGateway.Launcher.Tests/ClientProcessRunnerTests.cs",
+      "sourceSha256": "3a6e51f8f6cd539253e0d2ab57b4d965d98bc5f04ea459bee791434dc92fe5da",
+      "importedSha256": "3a6e51f8f6cd539253e0d2ab57b4d965d98bc5f04ea459bee791434dc92fe5da"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Launcher.Tests/GatewayClientLauncherTests.cs",
+      "path": "tests/LocalAIGateway.Launcher.Tests/GatewayClientLauncherTests.cs",
+      "sourceSha256": "e325fd4022ea0b25fe146619e1909d3562c71238fc6945248e6322f986be3f92",
+      "importedSha256": "e325fd4022ea0b25fe146619e1909d3562c71238fc6945248e6322f986be3f92"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Launcher.Tests/LauncherArgumentsTests.cs",
+      "path": "tests/LocalAIGateway.Launcher.Tests/LauncherArgumentsTests.cs",
+      "sourceSha256": "01c7bf1cbbce8e7b9efc61863f566dba6135a6b84872938050e29dae43e0bc20",
+      "importedSha256": "01c7bf1cbbce8e7b9efc61863f566dba6135a6b84872938050e29dae43e0bc20"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Launcher.Tests/LocalAIGateway.Launcher.Tests.csproj",
+      "path": "tests/LocalAIGateway.Launcher.Tests/LocalAIGateway.Launcher.Tests.csproj",
+      "sourceSha256": "d5165f3f51df20b10202ee3ee8ac77b1f22431571a2fb53f20e6f21d1ba8d570",
+      "importedSha256": "d5165f3f51df20b10202ee3ee8ac77b1f22431571a2fb53f20e6f21d1ba8d570"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.LiteLlm.Tests/LiteLlmBackendHostTests.cs",
+      "path": "tests/LocalAIGateway.LiteLlm.Tests/LiteLlmBackendHostTests.cs",
+      "sourceSha256": "f549acb54c73e16ea4b5fc24c16dbf531643d6e8f912c529a67d74479785c95f",
+      "importedSha256": "f549acb54c73e16ea4b5fc24c16dbf531643d6e8f912c529a67d74479785c95f"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.LiteLlm.Tests/LiteLlmConfigurationCompilerTests.cs",
+      "path": "tests/LocalAIGateway.LiteLlm.Tests/LiteLlmConfigurationCompilerTests.cs",
+      "sourceSha256": "ecf18eaf5831d9ab54b1074ecb2e057b5259af35df28adaf19f6ed128ad9f18b",
+      "importedSha256": "ecf18eaf5831d9ab54b1074ecb2e057b5259af35df28adaf19f6ed128ad9f18b"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.LiteLlm.Tests/LiteLlmProcessStartSpecTests.cs",
+      "path": "tests/LocalAIGateway.LiteLlm.Tests/LiteLlmProcessStartSpecTests.cs",
+      "sourceSha256": "d73efff547962c9ed034a8ff525692df9258a9627ebcb8a9dc91079b9d4d8d7a",
+      "importedSha256": "d73efff547962c9ed034a8ff525692df9258a9627ebcb8a9dc91079b9d4d8d7a"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.LiteLlm.Tests/LocalAIGateway.LiteLlm.Tests.csproj",
+      "path": "tests/LocalAIGateway.LiteLlm.Tests/LocalAIGateway.LiteLlm.Tests.csproj",
+      "sourceSha256": "5578c297cf469e0b3c459cf6fe8bb288c277c2e88a8a5f20ad3499329085814f",
+      "importedSha256": "5578c297cf469e0b3c459cf6fe8bb288c277c2e88a8a5f20ad3499329085814f"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.LiteLlm.Tests/WindowsLiteLlmProcessFactoryIntegrationTests.cs",
+      "path": "tests/LocalAIGateway.LiteLlm.Tests/WindowsLiteLlmProcessFactoryIntegrationTests.cs",
+      "sourceSha256": "fa158989cccb807143fecd83c0a00184960be49a1107b4527c64dbeb60851baa",
+      "importedSha256": "fa158989cccb807143fecd83c0a00184960be49a1107b4527c64dbeb60851baa"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.LiteLlm.Tests/WindowsLiteLlmProcessFactoryTests.cs",
+      "path": "tests/LocalAIGateway.LiteLlm.Tests/WindowsLiteLlmProcessFactoryTests.cs",
+      "sourceSha256": "bfbc9c4a2970a23871b13665732afb9d6174ed50cffc18e9ef4705cb9812ff98",
+      "importedSha256": "bfbc9c4a2970a23871b13665732afb9d6174ed50cffc18e9ef4705cb9812ff98"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.LiteLlm.Tests/WindowsSuspendedJobProcessTests.cs",
+      "path": "tests/LocalAIGateway.LiteLlm.Tests/WindowsSuspendedJobProcessTests.cs",
+      "sourceSha256": "fc332c9fa5773bd1f9c366c7faf059c1aa4b40d3dccbf17df8d032b7c5e2109d",
+      "importedSha256": "fc332c9fa5773bd1f9c366c7faf059c1aa4b40d3dccbf17df8d032b7c5e2109d"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.ProcessFixture/LocalAIGateway.ProcessFixture.csproj",
+      "path": "tests/LocalAIGateway.ProcessFixture/LocalAIGateway.ProcessFixture.csproj",
+      "sourceSha256": "c978813609c077b4b2e19e6e48f925f5c51d7eea7c46cd63195690a672774a41",
+      "importedSha256": "c978813609c077b4b2e19e6e48f925f5c51d7eea7c46cd63195690a672774a41"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.ProcessFixture/Program.cs",
+      "path": "tests/LocalAIGateway.ProcessFixture/Program.cs",
+      "sourceSha256": "df73d6a817c88837f9535589e91537436b335437203a88233077a235362ae6a2",
+      "importedSha256": "df73d6a817c88837f9535589e91537436b335437203a88233077a235362ae6a2"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/DeterministicBackendHost.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/DeterministicBackendHost.cs",
+      "sourceSha256": "ebbbcb7c627c1f75d1f933f0b4f24c066ee9029f1e3df875856cac7fa364d5e6",
+      "importedSha256": "ebbbcb7c627c1f75d1f933f0b4f24c066ee9029f1e3df875856cac7fa364d5e6"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayBlueGreenReloadTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayBlueGreenReloadTests.cs",
+      "sourceSha256": "57a2fd4c3174187e55f4da4c343c1862eb3126144a2640b32b1a4193e0098d61",
+      "importedSha256": "57a2fd4c3174187e55f4da4c343c1862eb3126144a2640b32b1a4193e0098d61"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayCircuitBreakerTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayCircuitBreakerTests.cs",
+      "sourceSha256": "d006dcdc3595b701f10129eb4a072cee0061bba4e3831fa8ea13e2dc5943ce79",
+      "importedSha256": "d006dcdc3595b701f10129eb4a072cee0061bba4e3831fa8ea13e2dc5943ce79"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayControlServerTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayControlServerTests.cs",
+      "sourceSha256": "12d93ea3cca203c9bcbb952d730756fb58e68a25101c37a8db29405659d40352",
+      "importedSha256": "12d93ea3cca203c9bcbb952d730756fb58e68a25101c37a8db29405659d40352"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayDaemonControlTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayDaemonControlTests.cs",
+      "sourceSha256": "36ef72989f7b37d52aab33f1a108123f5b333d7590d5197d8094b7b4c5f1d441",
+      "importedSha256": "36ef72989f7b37d52aab33f1a108123f5b333d7590d5197d8094b7b4c5f1d441"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayDaemonHostIntegrationTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayDaemonHostIntegrationTests.cs",
+      "sourceSha256": "0a1c28605a16b1ddd74ffd29b1eb0cf7a9aaeef911d7541a866081fd7a01f169",
+      "importedSha256": "0a1c28605a16b1ddd74ffd29b1eb0cf7a9aaeef911d7541a866081fd7a01f169"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayDaemonHostTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayDaemonHostTests.cs",
+      "sourceSha256": "14ac241469e43663f2c4192dc923738f01069e3e454a1f1014ac19fa2a3a3e31",
+      "importedSha256": "14ac241469e43663f2c4192dc923738f01069e3e454a1f1014ac19fa2a3a3e31"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayOperationalLogTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayOperationalLogTests.cs",
+      "sourceSha256": "8ddccefcfe7c8ed5d7e05120d85ba8a3a24c68998091fe9d3c7c9ca8d57787cf",
+      "importedSha256": "8ddccefcfe7c8ed5d7e05120d85ba8a3a24c68998091fe9d3c7c9ca8d57787cf"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayRateLimitIntegrationTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayRateLimitIntegrationTests.cs",
+      "sourceSha256": "8754e680537d8e6db1eb34b2f8804045eebbd256fc753cd11cca356ecbfc5f34",
+      "importedSha256": "8754e680537d8e6db1eb34b2f8804045eebbd256fc753cd11cca356ecbfc5f34"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayRequestLimitRegistryTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayRequestLimitRegistryTests.cs",
+      "sourceSha256": "1647f88f71f95bad01a5cb1a9d0fd5b99867fcde82d8df000d77bf5e6c11f4f3",
+      "importedSha256": "1647f88f71f95bad01a5cb1a9d0fd5b99867fcde82d8df000d77bf5e6c11f4f3"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayResponseUsageTrackerTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayResponseUsageTrackerTests.cs",
+      "sourceSha256": "88f0ff3757242182028fe427f386c3b62941d8d8c1dd18f1982135711dead687",
+      "importedSha256": "88f0ff3757242182028fe427f386c3b62941d8d8c1dd18f1982135711dead687"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayRetryPolicyTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayRetryPolicyTests.cs",
+      "sourceSha256": "fa5bd6e115ff8d1e683bb866c0cb0678639e28c0fc5dbbe3d3dbc10d18d7df47",
+      "importedSha256": "fa5bd6e115ff8d1e683bb866c0cb0678639e28c0fc5dbbe3d3dbc10d18d7df47"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/GatewayRuntimeIntegrationTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/GatewayRuntimeIntegrationTests.cs",
+      "sourceSha256": "24102c868675b8c4561905d9bc3c70854b1e171cff248a5b9432aa0b84072063",
+      "importedSha256": "24102c868675b8c4561905d9bc3c70854b1e171cff248a5b9432aa0b84072063"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/LocalAIGateway.Runtime.Tests.csproj",
+      "path": "tests/LocalAIGateway.Runtime.Tests/LocalAIGateway.Runtime.Tests.csproj",
+      "sourceSha256": "33e68ec330234a6f68c783c00823d4d0784ba28902699d9ae4b8a369d9cb5dde",
+      "importedSha256": "33e68ec330234a6f68c783c00823d4d0784ba28902699d9ae4b8a369d9cb5dde"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Runtime.Tests/OrderedFallbackIntegrationTests.cs",
+      "path": "tests/LocalAIGateway.Runtime.Tests/OrderedFallbackIntegrationTests.cs",
+      "sourceSha256": "645281f796c79dbcf3c1de04ecb94cf05e04ad106916a165ac0c973cb5481ca8",
+      "importedSha256": "645281f796c79dbcf3c1de04ecb94cf05e04ad106916a165ac0c973cb5481ca8"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Tray.Tests/GatewayTrayProfileStoreTests.cs",
+      "path": "tests/LocalAIGateway.Tray.Tests/GatewayTrayProfileStoreTests.cs",
+      "sourceSha256": "ee141e60279a788a199b9330d905566a3321b7f1eea5484c3af3129457aed893",
+      "importedSha256": "ee141e60279a788a199b9330d905566a3321b7f1eea5484c3af3129457aed893"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Tray.Tests/LocalAIGateway.Tray.Tests.csproj",
+      "path": "tests/LocalAIGateway.Tray.Tests/LocalAIGateway.Tray.Tests.csproj",
+      "sourceSha256": "4c773e3fedb2b760088ebe76290b3e42c027208e11cbf7a4ecd4775d20d16fec",
+      "importedSha256": "4c773e3fedb2b760088ebe76290b3e42c027208e11cbf7a4ecd4775d20d16fec"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Tray.Tests/TrayApplicationLayoutTests.cs",
+      "path": "tests/LocalAIGateway.Tray.Tests/TrayApplicationLayoutTests.cs",
+      "sourceSha256": "35fdcec35309169c47001f041fb94a1d427d2f93d71c05b41c7c3aa9251577b8",
+      "importedSha256": "35fdcec35309169c47001f041fb94a1d427d2f93d71c05b41c7c3aa9251577b8"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Tray.Tests/TrayApplicationLifetimeTests.cs",
+      "path": "tests/LocalAIGateway.Tray.Tests/TrayApplicationLifetimeTests.cs",
+      "sourceSha256": "563e6e4e2d3453b5b55a2eb926854bffb9151f662dea55776cbe4cbdabef4453",
+      "importedSha256": "563e6e4e2d3453b5b55a2eb926854bffb9151f662dea55776cbe4cbdabef4453"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Tray.Tests/TrayCoordinatorTests.cs",
+      "path": "tests/LocalAIGateway.Tray.Tests/TrayCoordinatorTests.cs",
+      "sourceSha256": "6da4188714a39e222dae34f7986128f49b82affcb0f535c319435c61a78edbc7",
+      "importedSha256": "6da4188714a39e222dae34f7986128f49b82affcb0f535c319435c61a78edbc7"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Tray.Tests/TrayDashboardWindowTests.cs",
+      "path": "tests/LocalAIGateway.Tray.Tests/TrayDashboardWindowTests.cs",
+      "sourceSha256": "5025fe836f722c34473e5d7d05606c4b2c0cd373d0df5cf6c9e63a1069189019",
+      "importedSha256": "5025fe836f722c34473e5d7d05606c4b2c0cd373d0df5cf6c9e63a1069189019"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Updater.Tests/LocalAIGateway.Updater.Tests.csproj",
+      "path": "tests/LocalAIGateway.Updater.Tests/LocalAIGateway.Updater.Tests.csproj",
+      "sourceSha256": "3d4c5d114e0a55c590f0fa0369e4ce26eba553195d64d1b2a0238cabc83bc2d1",
+      "importedSha256": "3d4c5d114e0a55c590f0fa0369e4ce26eba553195d64d1b2a0238cabc83bc2d1"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Updater.Tests/UpdaterApplicationTests.cs",
+      "path": "tests/LocalAIGateway.Updater.Tests/UpdaterApplicationTests.cs",
+      "sourceSha256": "68f820bf447ea8290adb91c4dbb6410bd29b4025e72a43debb02ea367332df6e",
+      "importedSha256": "68f820bf447ea8290adb91c4dbb6410bd29b4025e72a43debb02ea367332df6e"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/ConfigurationStoreWindowsSecurityTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/ConfigurationStoreWindowsSecurityTests.cs",
+      "sourceSha256": "8ae8eb0c2863514994b024e6e5182b720b395cd8bf270f6574b85c5fd193e157",
+      "importedSha256": "8ae8eb0c2863514994b024e6e5182b720b395cd8bf270f6574b85c5fd193e157"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/CurrentUserAutostartTaskXmlTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/CurrentUserAutostartTaskXmlTests.cs",
+      "sourceSha256": "3d3e7a512e8859eb2bae2e3b16b1cfdb02e18f830b568177894d811174cbafc4",
+      "importedSha256": "3d3e7a512e8859eb2bae2e3b16b1cfdb02e18f830b568177894d811174cbafc4"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/CurrentUserInstallationCoordinatorTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/CurrentUserInstallationCoordinatorTests.cs",
+      "sourceSha256": "dac2c17cc9d0dcfa65c4b20c5b38e21a08b55989bef5ae7654f74eca10cdc337",
+      "importedSha256": "dac2c17cc9d0dcfa65c4b20c5b38e21a08b55989bef5ae7654f74eca10cdc337"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/CurrentUserShellIntegrationTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/CurrentUserShellIntegrationTests.cs",
+      "sourceSha256": "3cf499f5275d9631f80414fab7cf83ec6bf550084ddf75fa6695fb062c6c1058",
+      "importedSha256": "3cf499f5275d9631f80414fab7cf83ec6bf550084ddf75fa6695fb062c6c1058"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/CurrentUserUninstallCoordinatorTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/CurrentUserUninstallCoordinatorTests.cs",
+      "sourceSha256": "87d880e47a07a6d64de768da194c714c1393537a6c66d32cb1244a0193f2395a",
+      "importedSha256": "87d880e47a07a6d64de768da194c714c1393537a6c66d32cb1244a0193f2395a"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/GatewayDaemonControllerTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/GatewayDaemonControllerTests.cs",
+      "sourceSha256": "845a8893792ca2d9b21dd97d2331a9d07628314c249e69c24603011f83733ab0",
+      "importedSha256": "845a8893792ca2d9b21dd97d2331a9d07628314c249e69c24603011f83733ab0"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/LocalAIGateway.Windows.Tests.csproj",
+      "path": "tests/LocalAIGateway.Windows.Tests/LocalAIGateway.Windows.Tests.csproj",
+      "sourceSha256": "f901e4b5e210e24c3c040e79400cfa2ad7f8c6776c4cc08cc0b5c7de68704a1b",
+      "importedSha256": "f901e4b5e210e24c3c040e79400cfa2ad7f8c6776c4cc08cc0b5c7de68704a1b"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/M3fPackageInstallerIntegrationTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/M3fPackageInstallerIntegrationTests.cs",
+      "sourceSha256": "0316066b688d4ff5b9121ee2e5652da3d974702dd86dfb3695717aeb8468ed9d",
+      "importedSha256": "0316066b688d4ff5b9121ee2e5652da3d974702dd86dfb3695717aeb8468ed9d"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/OwnedCredentialCleanerTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/OwnedCredentialCleanerTests.cs",
+      "sourceSha256": "ca1ab5a8677ee7ae5f1199c9edd2340be2ddb39b6d37815af0294410a3b40093",
+      "importedSha256": "ca1ab5a8677ee7ae5f1199c9edd2340be2ddb39b6d37815af0294410a3b40093"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/OwnedStateDataCleanerTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/OwnedStateDataCleanerTests.cs",
+      "sourceSha256": "683b134b6746e5a5d07a59e065277ff40da67803f79a11a5b164eb66cbdc009a",
+      "importedSha256": "683b134b6746e5a5d07a59e065277ff40da67803f79a11a5b164eb66cbdc009a"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/PrivatePythonBackupCryptographyTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/PrivatePythonBackupCryptographyTests.cs",
+      "sourceSha256": "86985c6f9a5a4a45c3073ee29620b5b16263b695a2101b9495336ec699121700",
+      "importedSha256": "86985c6f9a5a4a45c3073ee29620b5b16263b695a2101b9495336ec699121700"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/PrivatePythonEd25519VerifierTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/PrivatePythonEd25519VerifierTests.cs",
+      "sourceSha256": "461b63fd5ef6bd2c61db7996b08df89a08e3938f054a77699820955cba95f77d",
+      "importedSha256": "461b63fd5ef6bd2c61db7996b08df89a08e3938f054a77699820955cba95f77d"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/PrivatePythonUsageSummaryReaderTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/PrivatePythonUsageSummaryReaderTests.cs",
+      "sourceSha256": "365015c68955d17a145af2868d770c67384ccc613ba503b3cd996b7c73012c1a",
+      "importedSha256": "365015c68955d17a145af2868d770c67384ccc613ba503b3cd996b7c73012c1a"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/WindowsConfigurationFileSecurityTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/WindowsConfigurationFileSecurityTests.cs",
+      "sourceSha256": "26c41cf527d4dd8bb004f4d088f0187294d321f19ec8db0e5f3171333f835a42",
+      "importedSha256": "26c41cf527d4dd8bb004f4d088f0187294d321f19ec8db0e5f3171333f835a42"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/WindowsControlClientTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/WindowsControlClientTests.cs",
+      "sourceSha256": "ccf165133032328004cd9c34f837e36572dba8751bbd4869569920e0234f08f9",
+      "importedSha256": "ccf165133032328004cd9c34f837e36572dba8751bbd4869569920e0234f08f9"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/WindowsCredentialStoreValidationTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/WindowsCredentialStoreValidationTests.cs",
+      "sourceSha256": "0924cf6afd7248c1b4d5404cfdb17aaeb9a55f7c04ee50c6b6ed7c0ff2da0147",
+      "importedSha256": "0924cf6afd7248c1b4d5404cfdb17aaeb9a55f7c04ee50c6b6ed7c0ff2da0147"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/WindowsCurrentUserSingleInstanceProviderTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/WindowsCurrentUserSingleInstanceProviderTests.cs",
+      "sourceSha256": "95cc1e367d640eaad133ef28e85bdb5baeb6a25969c64ff55cfe19cdd686b3b4",
+      "importedSha256": "95cc1e367d640eaad133ef28e85bdb5baeb6a25969c64ff55cfe19cdd686b3b4"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/WindowsPackageInstallerTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/WindowsPackageInstallerTests.cs",
+      "sourceSha256": "e85c6524a5f5d96ed98d6cfa89491f0ad60f690bd8a431e511c46d6a8bf8210a",
+      "importedSha256": "e85c6524a5f5d96ed98d6cfa89491f0ad60f690bd8a431e511c46d6a8bf8210a"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/WindowsPackageUpdateServiceTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/WindowsPackageUpdateServiceTests.cs",
+      "sourceSha256": "e9118077cd1de7a07af9f3ed987e819f47d5fc59b37219cd0f5fd6793ccbad02",
+      "importedSha256": "e9118077cd1de7a07af9f3ed987e819f47d5fc59b37219cd0f5fd6793ccbad02"
+    },
+    {
+      "sourcePath": "tests/LocalAIGateway.Windows.Tests/WindowsRestrictedProcessTests.cs",
+      "path": "tests/LocalAIGateway.Windows.Tests/WindowsRestrictedProcessTests.cs",
+      "sourceSha256": "3b4aa3b10cc216a31b43be8da18ba6cffea98ff5bd03ac45ec7249bbfda1f07a",
+      "importedSha256": "3b4aa3b10cc216a31b43be8da18ba6cffea98ff5bd03ac45ec7249bbfda1f07a"
+    },
+    {
+      "sourcePath": "tests/fixtures/m5a_fake_openai.py",
+      "path": "tests/fixtures/m5a_fake_openai.py",
+      "sourceSha256": "ccc6b209b9c2851e7f73bf88b5fdae53fdb9dcb838bc0b4b1fd404afd1767473",
+      "importedSha256": "ccc6b209b9c2851e7f73bf88b5fdae53fdb9dcb838bc0b4b1fd404afd1767473"
+    },
+    {
+      "sourcePath": "tests/fixtures/m5a_usage_callback_driver.py",
+      "path": "tests/fixtures/m5a_usage_callback_driver.py",
+      "sourceSha256": "05916183b30cfb83f3bbbd4d81d8024b892d802c875a47895dea06a6c7b68c0b",
+      "importedSha256": "05916183b30cfb83f3bbbd4d81d8024b892d802c875a47895dea06a6c7b68c0b"
+    },
+    {
+      "sourcePath": "tests/fixtures/m5a_verify_proxy_usage.py",
+      "path": "tests/fixtures/m5a_verify_proxy_usage.py",
+      "sourceSha256": "ca35c5340759a5321d730f1599a23dff1f159756d8e0fa7d0db41464869f3db3",
+      "importedSha256": "ca35c5340759a5321d730f1599a23dff1f159756d8e0fa7d0db41464869f3db3"
+    },
+    {
+      "sourcePath": "tests/fixtures/m5b_usage_query_driver.py",
+      "path": "tests/fixtures/m5b_usage_query_driver.py",
+      "sourceSha256": "6bb609e3d51c656fe8f552094b7148a7a3fa276484a32ec4db5b02f8308cbe8c",
+      "importedSha256": "6bb609e3d51c656fe8f552094b7148a7a3fa276484a32ec4db5b02f8308cbe8c"
+    },
+    {
+      "sourcePath": "tests/fixtures/m5b_usage_query_sleep.py",
+      "path": "tests/fixtures/m5b_usage_query_sleep.py",
+      "sourceSha256": "35c1889ca63048db3ba35d9ba8e81becb5e62eb66db6876cf985a2b9c3bb23aa",
+      "importedSha256": "35c1889ca63048db3ba35d9ba8e81becb5e62eb66db6876cf985a2b9c3bb23aa"
+    }
+  ]
+}

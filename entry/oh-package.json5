@@ -5,6 +5,13 @@
   "main": "",
   "author": "",
   "license": "MIT",
-  "dependencies": {}
+  "dependencies": {
+    "@harmony_agent/agent-contracts": "file:../modules/harmony_agent/agent_contracts",
+    "@harmony_agent/agent-core": "file:../modules/harmony_agent/agent_core",
+    "@harmony_agent/agent-runtime": "file:../modules/harmony_agent/agent_runtime",
+    "@harmony_agent/mcp-client": "file:../modules/harmony_agent/mcp_client",
+    "@harmony_agent/agent-connectors": "file:../modules/harmony_agent/agent_connectors",
+    "@harmony_agent/agent-storage": "file:../modules/harmony_agent/agent_storage"
+  }
 }
 

@@ -1,0 +1,2 @@
+# Preserve the source and runtime-manifest bytes across Windows checkouts.
+* text=auto eol=lf

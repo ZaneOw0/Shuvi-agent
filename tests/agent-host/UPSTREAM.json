@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/AlterGo-xzy/Harmony_agent",
+  "commit": "f1771764f129193725a8bccb5da2be6c3604e998",
+  "importedAt": "2026-10-23",
+  "files": [
+    {
+      "sourcePath": "AppScope/app.json5",
+      "path": "AppScope/app.json5",
+      "sourceSha256": "00d90762156aebd2acf9f6dd9e3ded1d22ea70dabd832b154cdebdebc7be9dda",
+      "importedSha256": "64d30f2c3161fc90e83c7c32d2711ba117d154b89ea6e2b3a534e1e36c57fa57",
+      "change": "Use a dedicated Shuvi test bundle without replacing the upstream app"
+    },
+    {
+      "sourcePath": "AppScope/resources/base/element/string.json",
+      "path": "AppScope/resources/base/element/string.json",
+      "sourceSha256": "b4eeb6c7dace0556c655af4aeee7a2d949116ea0250afd482fa8c97f16f1843c",
+      "importedSha256": "b4eeb6c7dace0556c655af4aeee7a2d949116ea0250afd482fa8c97f16f1843c"
+    },
+    {
+      "sourcePath": "AppScope/resources/base/media/app_icon.svg",
+      "path": "AppScope/resources/base/media/app_icon.svg",
+      "sourceSha256": "42809dd3949b9a669ff9690e171ca7f76b9d7fb2fde8cb5d07b7a392245d3bdb",
+      "importedSha256": "42809dd3949b9a669ff9690e171ca7f76b9d7fb2fde8cb5d07b7a392245d3bdb"
+    },
+    {
+      "sourcePath": "test_host/build-profile.json5",
+      "path": "test_host/build-profile.json5",
+      "sourceSha256": "b468e1a895d327d2d136a957bba9a03276ff675289809d410555663e0fbb3cdd",
+      "importedSha256": "b468e1a895d327d2d136a957bba9a03276ff675289809d410555663e0fbb3cdd"
+    },
+    {
+      "sourcePath": "test_host/hvigorfile.ts",
+      "path": "test_host/hvigorfile.ts",
+      "sourceSha256": "1ec3e41cb3445ef2f304a9d923c4d65df502478c596a2ef7425aa28ce422d1de",
+      "importedSha256": "1ec3e41cb3445ef2f304a9d923c4d65df502478c596a2ef7425aa28ce422d1de"
+    },
+    {
+      "sourcePath": "test_host/oh-package.json5",
+      "path": "test_host/oh-package.json5",
+      "sourceSha256": "5d7233e9b7103d552b8b1ec6c8ab1b7af6fb8c8f82faeacd5ee4b4083a744f84",
+      "importedSha256": "bcf09a27fba380999d3c420923b28bfbf176dbf1e537a4a294ff684615801320",
+      "change": "Resolve shared modules from the isolated test project"
+    },
+    {
+      "sourcePath": "test_host/src/main/ets/testhostability/TestHostAbility.ets",
+      "path": "test_host/src/main/ets/testhostability/TestHostAbility.ets",
+      "sourceSha256": "e6c0669d40f1151a811735db5d7d778627453ea87f3fc09dcffdabc58bf9cf89",
+      "importedSha256": "e6c0669d40f1151a811735db5d7d778627453ea87f3fc09dcffdabc58bf9cf89"
+    },
+    {
+      "sourcePath": "test_host/src/main/module.json5",
+      "path": "test_host/src/main/module.json5",
+      "sourceSha256": "fbcd13c54ea73b45537e207f9e370623fbf501298be9564d64801f80a0f676d3",
+      "importedSha256": "fbcd13c54ea73b45537e207f9e370623fbf501298be9564d64801f80a0f676d3"
+    },
+    {
+      "sourcePath": "test_host/src/main/resources/base/element/color.json",
+      "path": "test_host/src/main/resources/base/element/color.json",
+      "sourceSha256": "05ce4617159de8b4de2b213626e1d5f24969b999da92f64c760f026710a6374b",
+      "importedSha256": "05ce4617159de8b4de2b213626e1d5f24969b999da92f64c760f026710a6374b"
+    },
+    {
+      "sourcePath": "test_host/src/main/resources/base/element/string.json",
+      "path": "test_host/src/main/resources/base/element/string.json",
+      "sourceSha256": "85068169d9224b61d85c4e10e226e10464578ec6d5262ab6d4e7581164e86c88",
+      "importedSha256": "85068169d9224b61d85c4e10e226e10464578ec6d5262ab6d4e7581164e86c88"
+    },
+    {
+      "sourcePath": "test_host/src/main/resources/base/media/start_icon.svg",
+      "path": "test_host/src/main/resources/base/media/start_icon.svg",
+      "sourceSha256": "ee4bd3eb926e6a31ac5d7ee2999e273eec3da7127b2c93c380cdc75624040b30",
+      "importedSha256": "ee4bd3eb926e6a31ac5d7ee2999e273eec3da7127b2c93c380cdc75624040b30"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/BatteryStatusDevice.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/BatteryStatusDevice.test.ets",
+      "sourceSha256": "3b98f0883db817a4d8882b24544de54634bb2242affc9e501200ab5111b76c90",
+      "importedSha256": "3b98f0883db817a4d8882b24544de54634bb2242affc9e501200ab5111b76c90"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/List.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/List.test.ets",
+      "sourceSha256": "418cd65220601c8c14e5d74beb7fd4480f02b2f7c71dec3c6de76dac54742464",
+      "importedSha256": "418cd65220601c8c14e5d74beb7fd4480f02b2f7c71dec3c6de76dac54742464"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/LocalAIGatewayDevice.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/LocalAIGatewayDevice.test.ets",
+      "sourceSha256": "1f8a0368b88e70ae08164c4f9089b720d5f139ef13ef6da0aef68ac0417f5e58",
+      "importedSha256": "1f8a0368b88e70ae08164c4f9089b720d5f139ef13ef6da0aef68ac0417f5e58"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/LocalAIGatewayFacadeDevice.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/LocalAIGatewayFacadeDevice.test.ets",
+      "sourceSha256": "5c624d2401536db455a8627571acf8484ce852d24134119bf03a0ee7ceb3bf04",
+      "importedSha256": "5c624d2401536db455a8627571acf8484ce852d24134119bf03a0ee7ceb3bf04"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/McpDeviceSmoke.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/McpDeviceSmoke.test.ets",
+      "sourceSha256": "11d98ac3efe3f677ecd4a0d111983e166071ee521cbae85b30bda9e05e77ff74",
+      "importedSha256": "c12e929ece303f37d81cc7949029f2eca19259fb5d892f61df26909d35a7fe1f",
+      "change": "Use a dedicated Shuvi test bundle without replacing the upstream app"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/McpFacadeDevice.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/McpFacadeDevice.test.ets",
+      "sourceSha256": "c1aebf54cc387c71d313e23b372c7dae0727627cbca4810ef37fe7c0ba3e13c2",
+      "importedSha256": "c1aebf54cc387c71d313e23b372c7dae0727627cbca4810ef37fe7c0ba3e13c2"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/MemoryDeviceRecovery.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/MemoryDeviceRecovery.test.ets",
+      "sourceSha256": "96e6b1eee62d97b5e5eead3e9a0838ede6921060ed2ea04d66ba23799299c9a9",
+      "importedSha256": "96e6b1eee62d97b5e5eead3e9a0838ede6921060ed2ea04d66ba23799299c9a9"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/RuntimeRdbDeviceRecovery.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/RuntimeRdbDeviceRecovery.test.ets",
+      "sourceSha256": "6eb76335e764e65af017a70eb8042bcd466ad49aa6e1db95599c47115cd8af20",
+      "importedSha256": "6eb76335e764e65af017a70eb8042bcd466ad49aa6e1db95599c47115cd8af20"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/SecurityStorageDevice.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/SecurityStorageDevice.test.ets",
+      "sourceSha256": "1512f32716fe10b4494d0ead04967a7bdd233e64e803d6411ad8e0912f6b6d65",
+      "importedSha256": "1512f32716fe10b4494d0ead04967a7bdd233e64e803d6411ad8e0912f6b6d65"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/ShuviWebSearchDevice.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/ShuviWebSearchDevice.test.ets",
+      "sourceSha256": "baa06a8b7ee9690c5810c39f062852e295c72a573d32a407e22a1ffa0d89622c",
+      "importedSha256": "baa06a8b7ee9690c5810c39f062852e295c72a573d32a407e22a1ffa0d89622c"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/ets/test/StorageDeviceRecovery.test.ets",
+      "path": "test_host/src/ohosTest/ets/test/StorageDeviceRecovery.test.ets",
+      "sourceSha256": "39fc9f44de09956153f32f0a05fb0650247686d735d8ce79446fbf58307e8e98",
+      "importedSha256": "39fc9f44de09956153f32f0a05fb0650247686d735d8ce79446fbf58307e8e98"
+    },
+    {
+      "sourcePath": "test_host/src/ohosTest/module.json5",
+      "path": "test_host/src/ohosTest/module.json5",
+      "sourceSha256": "63937bcfef0c62fd69483d38dd0298482a99640d3b5768d85b33e8bbe52b9a31",
+      "importedSha256": "63937bcfef0c62fd69483d38dd0298482a99640d3b5768d85b33e8bbe52b9a31"
+    }
+  ]
+}

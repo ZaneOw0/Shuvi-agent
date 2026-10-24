@@ -30,6 +30,9 @@ const outputRoot = path.join(project, '.cache/host-tests');
 const sources = [
   'entry/src/main/ets/model/AssistantModels.ets',
   'entry/src/main/ets/mock/MockAssistantService.ets',
+  'entry/src/main/ets/model/SearchModels.ets',
+  'entry/src/main/ets/mock/MockSearchSession.ets',
+  'entry/src/test/MockSearchCases.ets',
   'entry/src/main/ets/knowledge/domain/KnowledgeTypes.ets',
   'entry/src/main/ets/knowledge/pipeline/Chunker.ets',
   'entry/src/main/ets/knowledge/domain/TextKnowledgeModels.ets',
@@ -211,9 +214,10 @@ for (const doc of corpusDocs) {
 }
 
 const { mockAssistantCases } = require(path.join(outputRoot, 'entry/src/test/MockAssistantCases.js'));
+const { mockSearchCases } = require(path.join(outputRoot, 'entry/src/test/MockSearchCases.js'));
 const { chunkerCases } = require(path.join(outputRoot, 'entry/src/test/ChunkerCases.js'));
 const { corpusCases } = require(path.join(outputRoot, 'entry/src/test/CorpusCases.js'));
-for (const testCase of mockAssistantCases()) {
+for (const testCase of mockAssistantCases().concat(mockSearchCases())) {
   test(testCase.name, testCase.run);
 }
 for (const testCase of chunkerCases()) {

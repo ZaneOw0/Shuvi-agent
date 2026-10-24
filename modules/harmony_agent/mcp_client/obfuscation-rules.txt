@@ -1,0 +1,2 @@
+# Obfuscation is intentionally disabled for the initial protocol release.
+

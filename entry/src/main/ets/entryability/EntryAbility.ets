@@ -16,6 +16,12 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { SourceLinkService } from '../services/SourceLinkService';
+import { McpConnectionCheckService } from '../services/McpConnectionCheckService';
+import { DirectModelCheckService } from '../services/model/DirectModelCheckService';
+import { ShuviRuntimeService } from '../services/model/ShuviRuntimeService';
+import { RuntimeChatService } from '../services/model/RuntimeChatService';
+import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { DocumentParseAssembly } from '../knowledge/infra/DocumentParseAssembly';
 import { KnowledgeAssembly } from '../knowledge/infra/KnowledgeAssembly';
 import { SemanticQualitySession } from '../knowledge/platformtests/SemanticQualitySuite';
@@ -27,6 +33,7 @@ const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    SourceLinkService.bind(this.context);
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     } catch (err) {
@@ -36,6 +43,14 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    void RuntimeSearchService.session.onDestroy().catch((): void => {});
+    void RuntimeChatService.controller.onDestroy().catch((): void => {});
+    void ShuviRuntimeService.session.onDestroy().catch((): void => {
+      hilog.error(DOMAIN, 'ShuviRuntime', 'Agent session shutdown failed');
+    });
+    DirectModelCheckService.session.detach();
+    McpConnectionCheckService.session.detach();
+    SourceLinkService.release();
     DocxIngestionService.background();
     ImageIntegrationSuite.background();
     ImageIngestionService.background();
@@ -64,12 +79,22 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
+    RuntimeSearchService.session.onForeground();
+    RuntimeChatService.controller.onForeground();
+    ShuviRuntimeService.session.onForeground();
     KnowledgeAssembly.foreground();
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 
   onBackground(): void {
+    void RuntimeSearchService.session.onBackground().catch((): void => {});
+    void RuntimeChatService.controller.onBackground().catch((): void => {});
+    void ShuviRuntimeService.session.onBackground().catch((): void => {
+      hilog.error(DOMAIN, 'ShuviRuntime', 'Agent session background cleanup failed');
+    });
+    DirectModelCheckService.background();
+    McpConnectionCheckService.session.cancel();
     DocxIngestionService.background();
     ImageIntegrationSuite.background();
     ImageIngestionService.background();

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>aigw-runtime</AssemblyName>
+    <RootNamespace>LocalAIGateway.Runtime</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Yarp.ReverseProxy" />
+    <ProjectReference Include="..\LocalAIGateway.Core\LocalAIGateway.Core.csproj" />
+    <ProjectReference Include="..\LocalAIGateway.LiteLlm\LocalAIGateway.LiteLlm.csproj" />
+    <ProjectReference Include="..\LocalAIGateway.Windows\LocalAIGateway.Windows.csproj" />
+  </ItemGroup>
+</Project>
