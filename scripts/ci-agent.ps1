@@ -21,7 +21,9 @@ try {
     $env:JAVA_HOME = $JavaHome
     & node scripts/verify-agent-host.cjs
     if ($LASTEXITCODE -ne 0) { throw 'Agent source verification failed' }
-    foreach ($script in @('run-host-tests.cjs', 'run-floating-placement-tests.cjs', 'run-mcp-probe-tests.cjs')) {
+    & node --test scripts/tests/agent-local-changes.test.cjs
+    if ($LASTEXITCODE -ne 0) { throw 'Agent local provenance checks failed' }
+    foreach ($script in @('run-host-tests.cjs', 'run-floating-placement-tests.cjs', 'run-mcp-probe-tests.cjs', 'run-direct-model-tests.cjs')) {
         & node "entry/src/test/$script"
         if ($LASTEXITCODE -ne 0) { throw "UX checks failed: $script" }
     }

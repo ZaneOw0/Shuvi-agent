@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { safeSearchUrl } from './model/SearchTaskSupport';
 
 // 由 EntryAbility 注入已有的强类型上下文，页面不做 as 断言或持有 Ability。
 // API 12+ UIAbilityContext.openLink：前台显式点击打开外部链接，不新增权限。
@@ -24,6 +25,13 @@ export class SourceLinkService {
     if (!context) {
       throw new Error('SOURCE_CONTEXT_UNAVAILABLE');
     }
+    await context.openLink(url, { appLinkingOnly: false });
+  }
+
+  static async openSearchSource(url: string): Promise<void> {
+    if (!safeSearchUrl(url)) throw new Error('SOURCE_URL_NOT_ALLOWED');
+    const context = SourceLinkService.context;
+    if (context === undefined) throw new Error('SOURCE_CONTEXT_UNAVAILABLE');
     await context.openLink(url, { appLinkingOnly: false });
   }
 }

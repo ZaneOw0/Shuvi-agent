@@ -3,6 +3,8 @@ import { AppIcon } from './AppIcon';
 import { BrandAvatar } from './BrandAvatar';
 import { DEBUG } from 'BuildProfile';
 import { McpConnectionCheck } from './McpConnectionCheck';
+import { DirectModelCheck } from './DirectModelCheck';
+import { RuntimeStartupCheck } from './RuntimeStartupCheck';
 
 interface FeatureRowOptions {
   id?: string;
@@ -110,6 +112,8 @@ export function KnowledgePage($$: NoticePageOptions) {
 export function ProfilePage($$: ProfilePageOptions) {
   Column({ space: 12 }) {
     if (DEBUG) {
+      RuntimeStartupCheck()
+      DirectModelCheck()
       McpConnectionCheck()
     }
     Column({ space: 12 }) {

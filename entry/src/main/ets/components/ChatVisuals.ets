@@ -11,6 +11,7 @@ interface DraftVisualOptions {
 
 interface WelcomeOptions {
   searchEnabled: boolean;
+  realChat?: boolean;
 }
 
 @Builder
@@ -23,7 +24,7 @@ export function AssistantWelcome($$: WelcomeOptions) {
       .fontColor(Theme.ink).textAlign(TextAlign.Center).width('100%')
     Text('我是休比，让想法成为行动。').fontSize(13).fontColor(Theme.muted)
       .textAlign(TextAlign.Center).width('100%')
-    Text($$.searchEnabled ? '从下方「搜索样例」开始体验' : '从下方「日程样例」开始体验').fontSize(11).fontColor(Theme.muted)
+    Text($$.realChat ? ($$.searchEnabled ? '输入公开关键词，发送后确认本次搜索' : '输入公开问题，或从下方「提问样例」开始') : ($$.searchEnabled ? '从下方「搜索样例」开始体验' : '从下方「日程样例」开始体验')).fontSize(11).fontColor(Theme.muted)
       .textAlign(TextAlign.Center).margin({ top: 8 }).width('100%')
   }.width('100%').padding({ top: 24, bottom: 24, left: 12, right: 12 })
 }
