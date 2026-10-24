@@ -6,7 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema, JSONRPCMessageSchema,
   isInitializeRequest, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { inputSchema, toolResultSchema, SearchError } from './search.js';
+import { inputSchema, toolResultSchema, SearchError, unknownUsage } from './search.js';
 import type { Search } from './search.js';
 
 interface Session {
@@ -85,13 +85,14 @@ export async function startServer(search: Search, port = 8787) {
         if (activeSearches >= 4) throw new SearchError('RATE_LIMITED');
         activeSearches++;
         acquired = true;
-        const output = await search(parsed.data, AbortSignal.any([extra.signal, stopping.signal]));
-        return { structuredContent: output, content: [{ type: 'text', text: JSON.stringify(output) }] };
+        const { output, usage } = await search(parsed.data, AbortSignal.any([extra.signal, stopping.signal]));
+        return { structuredContent: output, content: [{ type: 'text', text: JSON.stringify(output) }],
+          _meta: { shuviSearchUsage: usage } };
       } catch (error) {
         const safe = error instanceof SearchError ? error : new SearchError('UPSTREAM');
         const failure = { schemaVersion: '1.0', requestId,
           error: { code: safe.code, message: safe.message } };
-        return { isError: true, structuredContent: failure,
+        return { isError: true, structuredContent: failure, _meta: { shuviSearchUsage: unknownUsage(requestId) },
           content: [{ type: 'text', text: JSON.stringify(failure) }] };
       } finally {
         if (acquired) activeSearches--;

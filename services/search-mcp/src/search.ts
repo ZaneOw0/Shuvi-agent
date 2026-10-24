@@ -16,6 +16,23 @@ const sourceSchema = z.object({
   content: z.string().max(8000)
 });
 const responseSchema = z.object({ results: z.array(sourceSchema) });
+const providerUsageSchema = z.object({
+  usage: z.object({ credits: z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER) }),
+  request_id: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).optional()
+});
+export interface SearchUsage {
+  schemaVersion: '1.0';
+  requestId: string;
+  provider: 'tavily';
+  state: 'known' | 'unknown';
+  unit?: 'credits';
+  credits?: number;
+  providerRequestId?: string;
+}
+export function unknownUsage(requestId: string): SearchUsage {
+  return { schemaVersion: '1.0', requestId, provider: 'tavily', state: 'unknown' };
+}
+export interface SearchCompletion { output: SearchOutput; usage: SearchUsage }
 export const outputSchema = z.strictObject({
   schemaVersion: z.literal('1.0'),
   requestId: z.string().uuid(),
@@ -71,7 +88,7 @@ export function createSearch(options: SearchOptions) {
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
     throw new Error('Invalid search timeout configuration');
   }
-  return async (input: SearchInput, cancellation: AbortSignal): Promise<SearchOutput> => {
+  return async (input: SearchInput, cancellation: AbortSignal): Promise<SearchCompletion> => {
     const parsed = inputSchema.safeParse(input);
     if (!parsed.success) throw new SearchError('INVALID_ARGUMENT');
     if (cancellation.aborted) throw new SearchError('CANCELLED');
@@ -90,7 +107,7 @@ export function createSearch(options: SearchOptions) {
           query: parsed.data.query,
           max_results: parsed.data.maxResults,
           search_depth: 'basic', topic: 'general', auto_parameters: false,
-          include_answer: false, include_raw_content: false, include_images: false
+          include_answer: false, include_raw_content: false, include_images: false, include_usage: true
         }),
         redirect: 'error',
         signal
@@ -121,7 +138,8 @@ export function createSearch(options: SearchOptions) {
       }
       signal.throwIfAborted();
       // Validate parsed provider data immediately; never trust TypeScript declarations alone.
-      const decoded = responseSchema.safeParse(JSON.parse(Buffer.concat(parts).toString('utf8')));
+      const body: unknown = JSON.parse(Buffer.concat(parts).toString('utf8'));
+      const decoded = responseSchema.safeParse(body);
       if (!decoded.success) throw new SearchError('INVALID_RESPONSE');
       const result: SearchOutput = {
         schemaVersion: '1.0', requestId: randomUUID(), provider: 'tavily',
@@ -131,7 +149,15 @@ export function createSearch(options: SearchOptions) {
         }))
       };
       if (Buffer.byteLength(JSON.stringify(result)) > 196_608) throw new SearchError('RESPONSE_TOO_LARGE');
-      return result;
+      // Missing/invalid usage does not invalidate useful sources, but cannot settle a budget.
+      const reported = providerUsageSchema.safeParse(body);
+      let usage = unknownUsage(result.requestId);
+      if (reported.success) {
+        usage = { schemaVersion: '1.0', requestId: result.requestId, provider: 'tavily',
+          state: 'known', unit: 'credits', credits: reported.data.usage.credits };
+        if (reported.data.request_id !== undefined) usage.providerRequestId = reported.data.request_id;
+      }
+      return { output: result, usage };
     } catch (error) {
       if (cancellation.aborted) throw new SearchError('CANCELLED');
       if (deadline.signal.aborted) throw new SearchError('TIMEOUT');

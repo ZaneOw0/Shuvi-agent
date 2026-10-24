@@ -1,5 +1,7 @@
 # Shuvi 联网搜索 MCP Server
 
+> 2026-10-24：debug ArkUI → Runtime 授权 → MCP 搜索 → 来源持久化 → 模型回答已接线；用户确认主要模拟器交互符合预期，设备证据待归档，限一次未核账派发。使用 `npm.cmd --prefix services/search-mcp start` 启动正常服务；`start:discovery` 不执行搜索。勿额外运行收费 smoke；步骤和证据见 [spec 03 §6.11](../../specs/03-联网搜索.md)。以下日期记录为此前阶段结果。
+
 > v0.1，本机服务端首轮验收已完成，范围见 spec 第 6 节。独立 Node.js 服务，不打包进鸿蒙 HAP。
 > 2026-10-14：TypeScript 构建及 21 项本机测试通过；真实 Tavily 搜索、ArkTS 客户端、Runtime 和页面接入尚未验证。
 > 2026-10-16：开发者确认双终端启动、MCP 握手和工具发现结果符合预期；该步骤未发送真实搜索。
@@ -118,6 +120,8 @@ npm.cmd run smoke -- --search
 | 后续集成 | 先确定设备访问与认证方案，再接 Runtime 和页面；本服务端不管理 RAG 或模型回答生成 |
 
 ## 6. 官方依据
+
+2026-10-24 用量扩展：服务请求 `include_usage: true`，通过工具响应的 `_meta.shuviSearchUsage` 传递经过校验的 Tavily credits，原有 `structuredContent` 和等价文本保持不变。缺失/非法用量或调用失败均为 unknown，不伪造免费调用。字段、请求绑定和兼容规则见 [spec 03 第 4.5 节](../../specs/03-联网搜索.md#45-搜索用量元数据-v12026-10-24)。这是供应商报告的单位数，不是货币账单；升级后需要重新 build 并手动重启本机服务，已运行的旧进程不会自动更新。
 
 - [MCP TypeScript SDK](https://ts.sdk.modelcontextprotocol.io/server)
 - [MCP Streamable HTTP 传输规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)

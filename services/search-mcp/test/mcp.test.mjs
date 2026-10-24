@@ -4,7 +4,7 @@ import { request as httpRequest } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
-import { createSearch } from '../dist/search.js';
+import { createSearch, SearchError, outputSchema } from '../dist/search.js';
 import { startServer } from '../dist/server.js';
 
 async function connected(t, search) {
@@ -19,6 +19,32 @@ async function connected(t, search) {
   await client.connect(transport);
   return { app, client, transport };
 }
+
+test('并发工具结果携带独立用量，旧 schema 与等价文本保持兼容', async t => {
+  const { client } = await connected(t, createSearch({ apiKey: 'test-placeholder', fetcher: async (_url, init) => {
+    const query = JSON.parse(init.body).query;
+    if (query === 'slow') await new Promise(resolve => setTimeout(resolve, 20));
+    return Response.json({ results: [], usage: { credits: query === 'slow' ? 1 : 2 }, request_id: 'provider-' + query });
+  } }));
+  const results = await Promise.all(['slow', 'fast'].map(query => client.callTool({ name: 'web_search', arguments: { query } })));
+  for (const [i, result] of results.entries()) {
+    outputSchema.parse(result.structuredContent);
+    assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+    assert.equal(result._meta.shuviSearchUsage.requestId, result.structuredContent.requestId);
+    assert.equal(result._meta.shuviSearchUsage.credits, i + 1);
+  }
+  assert.notEqual(results[0].structuredContent.requestId, results[1].structuredContent.requestId);
+});
+
+test('失败、超时和取消工具响应均不捏造免费收据', async t => {
+  for (const code of ['NETWORK', 'TIMEOUT', 'CANCELLED', 'QUOTA_EXCEEDED']) {
+    const { client } = await connected(t, async () => { throw new SearchError(code); });
+    const result = await client.callTool({ name: 'web_search', arguments: { query: 'test' } });
+    assert.equal(result.isError, true);
+    assert.deepEqual(result._meta.shuviSearchUsage, { schemaVersion: '1.0',
+      requestId: result.structuredContent.requestId, provider: 'tavily', state: 'unknown' });
+  }
+});
 
 test('完整 MCP 握手、工具发现、调用与结构化/文本结果一致（上游替身）', async t => {
   const { client } = await connected(t, createSearch({ apiKey: 'test-placeholder', fetcher: async () =>

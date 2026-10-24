@@ -8,6 +8,26 @@ const input = { query: '测试关键词', maxResults: 5 };
 const signal = () => new AbortController().signal;
 const options = fetcher => ({ apiKey: 'test-only-placeholder', fetcher });
 
+test('供应商用量独立返回且绑定结果；合法零值和小数不被替换', async () => {
+  for (const credits of [0, 0.5, 1, 2]) {
+    const { output, usage } = await createSearch(options(async () => Response.json({ ...fixture,
+      usage: { credits }, request_id: 'provider-test-1' })))(input, signal());
+    assert.deepEqual(usage, { schemaVersion: '1.0', requestId: output.requestId, provider: 'tavily',
+      state: 'known', unit: 'credits', credits, providerRequestId: 'provider-test-1' });
+    assert.equal(output.usage, undefined);
+  }
+});
+
+test('缺失或非法用量保持未知，不丢来源、不猜零、不透传供应商正文', async () => {
+  for (const change of [{}, { usage: null }, { usage: {} }, { usage: { credits: '1' } },
+    { usage: { credits: -1 } }, { usage: { credits: 1e100 } },
+    { usage: { credits: 1 }, request_id: 'private\ninvalid' }]) {
+    const { output, usage } = await createSearch(options(async () => Response.json({ ...fixture, ...change })))(input, signal());
+    assert.equal(output.results.length, 1);
+    assert.deepEqual(usage, { schemaVersion: '1.0', requestId: output.requestId, provider: 'tavily', state: 'unknown' });
+  }
+});
+
 test('参数默认值、首尾空白和 Unicode 字符数边界', () => {
   assert.deepEqual(inputSchema.parse({ query: ' 鸿蒙 ' }), { query: '鸿蒙', maxResults: 5 });
   assert.equal(inputSchema.safeParse({ query: '🌟'.repeat(500) }).success, true);
@@ -28,10 +48,10 @@ test('真实 HTTP 请求格式与返回字段转换（测试 transport）', asyn
     assert.equal(init.headers.Authorization, 'Bearer test-only-placeholder');
     assert.deepEqual(JSON.parse(init.body), { query: '测试关键词', max_results: 5,
       search_depth: 'basic', topic: 'general', auto_parameters: false,
-      include_answer: false, include_raw_content: false, include_images: false });
+      include_answer: false, include_raw_content: false, include_images: false, include_usage: true });
     return Response.json(fixture);
   }));
-  const result = await search(input, signal());
+  const { output: result } = await search(input, signal());
   assert.equal(calls, 1);
   assert.deepEqual(result.results, [{ title: '测试文档', url: 'https://example.com/docs', snippet: '仅用于测试的摘要' }]);
   assert.equal(result.provider, 'tavily');
@@ -51,8 +71,8 @@ test('参数或配置无效时不发请求；预先取消不发请求', async ()
 });
 
 test('合法空结果保持成功；数量不超过请求上限', async () => {
-  assert.deepEqual((await createSearch(options(async () => Response.json({ results: [] })))(input, signal())).results, []);
-  const result = await createSearch(options(async () => Response.json({ results: Array(4).fill(fixture.results[0]) })))({ ...input, maxResults: 2 }, signal());
+  assert.deepEqual((await createSearch(options(async () => Response.json({ results: [] })))(input, signal())).output.results, []);
+  const { output: result } = await createSearch(options(async () => Response.json({ results: Array(4).fill(fixture.results[0]) })))({ ...input, maxResults: 2 }, signal());
   assert.equal(result.results.length, 2);
 });
 
