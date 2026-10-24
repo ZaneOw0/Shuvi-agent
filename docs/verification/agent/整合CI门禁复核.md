@@ -1,8 +1,94 @@
 # 整合 CI 门禁复核
 
 > 状态：已实现待验收（门禁判定已修复；完整 lint 尚未通过）。
-> 更新日期：2026-10-23。
-> 范围：`chore/integrate-agent-gateway` 当前工作区；没有提交、推送或触发远端工作流。
+> 更新日期：2026-10-24。
+> 修复前远端复核对应 `chore/integrate-agent-gateway` / `32ad881`，PR #18；历史阶段结果保留。本轮提交包含后续代码与测试环境兼容修复，本机验证结果见下一节；远端结果需以包含修复的新一轮 CI 为准。
+
+## 本机修复进展（2026-10-24，基于 32ad881 的工作区）
+
+本节是代码修复后的本机结果；下面的远端运行与早期诊断属于修复前历史。修复随本轮提交交付，尚未取得包含修复的新一轮远端 CI 结果，完整门禁仍未通过。
+
+### 已实施的修复
+
+1. 对话检查点、视图、协作策略、预算和账单 DTO 改为显式复制。检查点的嵌套输入、工作流、事件、授权和调度状态均独立复制；不把 JSON 深拷贝直接改成浅拷贝。聊天日志仅复用内部不可变记录，写入时替换独立记录，不改变存储格式。
+2. 搜索回执在异步调用前计算参数摘要，完成后按摘要绑定；读取回执返回独立值。MCP 的 `Object` 返回值仍需有界 JSON 解码并逐项校验：仅该解码行添加 `@performance/bad-deep-clone-check` 的行级说明与抑制。它不是业务 DTO 复制；保留 1 MiB 限制、结构一致性、请求标识和用量字段校验。没有关闭全局规则，也没有抑制引擎错误。
+3. 三处 `await-thenable` 误报通过 `Promise.resolve` 归一化解决，保留等待真实 Promise 和异常传播。新增两项 RDB 延迟插入测试，验证插入完成前 CAS 不返回、插入拒绝向上传播。
+4. workflow 的 checkout 设置 `fetch-depth: 0`，供原有 RAG 测试读取冻结历史提交 `9f5992c`。没有改变触发条件、PR 目标分支或门禁判定。
+5. MinerU transfer host loader 改用套件私有模块缓存；模型类与适配器从同一模块图加载，保留 `instanceof` 校验。循环引用时先登记模块，编译失败则移除；不再复用另一套 SDK double。
+6. `.gitattributes` 为字节敏感的固定 TXT/JSON 语料及源码契约文件固定 LF。本机只在证明差异完全来自 CRLF、且还原后等于已提交字节或既定语料哈希后恢复 LF。原有测试断言、冻结哈希和历史比较未修改。
+7. `LOCAL_CHANGES.json` 更新为 15 个有记录的本地变更，保留不可变上游清单；不新增公共接口、依赖、权限或服务。
+
+### 验证与复现
+
+环境：本机 DevEco Studio `26.0.0.821`、API 26、Node `24.14.1`；没有可用的独立 `arkts_check` / `build_project` 工具，使用本机 SDK 编译器和 Hvigor。未调用真实模型、搜索供应商，未执行设备安装或真机验收。
+
+所有证据目录位于 `.cache/test-logs/`：
+
+| 检查 | 结果 | 本轮证据目录 |
+|---|---|---|
+| Code Linter 6.0.240 | JSON 诊断 31 → 0；工具退出 0、门禁退出 1，覆盖仍不完整 | `2026-10-24-ci-fixes-lint-32ad881/` |
+| 产品 `assembleHap --no-daemon` | 通过 | `2026-10-24-ci-final-build-32ad881/` |
+| 对话与搜索 host | 121/121 通过，含完整快照隔离、两种 RDB 插入等待/拒绝 | `2026-10-24-ci-copy-await-host-32ad881/` |
+| Runtime / Storage Hypium 本机测试 | 134/134、57/57 通过 | `2026-10-24-ci-copy-agent-unit-32ad881/` |
+| 完整 UX / RAG host | 304/310 通过；6 项因指定离线材料缺失失败，未跳过 | `2026-10-24-ci-mineru-portability-host-32ad881-2/` |
+| Agent 来源清单 | 224 个基线文件、15 个本地变更、8 个模块校验通过 | `2026-10-24-ci-source-manifest-32ad881/` |
+
+lint 明细：`.local/ci-lint/20261024-200014-945-ed9699f0/`；Hypium 原始结果：`.local/agent-tests/20261024-200622-400/`。构建/host 原始输出为 `.cache/direct-model-build-*.log`、`.cache/direct-model-test-*.log`、`.cache/ci-fixes-unit-*.log`，以对应 capture 日志内记录的精确路径为准。
+
+复现时设置 `DEVECO_SDK_HOME`、`JAVA_HOME` 与 `NODE_HOME` 为本机 Studio 的 SDK、JBR 和 Node 目录，然后通过 `CAPTURE_HOST_ONLY=1`、`RUN_CMD` 和 `scripts/capture-test-log.sh <scope>` 包装以下命令（本机实际包装脚本为 `.local/direct-model/verify.ps1` 与 `.local/ci-checks.ps1`）：
+
+```powershell
+node entry/src/test/run-direct-model-tests.cjs
+node entry/src/test/run-host-tests.cjs
+node scripts/verify-agent-import.cjs
+.\scripts\test-agent-unit.ps1 -DevEcoHome 'C:\Program Files\Huawei\DevEco Studio' -Modules agent_runtime,agent_storage
+& 'C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin\hvigorw.bat' assembleHap --no-daemon
+```
+
+lint 复现使用下节同一 `scripts/ci-lint.ps1` 命令；不能改为只检查空 JSON。
+
+### 仍需协作解决
+
+- **检查器覆盖不完整**：本轮仍有 12 条安全规则分派错误、9 个 `getDeclaringMethod` 文件分析异常，以及历史资料资源路径告警。`report.json` 为 `[]` 不代表这些文件通过。保留所有规则和 `verify-lint-report.cjs` 的失败判定。需 CI/平台同学用 runner 的实际安装版本核对原始引擎日志，评估可兼容的检查器修复或工具升级；本轮不修改安装包，也不设置引擎错误忽略清单。
+- **RAG 私有离线材料**：完整 `run-host-tests.cjs` 需要指定 PDF 与两个既有解析 ZIP；本机缺失，不能用其他文件替代冻结材料。需 RAG 同学提供合法授权材料的本机/runner 放置方式并核对原有哈希，不能把缺失测试改为默认跳过。本轮 304/310 通过，剩余 6 项全部为 ENOENT；详细日志 `.cache/ci-fixes-ux-20261024-201454.log`。缺失文件为 `.cache/m2-input/user-pdf/02_第02章_模型评估与选择.pdf`、`.cache/new-pdf-ingestion-diagnosis/result-m2-6fe6c44120d215e2ec1a852235fb97a0.zip`、`.cache/m2-result-analysis/result-m2-7eaa150e269374313fd776f12a2ae9fa.zip`。并未核实 runner 是否已有这些材料；不能将本机缺失直接当作 runner 上已发生的失败。
+
+自动审批曾拒绝“归一化源码再进行字节比较”的候选方案，理由是可能弱化门禁。该方案未执行；最终采用上文固定检出 LF 的方案，保留原有测试校验。
+
+
+此外，自动审批拒绝了恢复回执解析异常吞没行为的候选改动；未执行该改动。当前参数摘要计算失败仍向上传播，无法建立关联的调用不被伪造成有可靠回执。
+
+## 最新 CI 复核（2026-10-24）
+
+[运行 40090824978](https://github.com/ZaneOw0/Shuvi-agent/actions/runs/40090824978) 于北京时间 19:40 开始，head 为 `32ad88166163c6c2ceee2c9ae5bdbe71d5a24cfb`，attempt 1。工具链预检、来源校验与 MCP fixture、搜索服务构建与测试通过；“门禁（代码检查 + 构建）”在 lint 失败，尚未执行该步产品构建；后续 Agent/Hypium/UX 和网关步骤跳过。
+
+远端摘要：`issueCount: 31`，并报告 `Analyzer failed or coverage incomplete: arkPerfCheck.log`。证据目录是 runner 上的 `D:\actions-runner\_work\Shuvi-agent\Shuvi-agent\.local\ci-lint\20261024-194045-303-c43de09f`。此运行没有可下载 artifact，工作流也未配置上传这些诊断文件；下载到本机的失败步骤日志为 `.local/ci-review/run-40090824978/failed.log`。远端摘要不能用于逐条推断诊断位置。
+
+同一提交的本机 Code Linter 6.0.240 复现 31 条诊断，分布如下（以下明细来自本机，不冒充 runner 原始 JSON）：
+
+| 范围 | 诊断 |
+|---|---|
+| 原有 ArtifactCollaborationPolicy、RuntimeCoordinator、RuntimeExecutionRecoveryBridge | 11 条深拷贝警告 |
+| 原有 AgentApplicationBackend、RdbMemorySnapshotBackend、RdbSnapshotBackend | 3 条 await-thenable 错误 |
+| 新增 ChatExecutionStore | 7 条深拷贝警告 |
+| 新增 InvoiceTypes | 2 条深拷贝警告 |
+| 新增 RuntimeChatSession、RuntimeSearchSession、SearchRuntimeAssembly | 各 1 条深拷贝警告 |
+| 新增 SearchUsageReceipts | 5 条深拷贝警告 |
+
+合计 28 条警告 + 3 条错误，比旧报告多 17 条。当前门禁阻止任何诊断，不能因为 warn 就忽略。本机引擎另外记录 12 条 `Invalid rule name` 和 9 个 `getDeclaringMethod` 文件分析异常；不能将 31 条诊断视为全工程完整检查。9 个文件与交接报告所列范围一致。本机 HPAuditor 日志仍显示 12 项 no-unsafe 规则启用，而 ArkPerfCheck 报同名规则无效；只能确认多阶段分派不一致，不能凭 ruleSet 或单一阶段日志断言它们从未执行，也不能证明检查完整。保留配置和日志阻断，待核对 runner 原始证据后再决定修复或受控例外。
+
+本机原始报告及日志：`.local/ci-lint/20261024-194918-815-b60fa440/`。统一证据：`.cache/test-logs/2026-10-24-ci-latest-lint-review-32ad881/`。本机检查器退出 0、门禁退出 1；远端摘要记录检查器退出 1，两者都因诊断与覆盖不完整而拒绝，不能混淆工具与门禁退出码。
+
+复现（不发起搜索/模型请求）：
+
+```powershell
+$env:DEVECO_SDK_HOME = 'C:\Program Files\Huawei\DevEco Studio\sdk'
+$env:JAVA_HOME = 'C:\Program Files\Huawei\DevEco Studio\jbr'
+$env:CAPTURE_HOST_ONLY = '1'
+$env:RUN_CMD = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci-lint.ps1 -NodeScript "C:/Program Files/Huawei/DevEco Studio/plugins/codelinter/run/index.js"'
+& 'C:\Program Files\Git\bin\bash.exe' scripts/capture-test-log.sh ci-latest-lint-review
+```
+
+处理顺序：修复 28 处报告中的深拷贝并覆盖嵌套隔离；保留 await 的异步语义并复现误报；单独处理规则分派及分析器崩溃。交接报告中的浅克隆历史缺失和 MinerU 测试缓存问题仍在代码中，但本轮 CI 未运行到对应测试，不能记为这次实际失败项。全量修复后再跑后续构建与回归，不以单纯重跑 CI 替代修复。
 
 ## 1. 本轮发现
 

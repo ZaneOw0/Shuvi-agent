@@ -98,11 +98,12 @@ export class RdbSnapshotBackend implements DurableSnapshotBackendPort {
     };
     let rowId: number = -1;
     try {
-      rowId = await this.store.insert(
+      // API 26 insert(table, values, conflict) returns Promise<number>; keep awaiting the actual write.
+      rowId = await Promise.resolve(this.store.insert(
         SNAPSHOT_TABLE,
         insertValues,
         relationalStore.ConflictResolution.ON_CONFLICT_IGNORE
-      );
+      ));
     } catch (error) {
       throw error as Error;
     }

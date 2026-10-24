@@ -93,7 +93,7 @@ class ReleasedDecision implements ArtifactReleasedPolicyPort {
     const evaluator: CollaborationPolicyEvaluatorPort = await this.loader.load(artifact, cancellation);
     if (cancellation !== undefined && cancellation.isCancellationRequested()) throw new Error('cancelled');
     // Hosts cannot mutate the canonical request used by validation.
-    const isolated: CollaborationPolicyInput = JSON.parse(JSON.stringify(this.input));
+    const isolated: CollaborationPolicyInput = copyCollaborationPolicyInput(this.input);
     const candidate: CollaborationPolicyCandidate = await evaluator.evaluate(isolated, cancellation);
     if (cancellation !== undefined && cancellation.isCancellationRequested()) throw new Error('cancelled');
     const value: ValidatedCandidate = new ValidatedCandidate();
@@ -135,7 +135,7 @@ export class ArtifactCollaborationPolicy implements CollaborationPolicyPreparati
     this.registry = registry;
     this.loader = loader;
     this.assignment = assignment;
-    this.release = JSON.parse(JSON.stringify(release));
+    this.release = copyArtifactPolicyReleaseConfig(release);
     this.enabled = config.learnedEnabled;
     this.confidence = config.minimumConfidence;
     const deterministic: DeterministicRouterConfig = new DeterministicRouterConfig();
@@ -160,8 +160,8 @@ export class ArtifactCollaborationPolicy implements CollaborationPolicyPreparati
     this.selectBaselinePlan(frame, budget.maxAgentActivations);
     if (!this.enabled || cancellation.isCancellationRequested()) return;
     const input: CollaborationPolicyInput = new CollaborationPolicyInput();
-    input.frame = JSON.parse(JSON.stringify(frame));
-    input.budget = JSON.parse(JSON.stringify(budget));
+    input.frame = copyTaskFrame(frame);
+    input.budget = copyExecutionBudget(budget);
     input.taskId = frame.taskId;
     input.inputDigest = this.digest.digest(JSON.stringify(frame));
     input.registryDigest = this.registryIdentity();
@@ -181,7 +181,7 @@ export class ArtifactCollaborationPolicy implements CollaborationPolicyPreparati
       const candidate: ValidatedCandidate = released.candidates[i];
       if (candidate.artifactDigest === result.selectedArtifactDigest) {
         this.binding = binding;
-        this.prepared = JSON.parse(JSON.stringify(candidate.plan));
+        this.prepared = copyCollaborationPlan(candidate.plan);
         return;
       }
     }
@@ -193,7 +193,7 @@ export class ArtifactCollaborationPolicy implements CollaborationPolicyPreparati
       !CollaborationPlanValidator.validate(plan, frame, maxAgentActivations).valid) {
       return this.selectBaselinePlan(frame, maxAgentActivations);
     }
-    return JSON.parse(JSON.stringify(plan));
+    return copyCollaborationPlan(plan);
   }
 
   validateCandidate(candidate: CollaborationPolicyCandidate, input: CollaborationPolicyInput,
@@ -244,4 +244,68 @@ export class ArtifactCollaborationPolicy implements CollaborationPolicyPreparati
   private identity(frame: TaskFrame, maxAgentActivations: number): string {
     return JSON.stringify(frame) + '|' + maxAgentActivations.toString() + '|' + this.registryIdentity();
   }
+}
+
+function copyCollaborationPolicyInput(value: CollaborationPolicyInput): CollaborationPolicyInput {
+  const copy = new CollaborationPolicyInput();
+  copy.taskId = value.taskId;
+  copy.inputDigest = value.inputDigest;
+  copy.registryDigest = value.registryDigest;
+  copy.frame = copyTaskFrame(value.frame);
+  copy.budget = copyExecutionBudget(value.budget);
+  return copy;
+}
+
+function copyTaskFrame(value: TaskFrame): TaskFrame {
+  const copy = new TaskFrame();
+  copy.schemaVersion = value.schemaVersion;
+  copy.taskId = value.taskId;
+  copy.goal = value.goal;
+  copy.constraints = value.constraints.slice();
+  copy.capabilityCategories = value.capabilityCategories.slice();
+  copy.riskLevel = value.riskLevel;
+  copy.canParallelize = value.canParallelize;
+  copy.featuresJson = value.featuresJson;
+  return copy;
+}
+
+function copyExecutionBudget(value: ExecutionBudget): ExecutionBudget {
+  const copy = new ExecutionBudget();
+  copy.maxWallTimeMs = value.maxWallTimeMs;
+  copy.maxInputTokens = value.maxInputTokens;
+  copy.maxOutputTokens = value.maxOutputTokens;
+  copy.maxMonetaryCostMicros = value.maxMonetaryCostMicros;
+  copy.maxToolCalls = value.maxToolCalls;
+  copy.maxAgentActivations = value.maxAgentActivations;
+  copy.maxRetries = value.maxRetries;
+  copy.maxReplans = value.maxReplans;
+  if (value.deadlineAt !== undefined) copy.deadlineAt = value.deadlineAt;
+  return copy;
+}
+
+function copyArtifactPolicyReleaseConfig(value: ArtifactPolicyReleaseConfig): ArtifactPolicyReleaseConfig {
+  const copy = new ArtifactPolicyReleaseConfig();
+  copy.canaryTrafficBasisPoints = value.canaryTrafficBasisPoints;
+  copy.maxShadowEvaluations = value.maxShadowEvaluations;
+  copy.attemptTimeoutMs = value.attemptTimeoutMs;
+  return copy;
+}
+
+function copyCollaborationPlan(value: CollaborationPlan): CollaborationPlan {
+  const copy = new CollaborationPlan();
+  copy.planVersion = value.planVersion;
+  copy.taskId = value.taskId;
+  copy.mode = value.mode;
+  copy.roleRegistryDigest = value.roleRegistryDigest;
+  copy.decisionDigest = value.decisionDigest;
+  copy.assignments = value.assignments.map((item: CollaborationRoleAssignment): CollaborationRoleAssignment => copyCollaborationRoleAssignment(item));
+  return copy;
+}
+
+function copyCollaborationRoleAssignment(value: CollaborationRoleAssignment): CollaborationRoleAssignment {
+  const copy = new CollaborationRoleAssignment();
+  copy.roleId = value.roleId;
+  copy.roleVersion = value.roleVersion;
+  copy.roleRegistryDigest = value.roleRegistryDigest;
+  return copy;
 }

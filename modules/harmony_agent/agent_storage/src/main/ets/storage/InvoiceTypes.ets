@@ -74,11 +74,35 @@ export function invoiceMatches(pending: PendingInvoice, invoice: VerifiedInvoice
 }
 
 export function copyPendingInvoice(value: PendingInvoice): PendingInvoice {
-  const copy: PendingInvoice = JSON.parse(JSON.stringify(value));
+  const copy = new PendingInvoice();
+  copy.schemaVersion = value.schemaVersion;
+  copy.provider = value.provider;
+  copy.accountScope = value.accountScope;
+  copy.currency = value.currency;
+  copy.requestId = value.requestId;
+  if (value.providerRequestId !== undefined) copy.providerRequestId = value.providerRequestId;
+  copy.usageState = value.usageState;
+  if (value.credits !== undefined) copy.credits = value.credits;
+  copy.resultDigest = value.resultDigest;
   return copy;
 }
 
 export function copyVerifiedInvoice(value: VerifiedInvoice): VerifiedInvoice {
-  const copy: VerifiedInvoice = JSON.parse(JSON.stringify(value));
+  const copy = new VerifiedInvoice();
+  copy.schemaVersion = value.schemaVersion;
+  copy.operationId = value.operationId;
+  copy.provider = value.provider;
+  copy.accountScope = value.accountScope;
+  copy.currency = value.currency;
+  copy.providerRequestId = value.providerRequestId;
+  copy.resultDigest = value.resultDigest;
+  copy.invoiceId = value.invoiceId;
+  copy.lineId = value.lineId;
+  copy.period = value.period;
+  copy.evidenceSource = value.evidenceSource;
+  copy.evidenceDigest = value.evidenceDigest;
+  copy.verifiedBy = value.verifiedBy;
+  copy.verifiedAt = value.verifiedAt;
+  copy.amountMicros = value.amountMicros;
   return copy;
 }

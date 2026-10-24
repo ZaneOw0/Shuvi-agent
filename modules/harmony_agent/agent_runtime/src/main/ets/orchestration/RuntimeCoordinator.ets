@@ -380,7 +380,7 @@ export class RuntimeCoordinator {
       record.collaborationPreparation.baselineOnly = true;
       record.collaborationPreparation.evaluations = 2;
     } else {
-      record.collaborationPreparation = JSON.parse(JSON.stringify(checkpoint.collaborationPreparation));
+      record.collaborationPreparation = copyCollaborationPreparationState(checkpoint.collaborationPreparation);
     }
     record.planningRequest = this.copyPlanningRequest(checkpoint.planningRequest);
     record.workflow = workflow;
@@ -840,7 +840,7 @@ export class RuntimeCoordinator {
       value.events.push(copyEvent(record.events[i]));
     }
     value.usage = copyUsage(record.usage);
-    value.collaborationPreparation = JSON.parse(JSON.stringify(record.collaborationPreparation));
+    value.collaborationPreparation = copyCollaborationPreparationState(record.collaborationPreparation);
     value.planningRequest = this.copyPlanningRequest(record.planningRequest);
     if (record.workflow !== undefined) {
       value.workflow = ContractCodec.parseWorkflowGraph(ContractCodec.stringify(record.workflow));
@@ -1504,4 +1504,13 @@ export class RuntimeCoordinator {
     }
     return value;
   }
+}
+
+function copyCollaborationPreparationState(value: CollaborationPreparationState): CollaborationPreparationState {
+  const copy = new CollaborationPreparationState();
+  copy.version = value.version;
+  copy.evaluations = value.evaluations;
+  copy.pending = value.pending;
+  copy.baselineOnly = value.baselineOnly;
+  return copy;
 }

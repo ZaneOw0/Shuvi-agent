@@ -435,7 +435,8 @@ export class AgentApplicationBackend {
     this.state = AgentApplicationBackendState.STOPPING;
     try {
       const pending: Promise<void> | undefined = this.startPromise;
-      if (pending !== undefined) await pending;
+      // Normalize the narrowed optional promise for both the ArkTS compiler and the lint type checker.
+      if (pending !== undefined) await Promise.resolve(pending);
       const runtime: AgentRuntimeFacade | undefined = this.runtime;
       if (runtime !== undefined) await runtime.shutdown(mode);
       this.runtime = undefined;

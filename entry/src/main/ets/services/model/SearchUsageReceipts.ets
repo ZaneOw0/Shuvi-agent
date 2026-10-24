@@ -20,7 +20,7 @@ export class SearchUsage {
   providerRequestId?: string;
 }
 class UsageMeta { shuviSearchUsage?: SearchUsage; }
-class RawResult { _meta?: UsageMeta; structuredContent?: Object; }
+class RawResult { _meta?: UsageMeta; structuredContent?: SearchResultIdentity; }
 class SearchResultIdentity { requestId?: string; provider?: string; query?: string; schemaVersion?: string; }
 function record(value: Object | undefined): boolean {
   return value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -29,20 +29,37 @@ function uuid(value: string | undefined): boolean {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-/** Parse typed JSON, then validate every consumed field; a type annotation is not validation. */
-export function readSearchUsage(result: McpToolResult): SearchUsage | undefined {
+/** Decode the untyped MCP boundary once; only validated fields may be consumed. */
+function readEnvelope(result: McpToolResult): RawResult | undefined {
   try {
     const structured = result.structuredContent;
     if (result.isError || !record(result.raw) || structured === undefined || !record(structured)) return undefined;
     const encoded = JSON.stringify(result.raw);
     if (encoded.length > 1048576) return undefined;
+    // MCP exposes Object. This bounded JSON decode establishes a typed validation boundary, not a DTO clone.
+    // eslint-disable-next-line @performance/bad-deep-clone-check
     const raw: RawResult = JSON.parse(encoded);
     const rawStructured = raw.structuredContent;
-    if (!record(raw._meta) || rawStructured === undefined || !record(rawStructured) ||
+    if (rawStructured === undefined || !record(rawStructured) ||
       canonicalJson(rawStructured) !== canonicalJson(structured)) return undefined;
+    if (!uuid(rawStructured.requestId) || rawStructured.provider !== 'tavily' || rawStructured.schemaVersion !== '1.0') return undefined;
+    return raw;
+  } catch (error) { return undefined; }
+}
+
+/** Parse typed JSON, then validate every consumed field; a type annotation is not validation. */
+export function readSearchUsage(result: McpToolResult): SearchUsage | undefined {
+  const raw = readEnvelope(result);
+  if (raw === undefined) return undefined;
+  return envelopeUsage(raw);
+}
+function envelopeUsage(raw: RawResult): SearchUsage | undefined {
+  try {
+    if (!record(raw._meta)) return undefined;
     const usage = raw._meta?.shuviSearchUsage;
     if (usage === undefined || !record(usage)) return undefined;
-    const identity: SearchResultIdentity = JSON.parse(JSON.stringify(structured));
+    const identity = raw.structuredContent;
+    if (identity === undefined) return undefined;
     if (usage.schemaVersion !== '1.0' || usage.provider !== 'tavily' || !uuid(usage.requestId) ||
       usage.requestId !== identity.requestId || identity.provider !== 'tavily' || identity.schemaVersion !== '1.0') return undefined;
     const keys = Object.keys(usage);
@@ -75,6 +92,16 @@ class BoundUsage {
   captured?: CapturedUsage;
 }
 
+function copyUsage(value: SearchUsage): SearchUsage {
+  const copy = new SearchUsage();
+  copy.schemaVersion = value.schemaVersion; copy.requestId = value.requestId;
+  copy.provider = value.provider; copy.state = value.state;
+  if (value.unit !== undefined) copy.unit = value.unit;
+  if (value.credits !== undefined) copy.credits = value.credits;
+  if (value.providerRequestId !== undefined) copy.providerRequestId = value.providerRequestId;
+  return copy;
+}
+
 /** Per-session bounded memory. Never evict and reuse IDs; a full/closed ledger yields unknown. */
 export class SearchUsageReceipts {
   private readonly digest: ConnectorDigestPort;
@@ -85,10 +112,16 @@ export class SearchUsageReceipts {
   constructor(digest: ConnectorDigestPort) { this.digest = digest; }
 
   capture(argumentsValue: Object, result: McpToolResult): void {
+    this.captureDigest(this.digest.digest(canonicalJson(argumentsValue)), result);
+  }
+
+  captureDigest(argumentsDigest: string, result: McpToolResult): void {
     const structured = result.structuredContent;
     if (this.closed || result.isError || structured === undefined || !record(structured)) return;
     try {
-      const content: SearchResultIdentity = JSON.parse(JSON.stringify(structured));
+      const envelope = readEnvelope(result);
+      const content = envelope?.structuredContent;
+      if (envelope === undefined || content === undefined) return;
       const requestId = content.requestId;
       if (requestId === undefined || !uuid(requestId)) return;
       const previous = this.captured.get(requestId);
@@ -96,9 +129,9 @@ export class SearchUsageReceipts {
       if (this.captured.size >= 128) return;
       const receipt = new CapturedUsage();
       receipt.requestId = requestId;
-      receipt.argumentsDigest = this.digest.digest(canonicalJson(argumentsValue));
+      receipt.argumentsDigest = argumentsDigest;
       receipt.resultDigest = this.digest.digest(canonicalJson(structured));
-      const usage = readSearchUsage(result);
+      const usage = envelopeUsage(envelope);
       if (usage !== undefined) receipt.usage = usage;
       receipt.usage.requestId = requestId;
       const providerId = receipt.usage.providerRequestId;
@@ -153,8 +186,7 @@ export class SearchUsageReceipts {
       binding.outcomeDigest !== this.digest.digest(ContractCodec.stringify(outcome))) return undefined;
     const receipt = binding.captured;
     if (receipt === undefined || !receipt.valid) return undefined;
-    const copy: SearchUsage = JSON.parse(JSON.stringify(receipt.usage));
-    return copy;
+    return copyUsage(receipt.usage);
   }
 
   lookupOperation(operation: StoredOperation, outcome: ToolOutcome): SearchUsage | undefined {
@@ -176,13 +208,16 @@ export class SearchUsageReceipts {
 class UsageCapturingClient implements McpClientToolPort {
   private readonly delegate: McpClientToolPort;
   private readonly receipts: SearchUsageReceipts;
-  constructor(delegate: McpClientToolPort, receipts: SearchUsageReceipts) { this.delegate = delegate; this.receipts = receipts; }
+  private readonly digest: ConnectorDigestPort;
+  constructor(delegate: McpClientToolPort, receipts: SearchUsageReceipts, digest: ConnectorDigestPort) {
+    this.delegate = delegate; this.receipts = receipts; this.digest = digest;
+  }
   listTools(): Promise<McpAggregateResult<McpTool>> { return this.delegate.listTools(); }
   async callTool(ref: McpCapabilityRef, args: Object, cancellation?: McpCancellationSignal): Promise<McpToolResult> {
     // Per-call snapshot, not a shared current-invocation variable (concurrent calls may finish out of order).
-    const snapshot: Object = JSON.parse(JSON.stringify(args));
+    const argumentsDigest = this.digest.digest(canonicalJson(args));
     const result = await this.delegate.callTool(ref, args, cancellation);
-    if (ref.serverId === 'shuvi-web-search' && ref.name === 'web_search') this.receipts.capture(snapshot, result);
+    if (ref.serverId === 'shuvi-web-search' && ref.name === 'web_search') this.receipts.captureDigest(argumentsDigest, result);
     return result;
   }
 }
@@ -193,7 +228,7 @@ export class SearchUsageMcpAdapter extends McpAgentAdapter {
   constructor(client: McpClientToolPort, providers: McpProviderRegistry, policies: McpReadOnlyToolPolicyRegistry,
     digest: ConnectorDigestPort, clock: ConnectorClockPort, grants: McpGrantVerifierPort,
     bridge: McpInvocationPolicyBridge, receipts: SearchUsageReceipts) {
-    super(new UsageCapturingClient(client, receipts), providers, policies, digest, clock, grants, bridge);
+    super(new UsageCapturingClient(client, receipts, digest), providers, policies, digest, clock, grants, bridge);
     this.receipts = receipts;
   }
   async invoke(invocation: ToolInvocation): Promise<ToolOutcome> {

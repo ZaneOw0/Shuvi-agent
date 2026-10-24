@@ -13,8 +13,8 @@
     {
       "path": "agent_runtime/src/main/ets/orchestration/RuntimeCoordinator.ets",
       "originalSha256": "61fec03a96861341d1a2ebcf5a9b78d4ed90341651fe536d08bd672667294973",
-      "sha256": "3533cb8442f6d4b37a4c0150385df65c4b3fafb4f119f589c8488791eab7d09e",
-      "reason": "用户于 2026-10-24 批准结果与账单分离，并要求接通搜索任务；联调发现拒绝授权后检查点残留步骤/操作绑定，本地修复清理顺序。",
+      "sha256": "e3643b077ef905b4fa9989004294a710bfca6c1ceb78b6c95b41b4fc4bd99689",
+      "reason": "用户于 2026-10-24 批准结果与账单分离，并要求接通搜索任务；联调发现拒绝授权后检查点残留步骤/操作绑定，本地修复清理顺序。 2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
       "contractImpact": "保留 RESULT_RECORDED 扩展；拒绝未派发步骤时清除 pendingStepId/pendingOperationId，使终态满足既有检查点约束，不新增公共接口或放宽校验。",
       "validation": "specs/03-联网搜索.md §6.10、§6.11；docs/integration/agent/搜索账单与结果持久化.md"
     },
@@ -45,8 +45,8 @@
     {
       "path": "agent_storage/src/main/ets/integration/RuntimeExecutionRecoveryBridge.ets",
       "originalSha256": "8e783e5a3b7ce8e80d380896cc7faac97de3e4ecdb9e0feadd44a2e57689d370",
-      "sha256": "1c0ee8e400ce5c7dd528fd61fbd96d2df6dc1871ebf738bde9ef7b0fbd9d095a",
-      "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。",
+      "sha256": "699c6540cd699e30b224c12c966be0b5083dbf4e27902bd4967e40208c98a6c8",
+      "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。 2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
       "contractImpact": "增加 RESULT_RECORDED、待核账记录、独立幂等结算；执行存储 1.2 → 1.3；成功结果的断电恢复禁止重发。",
       "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
     },
@@ -77,8 +77,8 @@
     {
       "path": "agent_storage/src/main/ets/storage/InvoiceTypes.ets",
       "originalSha256": null,
-      "sha256": "ffae92c7df2145292ac663d7af4b8065a495372b9bd65a8b43759a3e80f4d522",
-      "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。",
+      "sha256": "53c58e2fe4de4e1f18b8291b6f0e2185e2afccecde66451e35c3e641ea8a8069",
+      "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。 2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
       "contractImpact": "增加 RESULT_RECORDED、待核账记录、独立幂等结算；执行存储 1.2 → 1.3；成功结果的断电恢复禁止重发。",
       "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
     },
@@ -89,6 +89,38 @@
       "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。",
       "contractImpact": "迁移测试采用当前存储 schema 常量，保持原测试意图。",
       "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
+    },
+    {
+      "path": "agent_runtime/src/main/ets/routing/ArtifactCollaborationPolicy.ets",
+      "originalSha256": "d8b7e948aef852c8939b2895cd7d8766f4b220108dd2f9d8516c6e06b337bed6",
+      "sha256": "c37107cff411fe5ac998792d5c9fca7f830603ad28f2591d27f75f4b5bede866",
+      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
+      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
+      "validation": "docs/verification/agent/整合CI门禁复核.md"
+    },
+    {
+      "path": "agent_runtime/src/main/ets/host/AgentApplicationBackend.ets",
+      "originalSha256": "6dff6d9a6f2a3646b86abf35f00c5cc022dc7926bc4bcb5bdfa3b349597113b5",
+      "sha256": "ccd53aea5dfb99c3d3a48aa7572ea2f08c683d58cd2ec6bb4c597a92147c7ae1",
+      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
+      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
+      "validation": "docs/verification/agent/整合CI门禁复核.md"
+    },
+    {
+      "path": "agent_storage/src/main/ets/storage/RdbSnapshotBackend.ets",
+      "originalSha256": "54135a994b9236a9eda8e58b3d47321e5aebe5195d5f2e39a3ebedd92296aeeb",
+      "sha256": "8a83573819bc80828654d13e03df6494c9c9b7558c1c3ec83b17dabacdd73050",
+      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
+      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
+      "validation": "docs/verification/agent/整合CI门禁复核.md"
+    },
+    {
+      "path": "agent_storage/src/main/ets/memory/RdbMemorySnapshotBackend.ets",
+      "originalSha256": "99409f3e4ad0da52a09a4ec3791ef9b27648561d46fe40dd19c88e58c795ed6e",
+      "sha256": "cccfb55e0df22f91f3f19a8112f3f5c712c947392724c456d94cde9cfeab50fe",
+      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
+      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
+      "validation": "docs/verification/agent/整合CI门禁复核.md"
     }
   ]
 }

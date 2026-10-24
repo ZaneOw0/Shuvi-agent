@@ -3,6 +3,7 @@ import {
   AgentTaskStatus,
   ContractCodec,
   ContractValidator,
+  ExecutionBudget,
   ReconciliationReport,
   ReconciliationStatus,
   ToolOutcome,
@@ -11,6 +12,7 @@ import {
 } from '@harmony_agent/agent-contracts';
 import {
   BudgetAmount,
+  BudgetScopeSnapshot,
   BudgetReservationSnapshot,
   OperationJournalState
 } from '@harmony_agent/agent-core';
@@ -138,7 +140,7 @@ function copyOutcome(value: ToolOutcome): ToolOutcome {
 }
 
 function copyBudget(value: BudgetAmount): BudgetAmount {
-  return JSON.parse(JSON.stringify(value)) as BudgetAmount;
+  return copyBudgetAmount(value);
 }
 
 function copyReport(value: ReconciliationReport): ReconciliationReport {
@@ -650,11 +652,11 @@ export class RuntimeExecutionRecoveryBridge implements ProductionRuntimePersiste
     value.storageRevision = this.store.revision();
     const scopes = this.store.getBudgetScopes(taskId);
     for (let i: number = 0; i < scopes.length; i++) {
-      value.budgetScopes.push(JSON.parse(JSON.stringify(scopes[i].snapshot)));
+      value.budgetScopes.push(copyBudgetScopeSnapshot(scopes[i].snapshot));
     }
     const reservations = this.store.getBudgetReservations(taskId);
     for (let i: number = 0; i < reservations.length; i++) {
-      value.budgetReservations.push(JSON.parse(JSON.stringify(reservations[i].snapshot)));
+      value.budgetReservations.push(copyBudgetReservationSnapshot(reservations[i].snapshot));
     }
 
     if (checkpoint.pendingPolicyRequest !== undefined) {
@@ -867,4 +869,54 @@ export class RuntimeExecutionRecoveryBridge implements ProductionRuntimePersiste
     }
     return undefined;
   }
+}
+
+function copyBudgetAmount(value: BudgetAmount): BudgetAmount {
+  const copy = new BudgetAmount();
+  copy.wallTimeMs = value.wallTimeMs;
+  copy.inputTokens = value.inputTokens;
+  copy.outputTokens = value.outputTokens;
+  copy.monetaryCostMicros = value.monetaryCostMicros;
+  copy.toolCalls = value.toolCalls;
+  copy.agentActivations = value.agentActivations;
+  copy.retries = value.retries;
+  copy.replans = value.replans;
+  return copy;
+}
+
+function copyBudgetScopeSnapshot(value: BudgetScopeSnapshot): BudgetScopeSnapshot {
+  const copy = new BudgetScopeSnapshot();
+  copy.kind = value.kind;
+  copy.taskId = value.taskId;
+  copy.scopeId = value.scopeId;
+  copy.limit = copyExecutionBudget(value.limit);
+  copy.consumed = copyBudgetAmount(value.consumed);
+  copy.reserved = copyBudgetAmount(value.reserved);
+  return copy;
+}
+
+function copyExecutionBudget(value: ExecutionBudget): ExecutionBudget {
+  const copy = new ExecutionBudget();
+  copy.maxWallTimeMs = value.maxWallTimeMs;
+  copy.maxInputTokens = value.maxInputTokens;
+  copy.maxOutputTokens = value.maxOutputTokens;
+  copy.maxMonetaryCostMicros = value.maxMonetaryCostMicros;
+  copy.maxToolCalls = value.maxToolCalls;
+  copy.maxAgentActivations = value.maxAgentActivations;
+  copy.maxRetries = value.maxRetries;
+  copy.maxReplans = value.maxReplans;
+  if (value.deadlineAt !== undefined) copy.deadlineAt = value.deadlineAt;
+  return copy;
+}
+
+function copyBudgetReservationSnapshot(value: BudgetReservationSnapshot): BudgetReservationSnapshot {
+  const copy = new BudgetReservationSnapshot();
+  copy.reservationId = value.reservationId;
+  copy.taskId = value.taskId;
+  copy.stepId = value.stepId;
+  copy.providerId = value.providerId;
+  copy.requested = copyBudgetAmount(value.requested);
+  copy.actual = copyBudgetAmount(value.actual);
+  copy.state = value.state;
+  return copy;
 }

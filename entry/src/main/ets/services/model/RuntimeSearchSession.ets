@@ -49,7 +49,7 @@ export class RuntimeSearchSession {
   private stopping: boolean = false;
   attach(listener: (view: RuntimeSearchView) => void): void { this.listener = listener; this.publish(); }
   detach(): void { this.listener = undefined; void this.stop(); }
-  snapshot(): RuntimeSearchView { return JSON.parse(JSON.stringify(this.view)); }
+  snapshot(): RuntimeSearchView { return copyRuntimeSearchView(this.view); }
   clearConversation(): void {
     if (this.view.busy) return;
     this.context.clear(); this.view.query = ''; this.view.sources = []; this.view.answer = '';
@@ -219,4 +219,44 @@ export class RuntimeSearchSession {
     this.view.busy = true; this.view.stage = 'answering'; this.view.message = '仅重试模型回答，不再次搜索。';
     const generation = ++this.generation; this.watch(generation); this.publish(); await this.submit(generation, true);
   }
+}
+
+function copyRuntimeSearchView(value: RuntimeSearchView): RuntimeSearchView {
+  const copy = new RuntimeSearchView();
+  copy.lifecycle = value.lifecycle;
+  copy.busy = value.busy;
+  copy.stage = value.stage;
+  copy.message = value.message;
+  copy.query = value.query;
+  copy.answer = value.answer;
+  copy.sources = value.sources.map((item: LiveSearchSource): LiveSearchSource => copyLiveSearchSource(item));
+  if (value.preview !== undefined) copy.preview = copySearchAuthorizationPreview(value.preview);
+  copy.billing = value.billing;
+  copy.allowance = value.allowance;
+  copy.clearEpoch = value.clearEpoch;
+  return copy;
+}
+
+function copyLiveSearchSource(value: LiveSearchSource): LiveSearchSource {
+  const copy = new LiveSearchSource();
+  copy.title = value.title;
+  copy.url = value.url;
+  copy.snippet = value.snippet;
+  return copy;
+}
+
+function copySearchAuthorizationPreview(value: SearchAuthorizationPreview): SearchAuthorizationPreview {
+  const copy = new SearchAuthorizationPreview();
+  copy.requestId = value.requestId;
+  copy.taskId = value.taskId;
+  copy.stepId = value.stepId;
+  copy.operationId = value.operationId;
+  copy.argumentsDigest = value.argumentsDigest;
+  copy.query = value.query;
+  copy.maxResults = value.maxResults;
+  copy.estimatedCostMicros = value.estimatedCostMicros;
+  copy.requestedAt = value.requestedAt;
+  copy.expiresAt = value.expiresAt;
+  copy.expiresAtMs = value.expiresAtMs;
+  return copy;
 }

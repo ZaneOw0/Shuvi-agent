@@ -41,7 +41,7 @@ export class RuntimeChatSession {
   }
   attach(listener: (view: RuntimeChatView) => void): void { this.listener = listener; this.publish(); }
   detach(): void { this.listener = undefined; void this.stop().catch((): void => {}); }
-  snapshot(): RuntimeChatView { return JSON.parse(JSON.stringify(this.view)); }
+  snapshot(): RuntimeChatView { return copyRuntimeChatView(this.view); }
   private publish(): void { this.listener?.(this.snapshot()); }
   private describe(state: ShuviRuntimeState): string {
     switch (state) {
@@ -139,4 +139,15 @@ export class RuntimeChatSession {
       }
     } catch { if (this.active(generation)) await this.stop(); }
   }
+}
+
+function copyRuntimeChatView(value: RuntimeChatView): RuntimeChatView {
+  const copy = new RuntimeChatView();
+  copy.lifecycle = value.lifecycle;
+  copy.busy = value.busy;
+  copy.message = value.message;
+  copy.reply = value.reply;
+  copy.replyId = value.replyId;
+  copy.clearEpoch = value.clearEpoch;
+  return copy;
 }

@@ -1452,6 +1452,46 @@ test('chat journal retains outcomes, rejects conflicting replay and validates re
   h.journalBackend.value.payloadDigest='invalid'; await assert.rejects(new ChatExecutionStore(h.journalBackend.port,new AgentHostDigest()).open(),/INVALID/);
   await h.ui.stop();
 });
+
+test('checkpoint copies preserve nested evidence and cannot mutate the durable chat journal', async () => {
+  const h = chatHarness(); await h.ui.start(h.factory, new TextEncoder().encode('test-only-key'));
+  await h.ui.send('snapshot isolation'); await waitChat(h.ui);
+  const row = JSON.parse(h.journalBackend.value.payloadJson).records[0];
+  const original = await h.store().loadCheckpoint(row.checkpoint.snapshot.taskId);
+  const { copyRuntimeTaskRecoveryCheckpoint } = load(path.join(services, 'ChatSnapshotCopies.ets'));
+  // Exercise optional branches that the completed model-only workflow does not populate.
+  original.pendingClarification = new contracts.ClarificationRequest();
+  original.pendingPolicyRequest = new contracts.PolicyRequest();
+  original.pendingInvocation = new contracts.ToolInvocation();
+  original.activeInvocation = new contracts.ToolInvocation();
+  original.planningRequest.previousWorkflow = structuredClone(original.workflow);
+  original.submission.inputRefs.push(Object.assign(new contracts.TaskInputRef(), {refId: 'input-test'}));
+  original.envelope.inputRefs = structuredClone(original.submission.inputRefs);
+  original.submission.consentContext.grantedPolicyIds.push('test-policy');
+  original.frame.constraints.push('preserve'); original.frame.capabilityCategories.push('test-capability');
+  original.envelope.executionBudget.deadlineAt = '2026-10-24T00:00:00Z';
+  original.workflow.steps[0].inputBindings.push(Object.assign(new contracts.WorkflowInputBinding(), {name: 'test-input'}));
+  const expected = JSON.stringify(original);
+  const copied = copyRuntimeTaskRecoveryCheckpoint(original);
+  assert.deepEqual(JSON.parse(JSON.stringify(copied)), JSON.parse(expected), 'all persisted fields survive copying');
+  function mutate(value) {
+    for (const key of Object.keys(value)) {
+      const item = value[key];
+      if (item && typeof item === 'object') mutate(item);
+      else if (typeof item === 'string') value[key] = 'changed';
+      else if (typeof item === 'number') value[key] = 12345;
+      else if (typeof item === 'boolean') value[key] = !item;
+    }
+    if (Array.isArray(value)) value.push('changed');
+  }
+  mutate(copied);
+  assert.equal(JSON.stringify(original), expected, 'copy shares no mutable descendants');
+  mutate(original);
+  assert.deepEqual(JSON.parse(JSON.stringify(await h.store().loadCheckpoint(row.checkpoint.snapshot.taskId))), row.checkpoint);
+  assert.deepEqual(JSON.parse(h.journalBackend.value.payloadJson).records[0], row, 'in-memory reads cannot change stored evidence');
+  await h.ui.stop();
+});
+
 test('background during chat ends loading, clears input epoch and never auto-restarts', async () => {
   const gate=deferred(); const h=chatHarness({gate}); await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
   await h.ui.send('question'); const epoch=h.ui.snapshot().clearEpoch;
@@ -1780,3 +1820,30 @@ test('search quota is enforced before dispatch even when two tasks already await
     assert.equal(h.trace.tools, 1);
   } finally { await session.stop(); }
 });
+
+
+for (const kind of ['execution', 'memory']) {
+  test(`RDB ${kind} insert is awaited and its rejection is propagated`, async () => {
+    nativeModules['@ohos.data.relationalStore'].RdbPredicates = class {
+      equalTo() { return this; } and() { return this; }
+    };
+    nativeModules['@ohos.data.relationalStore'].ConflictResolution = {ON_CONFLICT_IGNORE: 1};
+    const file = kind === 'execution' ? 'storage/RdbSnapshotBackend.ets' : 'memory/RdbMemorySnapshotBackend.ets';
+    const name = kind === 'execution' ? 'RdbSnapshotBackend' : 'RdbMemorySnapshotBackend';
+    const Backend = load(path.join(root, 'modules/harmony_agent/agent_storage/src/main/ets', file))[name];
+    const envelope = {revision: 1, schemaVersion: 'test', payloadJson: '{}', payloadDigest: 'test-digest'};
+    for (const failing of [false, true]) {
+      let resolveInsert, rejectInsert, settled = false, calls = 0;
+      const pending = new Promise((resolve, reject) => { resolveInsert = resolve; rejectInsert = reject; });
+      const backend = new Backend({update: async () => 0, insert: () => { calls++; return pending; }});
+      const operation = backend.compareAndSet(0, envelope);
+      const observed = operation.then(value => { settled = true; return value; }, error => { settled = true; throw error; });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(calls, 1); assert.equal(settled, false, 'CAS must not finish before the native insert');
+      if (failing) {
+        const rejection = assert.rejects(observed, /injected-write-failure/);
+        rejectInsert(new Error('injected-write-failure')); await rejection;
+      } else { resolveInsert(1); assert.equal(await observed, true); }
+    }
+  });
+}

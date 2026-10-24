@@ -43,7 +43,12 @@ class SearchResources implements ShuviSessionResources {
 /** Never retry a potentially billed tool call when its MCP session expires. */
 export class SingleAttemptSearchManager extends McpClientManager {
   registerServer(profile: McpServerProfile): void {
-    const copy: McpServerProfile = JSON.parse(JSON.stringify(profile)); copy.retryToolCallOnExpiredSession = false;
+    const copy: McpServerProfile = {
+      id: profile.id, endpoint: profile.endpoint, displayName: profile.displayName, protocolMode: profile.protocolMode,
+      connectTimeoutMs: profile.connectTimeoutMs, requestTimeoutMs: profile.requestTimeoutMs,
+      maxResponseBytes: profile.maxResponseBytes, allowInsecureHttp: profile.allowInsecureHttp,
+      retryToolCallOnExpiredSession: false
+    };
     super.registerServer(copy);
   }
 }

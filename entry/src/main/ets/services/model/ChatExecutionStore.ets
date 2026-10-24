@@ -1,3 +1,4 @@
+import { copyRuntimeTaskRecoveryCheckpoint, copyToolOutcome } from './ChatSnapshotCopies';
 import relationalStore from '@ohos.data.relationalStore';
 import { ContractValidator, ReconciliationReport, ToolOutcome, WorkflowStepKind } from '@harmony_agent/agent-contracts';
 import {
@@ -16,6 +17,13 @@ class ChatRecord {
   stepId: string = '';
   outcome?: ToolOutcome;
   rejectionCode: string = '';
+}
+function copyRecord(value: ChatRecord): ChatRecord {
+  const copy = new ChatRecord();
+  copy.checkpoint = copyRuntimeTaskRecoveryCheckpoint(value.checkpoint);
+  copy.dispatchId = value.dispatchId; copy.stepId = value.stepId; copy.rejectionCode = value.rejectionCode;
+  if (value.outcome !== undefined) copy.outcome = copyToolOutcome(value.outcome);
+  return copy;
 }
 class ChatJournal { records: ChatRecord[] = []; }
 
@@ -58,7 +66,9 @@ export class ChatExecutionStore implements ProductionRuntimePersistencePort {
     return this.journal.records.find((item: ChatRecord): boolean => item.checkpoint.snapshot.taskId === taskId);
   }
   private async write(record: ChatRecord): Promise<RuntimePersistenceResult> {
-    const next: ChatJournal = JSON.parse(JSON.stringify(this.journal));
+    const next = new ChatJournal();
+    // Stored records are immutable; only the array and the replaced record change.
+    next.records = this.journal.records.slice();
     const index = next.records.findIndex((item: ChatRecord): boolean => item.checkpoint.snapshot.taskId === record.checkpoint.snapshot.taskId);
     if (index < 0) { if (next.records.length >= 128) return response(false); next.records.push(record); }
     else next.records[index] = record;
@@ -82,11 +92,11 @@ export class ChatExecutionStore implements ProductionRuntimePersistencePort {
       authority.checkpointSnapshotVersion !== checkpoint.snapshot.snapshotVersion) return undefined;
     const existing = this.find(checkpoint.snapshot.taskId);
     if ((existing?.checkpoint.snapshot.snapshotVersion ?? 0) !== previous) return undefined;
-    const next: ChatRecord = existing === undefined ? new ChatRecord() : JSON.parse(JSON.stringify(existing));
-    next.checkpoint = JSON.parse(JSON.stringify(checkpoint)); return next;
+    const next: ChatRecord = existing === undefined ? new ChatRecord() : copyRecord(existing);
+    next.checkpoint = copyRuntimeTaskRecoveryCheckpoint(checkpoint); return next;
   }
   async loadCheckpoint(taskId: string): Promise<RuntimeTaskRecoveryCheckpoint | undefined> {
-    const record = this.find(taskId); return record === undefined ? undefined : JSON.parse(JSON.stringify(record.checkpoint));
+    const record = this.find(taskId); return record === undefined ? undefined : copyRuntimeTaskRecoveryCheckpoint(record.checkpoint);
   }
   async beforeDispatch(checkpoint: RuntimeTaskRecoveryCheckpoint, previous: number,
     context: DispatchPersistenceContext | undefined, authority: RuntimeDurableAuthorityPayload,
@@ -107,14 +117,14 @@ export class ChatExecutionStore implements ProductionRuntimePersistencePort {
       outcome.invocationId !== dispatchId) return response(false);
     if (record.outcome !== undefined) return response(JSON.stringify(record.outcome) === JSON.stringify(outcome), true);
     if (record.checkpoint.pendingDispatchId !== dispatchId) return response(false);
-    const next: ChatRecord = JSON.parse(JSON.stringify(record)); next.outcome = JSON.parse(JSON.stringify(outcome));
+    const next: ChatRecord = copyRecord(record); next.outcome = copyToolOutcome(outcome);
     return await this.write(next);
   }
   async recordDispatchRejected(_context: DispatchPersistenceContext | undefined, dispatchId: string,
     code: string, _now: number): Promise<RuntimePersistenceResult> {
     const record = this.journal.records.find((item: ChatRecord): boolean => item.dispatchId === dispatchId);
     if (record === undefined || record.outcome !== undefined || !code) return response(false);
-    const next: ChatRecord = JSON.parse(JSON.stringify(record)); next.rejectionCode = code; return await this.write(next);
+    const next: ChatRecord = copyRecord(record); next.rejectionCode = code; return await this.write(next);
   }
   // This slice retains interrupted evidence but deliberately exposes no resume/reconciliation operation.
   async normalizeRecoveredOperation(_checkpoint: RuntimeTaskRecoveryCheckpoint, _previous: number, _now: number): Promise<RuntimePersistenceResult> { return response(false); }
