@@ -1,3 +1,4 @@
+import { PendingInvoice, VerifiedInvoice } from './InvoiceTypes';
 import {
   AgentTaskSnapshot,
   AuthorizationDecision,
@@ -15,7 +16,7 @@ import {
   OperationJournalState
 } from '@harmony_agent/agent-core';
 
-export const AGENT_STORAGE_SCHEMA_VERSION: string = '1.2';
+export const AGENT_STORAGE_SCHEMA_VERSION: string = '1.3';
 
 export enum StorageWriteCode {
   CREATED = 'CREATED',
@@ -69,6 +70,8 @@ export class StoredOperation {
   intent: StoredOperationIntent = new StoredOperationIntent();
   state: OperationJournalState = OperationJournalState.PREPARED;
   outcome?: ToolOutcome;
+  pendingInvoice?: PendingInvoice;
+  invoice?: VerifiedInvoice;
   fencingToken: number = 0;
   dispatchCount: number = 0;
   updatedAtMs: number = 0;

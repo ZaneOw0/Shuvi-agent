@@ -518,13 +518,14 @@ class ProductionAgentRuntime implements AgentRuntimeFacade, RuntimeStateObserver
     let authority: RuntimeRecoveryAuthority | undefined;
     if (activeRecovery) authority = await this.readRecoveryAuthority(taskId, recovery);
     this.markPersisted(taskId, checkpoint.snapshot.snapshotVersion);
-    const restored: CoordinatorCommandResult = this.coordinator.restoreCheckpoint(checkpoint);
+    const restored: CoordinatorCommandResult = this.coordinator.restoreCheckpoint(checkpoint, authority);
     if (!restored.accepted) {
       throw new AgentRuntimeError(AgentRuntimeErrorCode.PERSISTENCE_FAILURE,
         'coordinator recovery rejected: ' + restored.code);
     }
     if (restored.code === 'RESTORED_TERMINAL') return;
-    if (activeRecovery) {
+    if (activeRecovery && (authority === undefined || authority.operation === undefined ||
+      authority.operation.outcome === undefined)) {
       await this.persistRecoveryNormalization(taskId, checkpoint.snapshot.snapshotVersion);
     }
     if (authority === undefined) authority = await this.readRecoveryAuthority(taskId, recovery);

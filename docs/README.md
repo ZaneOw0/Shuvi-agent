@@ -30,6 +30,7 @@
 - [Agent 模块说明](../modules/harmony_agent/README.md)：八模块代码位置、来源版本、产品与测试用途、核验及维护边界。
 - [Agent 架构](architecture/Agent运行时架构.md)、[模块与职责](architecture/Agent模块与职责.md)：当前架构与上游 M/T 编号映射。
 - [接入与边界](integration/agent/接入与边界.md)：宿主、模型、MCP、搜索、存储、凭据与本地工具。
+- [搜索账单与结果持久化](integration/agent/搜索账单与结果持久化.md)：成功结果先保存、实际账单独立核对、迁移和恢复边界。
 - [ADR-016](architecture/decisions/ADR-016-协作策略准备的整合边界.md)：协作策略异步准备的整合边界。
 - [六模块迁移验证记录](06-Agent模块接入.md#7-六模块目录迁移与版本更新2026-10-23)：历史 HAP / HAR 构建、本机逻辑回归和用户模拟器检查。
 - [独立测试宿主](../tests/agent-host/README.md)：构建、单元测试与设备测试前提。

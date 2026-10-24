@@ -25,6 +25,8 @@ import {
   TaskHandle,
   TaskSubmission,
   ToolInvocation,
+  ToolOutcome,
+  ToolOutcomeStatus,
   WorkflowGraph,
   WorkflowInputBinding,
   WorkflowStep,
@@ -96,6 +98,7 @@ export class RuntimeCoordinatorConfig {
 }
 
 class RuntimeTaskRecord {
+  recoveredBudgetAuthorityJson: string = '';
   collaborationPreparation: CollaborationPreparationState = new CollaborationPreparationState();
   preparationCancellation?: ArtifactPolicyCancellationSource;
   preparationInterrupted: boolean = false;
@@ -306,11 +309,21 @@ export class RuntimeCoordinator {
     return this.acceptance(record, false);
   }
 
-  restoreCheckpoint(checkpoint: RuntimeTaskRecoveryCheckpoint): CoordinatorCommandResult {
+  restoreCheckpoint(checkpoint: RuntimeTaskRecoveryCheckpoint,
+    authority?: RuntimeRecoveryAuthority): CoordinatorCommandResult {
     const validation = RuntimeCheckpointValidator.validate(checkpoint);
     if (!validation.valid) return this.reconstruction(false, 'CHECKPOINT_INVALID', 0);
     if (checkpoint.checkpointVersion === '1.2' && checkpoint.collaborationPreparation.pending) {
       return this.reconstruction(false, 'PREPARATION_REQUIRES_RECONCILIATION', 0);
+    }
+    let recoveredOutcome: ToolOutcome | undefined;
+    if (authority !== undefined) {
+      if (!RuntimeRecoveryAuthorityValidator.validate(checkpoint, authority).valid) {
+        return this.reconstruction(false, 'RECOVERY_AUTHORITY_INVALID', 0);
+      }
+      const operation = authority.operation;
+      if (operation !== undefined && (operation.state === OperationJournalState.RESULT_RECORDED ||
+        operation.state === OperationJournalState.COMMITTED)) recoveredOutcome = operation.outcome;
     }
     const existing: number = this.findTask(checkpoint.envelope.taskId);
     if (existing >= 0) return this.command(false, 'TASK_ALREADY_EXISTS', this.tasks[existing]);
@@ -320,8 +333,26 @@ export class RuntimeCoordinator {
     try {
       if (checkpoint.workflow !== undefined && checkpoint.scheduler !== undefined) {
         workflow = ContractCodec.parseWorkflowGraph(ContractCodec.stringify(checkpoint.workflow));
-        scheduler = WorkflowScheduler.restore(workflow,
-          copyWorkflowRuntimeSnapshot(checkpoint.scheduler), this.clock.nowMs());
+        const persisted: WorkflowRuntimeSnapshot = copyWorkflowRuntimeSnapshot(checkpoint.scheduler);
+        if (recoveredOutcome !== undefined) {
+          if (recoveredOutcome.status !== ToolOutcomeStatus.SUCCEEDED) return this.reconstruction(false, 'OUTCOME_INVALID', 0);
+          let matched: boolean = false;
+          for (let i: number = 0; i < persisted.steps.length; i++) {
+            const step: StepRuntimeRecord = persisted.steps[i];
+            if (step.stepId !== checkpoint.pendingStepId) continue;
+            if (step.state !== WorkflowStepState.RUNNING && step.state !== WorkflowStepState.VERIFYING) {
+              return this.reconstruction(false, 'OUTCOME_STEP_INVALID', 0);
+            }
+            step.state = WorkflowStepState.SUCCEEDED;
+            step.outputDigest = recoveredOutcome.resultDigest === undefined ? '' : recoveredOutcome.resultDigest;
+            step.finishedAtMs = this.clock.nowMs();
+            matched = true;
+          }
+          if (!matched) return this.reconstruction(false, 'OUTCOME_STEP_MISSING', 0);
+          persisted.runState = persisted.steps.every((step: StepRuntimeRecord): boolean =>
+            step.state === WorkflowStepState.SUCCEEDED) ? WorkflowRunState.COMPLETED : WorkflowRunState.RUNNING;
+        }
+        scheduler = WorkflowScheduler.restore(workflow, persisted, this.clock.nowMs());
       }
     } catch (error) {
       return this.reconstruction(false, 'SCHEDULER_RESTORE_FAILED', 0);
@@ -398,9 +429,27 @@ export class RuntimeCoordinator {
     if (!this.sessions.restore(checkpoint.submission, checkpoint.handle, checkpoint.envelope)) {
       return this.reconstruction(false, 'SESSION_RESTORE_FAILED', 0);
     }
+    if (recoveredOutcome !== undefined && authority !== undefined &&
+      !this.ledger.hydrateTask(record.envelope.taskId, authority.budgetScopes, authority.budgetReservations)) {
+      return this.reconstruction(false, 'BUDGET_AUTHORITY_HYDRATION_FAILED', 0);
+    }
+    if (recoveredOutcome !== undefined && authority !== undefined) {
+      record.recoveredBudgetAuthorityJson = ContractCodec.stringify(authority);
+    }
     this.tasks.push(record);
 
-    if (record.pendingDispatchId.length > 0 && record.scheduler !== undefined) {
+    if (recoveredOutcome !== undefined) {
+      // Persisted success must never be replayed just because its invoice is absent.
+      record.pendingDispatchId = '';
+      record.pendingStepId = '';
+      record.pendingOperationId = '';
+      record.activeInvocation = undefined;
+      record.paused = scheduler !== undefined && scheduler.getRunState() !== WorkflowRunState.COMPLETED;
+      if (record.paused) record.snapshot.status = AgentTaskStatus.PAUSED;
+      record.snapshot.resultJson = recoveredOutcome.resultJson === undefined ? '' : recoveredOutcome.resultJson;
+      this.bump(record, AgentRuntimeEventType.RESULT_UPDATED, record.snapshot.resultJson);
+      this.syncSchedulerState(record);
+    } else if (record.pendingDispatchId.length > 0 && record.scheduler !== undefined) {
       record.pendingDispatchId = '';
       if (record.scheduler.getRunState() === WorkflowRunState.WAITING_RECONCILIATION) {
         record.paused = false;
@@ -433,9 +482,12 @@ export class RuntimeCoordinator {
     }
     const validation = RuntimeRecoveryAuthorityValidator.validate(record.recoverySourceCheckpoint, authority);
     if (!validation.valid) return this.command(false, validation.code, record);
-    if (!this.ledger.hydrateTask(taskId, authority.budgetScopes, authority.budgetReservations)) {
+    if (record.recoveredBudgetAuthorityJson.length > 0 ?
+      record.recoveredBudgetAuthorityJson !== ContractCodec.stringify(authority) :
+      !this.ledger.hydrateTask(taskId, authority.budgetScopes, authority.budgetReservations)) {
       return this.command(false, 'BUDGET_AUTHORITY_HYDRATION_FAILED', record);
     }
+    record.recoveredBudgetAuthorityJson = '';
     record.recoveryBlocked = false;
     record.recoverySourceCheckpoint = undefined;
     this.bump(record, AgentRuntimeEventType.TASK_STATE_CHANGED,
@@ -1258,6 +1310,10 @@ export class RuntimeCoordinator {
     scheduler.applyRecoveryDecision(stepId, decision, this.clock.nowMs());
     record.pendingInvocation = undefined;
     record.pendingPolicyRequest = undefined;
+    // A denied ready step was never dispatched. Its authorization bindings must not
+    // survive into a terminal checkpoint (nor be reused by a later scheduler step).
+    record.pendingStepId = '';
+    record.pendingOperationId = '';
     this.syncSchedulerState(record);
   }
 

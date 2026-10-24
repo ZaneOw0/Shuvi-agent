@@ -22,6 +22,7 @@ import {
 } from '@harmony_agent/agent-core';
 import {
   DurableExecutionRecoveryStore,
+  AGENT_STORAGE_SCHEMA_VERSION,
   DurableSnapshotBackendPort,
   ExecutionRecoveryTransaction,
   ExecutionStoragePayload,
@@ -47,7 +48,7 @@ class FixtureMigration implements StorageMigrationPort {
 
   migrate(source: StorageSnapshotEnvelope): StorageSnapshotEnvelope {
     const value: StorageSnapshotEnvelope = new StorageSnapshotEnvelope();
-    value.schemaVersion = '1.2';
+    value.schemaVersion = AGENT_STORAGE_SCHEMA_VERSION;
     value.revision = source.revision;
     value.payloadJson = source.payloadJson;
     value.payloadDigest = this.integrity.digest(value.payloadJson);

@@ -5,6 +5,7 @@ import {
   ContractValidator,
   PolicyRequest,
   ToolInvocation,
+  ToolOutcomeStatus,
   WorkflowStep
 } from '@harmony_agent/agent-contracts';
 import {
@@ -156,7 +157,7 @@ export class RuntimeRecoveryAuthorityValidator {
     const step: WorkflowStep | undefined = findStep(checkpoint, active.stepId);
     const expectedKey: string = active.idempotencyKey === undefined ?
       'attempt:' + active.attemptId : active.idempotencyKey as string;
-    if (step === undefined || operation.outcome !== undefined || operation.operationId !== active.operationId ||
+    if (step === undefined || operation.operationId !== active.operationId ||
       operation.invocationId !== active.invocationId || operation.taskId !== active.taskId ||
       operation.stepId !== active.stepId || operation.attemptId !== active.attemptId ||
       operation.toolId !== active.toolId || operation.toolIdentityVersion !== active.toolIdentityVersion ||
@@ -167,7 +168,17 @@ export class RuntimeRecoveryAuthorityValidator {
     const budget: BudgetReservationSnapshot | undefined =
       findReservation(reservations, operation.budgetReservationId);
     if (budget === undefined || budget.taskId !== active.taskId || budget.stepId !== active.stepId ||
-      budget.providerId !== policy.request.providerId || !zeroActual(budget)) return false;
+      budget.providerId !== policy.request.providerId) return false;
+    if (operation.state === OperationJournalState.RESULT_RECORDED || operation.state === OperationJournalState.COMMITTED) {
+      const outcome = operation.outcome;
+      return outcome !== undefined && ContractValidator.validateToolOutcome(outcome).valid &&
+        outcome.status === ToolOutcomeStatus.SUCCEEDED && outcome.invocationId === active.invocationId &&
+        safePositive(operation.fencingToken) && safePositive(operation.dispatchCount) &&
+        (operation.state === OperationJournalState.RESULT_RECORDED ?
+          budget.state === BudgetReservationState.RESERVED && zeroActual(budget) :
+          budget.state === BudgetReservationState.SETTLED);
+    }
+    if (operation.outcome !== undefined || !zeroActual(budget)) return false;
     if (operation.state === OperationJournalState.PREPARED) {
       return operation.fencingToken === 0 && operation.dispatchCount === 0 &&
         budget.state === BudgetReservationState.RESERVED;

@@ -3,9 +3,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
+const { localChanges } = require('./agent-local-changes.cjs');
 
 const root = path.resolve(__dirname, '../modules/harmony_agent');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'UPSTREAM.json'), 'utf8'));
+const localPath = path.join(root, 'LOCAL_CHANGES.json');
+const changes = localChanges(manifest, fs.existsSync(localPath) ? JSON.parse(fs.readFileSync(localPath, 'utf8')) : undefined);
 assert.equal(manifest.schemaVersion, 1);
 assert.match(manifest.commit, /^[0-9a-f]{40}$/);
 const seen = new Set();
@@ -17,7 +20,16 @@ for (const file of manifest.files) {
   // Git checkouts may use CRLF; the upstream source blobs use LF.
   const contents = fs.readFileSync(absolute, 'utf8').replace(/\r\n/g, '\n');
   const digest = crypto.createHash('sha256').update(contents).digest('hex');
-  assert.equal(digest, file.sha256, `Imported baseline changed; review and record the local change: ${file.path}`);
+  assert.equal(digest, changes.get(file.path)?.sha256 ?? file.sha256,
+    `Imported baseline changed; review and record the local change: ${file.path}`);
+}
+for (const file of changes.values()) {
+  if (file.originalSha256 !== null) continue;
+  const absolute = path.resolve(root, file.path);
+  assert(absolute.startsWith(root + path.sep));
+  const contents = fs.readFileSync(absolute, 'utf8').replace(/\r\n/g, '\n');
+  assert.equal(crypto.createHash('sha256').update(contents).digest('hex'), file.sha256);
+  seen.add(file.path);
 }
 const modulePaths = new Set(manifest.modules.map(module => path.join(root, module.directory)));
 const projectRoot = path.resolve(root, '../..');
@@ -69,4 +81,4 @@ function checkSourceTree(folder) {
   }
 }
 for (const module of manifest.modules) checkSourceTree(path.join(root, module.directory));
-console.log(`Verified ${manifest.files.length} upstream files and ${manifest.modules.length} local modules (${manifest.commit}).`);
+console.log(`Verified ${manifest.files.length} baseline files, ${changes.size} documented local changes and ${manifest.modules.length} modules (${manifest.commit}).`);

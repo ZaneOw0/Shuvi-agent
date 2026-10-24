@@ -1,3 +1,4 @@
+import { PendingInvoice, copyPendingInvoice } from '../storage/InvoiceTypes';
 import {
   AgentTaskStatus,
   ContractCodec,
@@ -46,6 +47,11 @@ export interface RuntimeOutcomeAccountingPort {
   actualForOutcome(operation: StoredOperation, outcome: ToolOutcome): BudgetAmount | undefined;
 }
 
+/** Explicit opt-in; absence never turns unknown money into a free operation. */
+export interface RuntimePendingInvoicePort {
+  receiptForOutcome(operation: StoredOperation, outcome: ToolOutcome): PendingInvoice | undefined;
+}
+
 /** Concrete settlement required for a confirmed reconciliation report. */
 export class RuntimeReconciliationSettlement {
   outcome: ToolOutcome = new ToolOutcome();
@@ -63,6 +69,7 @@ export class RuntimeExecutionRecoveryBridgeConfig {
   leaseTtlMs: number = 0;
   policyVersion: string = '';
   outcomeAccounting?: RuntimeOutcomeAccountingPort;
+  pendingInvoice?: RuntimePendingInvoicePort;
   reconciliationSettlement?: RuntimeReconciliationSettlementPort;
 }
 
@@ -423,9 +430,12 @@ class OutcomeTransaction implements ExecutionRecoveryTransaction {
   private readonly binding: DispatchBinding;
   private readonly outcome: ToolOutcome;
   private readonly actual?: BudgetAmount;
+  private readonly pending?: PendingInvoice;
   private readonly nowMs: number;
 
-  constructor(binding: DispatchBinding, outcome: ToolOutcome, actual: BudgetAmount | undefined, nowMs: number) {
+  constructor(binding: DispatchBinding, outcome: ToolOutcome, actual: BudgetAmount | undefined, nowMs: number,
+    pending?: PendingInvoice) {
+    this.pending = pending;
     this.binding = binding;
     this.outcome = outcome;
     this.actual = actual;
@@ -448,9 +458,14 @@ class OutcomeTransaction implements ExecutionRecoveryTransaction {
         return rejectedWrite(StorageWriteCode.STATE_CONFLICT);
       }
     } else {
-      if (this.actual === undefined) return rejectedWrite();
-      rejected = tracker.observe(store.recordOperationOutcome(this.binding.operationId, this.outcome,
-        this.actual, this.binding.ownerId, this.binding.fencingToken, this.nowMs));
+      if (this.pending !== undefined) {
+        rejected = tracker.observe(store.recordOutcomeAwaitingInvoice(this.binding.operationId, this.outcome,
+          this.pending, this.binding.ownerId, this.binding.fencingToken, this.nowMs));
+      } else {
+        if (this.actual === undefined) return rejectedWrite();
+        rejected = tracker.observe(store.recordOperationOutcome(this.binding.operationId, this.outcome,
+          this.actual, this.binding.ownerId, this.binding.fencingToken, this.nowMs));
+      }
       if (rejected !== undefined) return rejected;
     }
     rejected = releaseBoundLease(store, this.binding, tracker);
@@ -575,6 +590,7 @@ export class RuntimeExecutionRecoveryBridge implements ProductionRuntimePersiste
   private bindings: DispatchBinding[] = [];
 
   constructor(store: DurableExecutionRecoveryStore, config: RuntimeExecutionRecoveryBridgeConfig) {
+    if (store.isInvoiceReconciliationOnly()) throw new Error('invoice reconciliation session cannot run tasks');
     if (config.ownerId.trim().length === 0 || config.policyVersion.trim().length === 0 ||
       !Number.isSafeInteger(config.leaseTtlMs) ||
       config.leaseTtlMs <= 0) throw new Error('invalid runtime execution recovery bridge config');
@@ -584,6 +600,7 @@ export class RuntimeExecutionRecoveryBridge implements ProductionRuntimePersiste
     stable.leaseTtlMs = config.leaseTtlMs;
     stable.policyVersion = config.policyVersion;
     stable.outcomeAccounting = config.outcomeAccounting;
+    stable.pendingInvoice = config.pendingInvoice;
     stable.reconciliationSettlement = config.reconciliationSettlement;
     this.config = stable;
   }
@@ -715,17 +732,25 @@ export class RuntimeExecutionRecoveryBridge implements ProductionRuntimePersiste
       return runtimeResult(false, false, RuntimePersistenceCode.NOT_FOUND);
     }
     let actual: BudgetAmount | undefined;
+    let pending: PendingInvoice | undefined;
     if (outcome.status !== ToolOutcomeStatus.UNKNOWN_OUTCOME) {
       const accounting: RuntimeOutcomeAccountingPort | undefined = this.config.outcomeAccounting;
       const operation: StoredOperation | undefined = this.store.getOperation(binding.operationId);
-      if (accounting === undefined || operation === undefined) {
+      if (operation === undefined) {
         return runtimeResult(false, false, RuntimePersistenceCode.REJECTED);
       }
-      actual = accounting.actualForOutcome(operation, copyOutcome(outcome));
-      if (actual === undefined) return runtimeResult(false, false, RuntimePersistenceCode.REJECTED);
-      actual = copyBudget(actual);
+      // Prefer explicit deferred billing for opted-in providers, even if another adapter returns an estimate.
+      if (this.config.pendingInvoice !== undefined) {
+        pending = this.config.pendingInvoice.receiptForOutcome(operation, copyOutcome(outcome));
+      }
+      if (pending !== undefined) pending = copyPendingInvoice(pending);
+      else {
+        if (accounting !== undefined) actual = accounting.actualForOutcome(operation, copyOutcome(outcome));
+        if (actual === undefined) return runtimeResult(false, false, RuntimePersistenceCode.REJECTED);
+        actual = copyBudget(actual);
+      }
     }
-    return mapWrite(await this.store.transact(new OutcomeTransaction(binding, copyOutcome(outcome), actual, nowMs)));
+    return mapWrite(await this.store.transact(new OutcomeTransaction(binding, copyOutcome(outcome), actual, nowMs, pending)));
   }
 
   async recordReconciliation(report: ReconciliationReport, nowMs: number): Promise<RuntimePersistenceResult> {

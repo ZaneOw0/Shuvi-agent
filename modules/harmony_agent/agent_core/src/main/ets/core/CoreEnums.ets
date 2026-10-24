@@ -37,6 +37,7 @@ export enum RecoveryAction {
 export enum OperationJournalState {
   PREPARED = 'prepared',
   IN_FLIGHT = 'inFlight',
+  RESULT_RECORDED = 'resultRecorded',
   COMMITTED = 'committed',
   UNKNOWN_OUTCOME = 'unknownOutcome'
 }

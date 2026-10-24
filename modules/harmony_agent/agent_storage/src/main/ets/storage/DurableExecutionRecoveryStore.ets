@@ -1,3 +1,4 @@
+import { VerifiedInvoice } from './InvoiceTypes';
 import {
   AgentTaskSnapshot,
   AuthorizationDecision,
@@ -83,6 +84,7 @@ export class DurableExecutionRecoveryStore {
   private readonly integrity: SnapshotIntegrityPort;
   private current: ExecutionRecoveryStore;
   private durableRevision: number;
+  private invoiceReconciliationOnly: boolean = false;
 
   private constructor(backend: DurableSnapshotBackendPort, integrity: SnapshotIntegrityPort,
     current: ExecutionRecoveryStore, durableRevision: number) {
@@ -106,6 +108,16 @@ export class DurableExecutionRecoveryStore {
     migration?: StorageMigrationPort): Promise<DurableExecutionStoreOpenResult> {
     return await DurableExecutionRecoveryStore.openWithMode(backend, integrity, migration, false);
   }
+
+  /** Dedicated offline host session: cannot be mounted as a Runtime execution bridge. */
+  static async openForInvoiceReconciliation(backend: DurableSnapshotBackendPort, integrity: SnapshotIntegrityPort):
+    Promise<DurableExecutionStoreOpenResult> {
+    const opened = await DurableExecutionRecoveryStore.openWithMode(backend, integrity, undefined, false);
+    if (opened.store !== undefined) opened.store.invoiceReconciliationOnly = true;
+    return opened;
+  }
+
+  isInvoiceReconciliationOnly(): boolean { return this.invoiceReconciliationOnly; }
 
   private static async openWithMode(backend: DurableSnapshotBackendPort, integrity: SnapshotIntegrityPort,
     migration: StorageMigrationPort | undefined,
@@ -142,6 +154,19 @@ export class DurableExecutionRecoveryStore {
       normalized.revision
     );
     return result;
+  }
+
+  /** Invoke only from an offline, trusted reconciliation session; reopen Runtime afterwards. */
+  async settleInvoice(invoice: VerifiedInvoice, actual: BudgetAmount, nowMs: number): Promise<StorageWriteResult> {
+    if (!this.invoiceReconciliationOnly) {
+      const rejected: StorageWriteResult = new StorageWriteResult();
+      rejected.code = StorageWriteCode.STATE_CONFLICT;
+      return rejected;
+    }
+    const candidate: ExecutionRecoveryStore = this.current.forkForTransaction();
+    const result: StorageWriteResult = candidate.settleInvoice(invoice, actual, nowMs);
+    if (!result.accepted || result.duplicate) return result;
+    return await this.commit(candidate) ? result : conflictWriteResult();
   }
 
   revision(): number {

@@ -1,3 +1,4 @@
+import { PendingInvoice, VerifiedInvoice, validPendingInvoice, validVerifiedInvoice, invoiceMatches, copyPendingInvoice, copyVerifiedInvoice } from './InvoiceTypes';
 import {
   AgentTaskSnapshot,
   AuthorizationDecision,
@@ -102,6 +103,7 @@ function validPositiveCount(value: number): boolean {
 }
 
 function validBudgetAmount(value: BudgetAmount): boolean {
+  if (value === undefined || value === null) return false;
   return validCount(value.wallTimeMs) && validCount(value.inputTokens) && validCount(value.outputTokens) &&
     validCount(value.monetaryCostMicros) && validCount(value.toolCalls) &&
     validCount(value.agentActivations) && validCount(value.retries) && validCount(value.replans);
@@ -209,6 +211,8 @@ function copyIntent(source: StoredOperationIntent): StoredOperationIntent {
 function copyOperation(source: StoredOperation): StoredOperation {
   const value: StoredOperation = new StoredOperation();
   value.intent = copyIntent(source.intent);
+  if (source.pendingInvoice !== undefined) value.pendingInvoice = copyPendingInvoice(source.pendingInvoice);
+  if (source.invoice !== undefined) value.invoice = copyVerifiedInvoice(source.invoice);
   value.state = source.state;
   value.outcome = source.outcome === undefined ? undefined :
     ContractCodec.parseToolOutcome(ContractCodec.stringify(source.outcome));
@@ -573,6 +577,88 @@ export class ExecutionRecoveryStore implements TaskRepository, OperationReposito
     }
     operation.state = OperationJournalState.COMMITTED;
     operation.outcome = ContractCodec.parseToolOutcome(ContractCodec.stringify(outcome));
+    operation.updatedAtMs = nowMs;
+    budget.snapshot.actual = copyBudgetAmount(actual);
+    budget.snapshot.state = BudgetReservationState.SETTLED;
+    budget.updatedAtMs = nowMs;
+    this.revision++;
+    return writeResult(true, false, StorageWriteCode.UPDATED);
+  }
+
+  /** Atomic outcome receipt; the existing reservation remains held, not settled as zero. */
+  recordOutcomeAwaitingInvoice(operationId: string, outcome: ToolOutcome, pending: PendingInvoice,
+    ownerId: string, fencingToken: number, nowMs: number): StorageWriteResult {
+    const index: number = this.findOperation(operationId);
+    if (index < 0) return writeResult(false, false, StorageWriteCode.NOT_FOUND);
+    const operation: StoredOperation = this.operations[index];
+    if (!validCount(nowMs) || !validPendingInvoice(pending) ||
+      !ContractValidator.validateToolOutcome(outcome).valid || outcome.status !== ToolOutcomeStatus.SUCCEEDED ||
+      outcome.resultJson === undefined || !validJson(outcome.resultJson) ||
+      outcome.invocationId !== operation.intent.invocationId || pending.resultDigest !== outcome.resultDigest) {
+      return writeResult(false, false, StorageWriteCode.INVALID_INPUT);
+    }
+    if (operation.state === OperationJournalState.RESULT_RECORDED && operation.outcome !== undefined &&
+      operation.pendingInvoice !== undefined && ContractCodec.stringify(operation.outcome) === ContractCodec.stringify(outcome) &&
+      ContractCodec.stringify(operation.pendingInvoice) === ContractCodec.stringify(pending)) {
+      return writeResult(true, true, StorageWriteCode.UNCHANGED);
+    }
+    const leaseCode: StorageWriteCode = this.validateLease(operation.intent.taskId, ownerId, fencingToken, nowMs);
+    if (leaseCode !== StorageWriteCode.UNCHANGED) return writeResult(false, false, leaseCode);
+    if (operation.state !== OperationJournalState.IN_FLIGHT || operation.fencingToken !== fencingToken) {
+      return writeResult(false, false, StorageWriteCode.STATE_CONFLICT);
+    }
+    for (let i: number = 0; i < this.operations.length; i++) {
+      const other: StoredOperation = this.operations[i];
+      const receipt: PendingInvoice | undefined = other.pendingInvoice;
+      if (receipt === undefined) continue;
+      if ((receipt.requestId === pending.requestId && receipt.provider === pending.provider) ||
+        (receipt.provider === pending.provider && receipt.accountScope === pending.accountScope &&
+          pending.providerRequestId !== undefined && receipt.providerRequestId === pending.providerRequestId) ||
+        (other.intent.taskId === operation.intent.taskId && receipt.currency !== pending.currency)) {
+        return writeResult(false, false, StorageWriteCode.STATE_CONFLICT);
+      }
+    }
+    operation.state = OperationJournalState.RESULT_RECORDED;
+    operation.outcome = ContractCodec.parseToolOutcome(ContractCodec.stringify(outcome));
+    operation.pendingInvoice = copyPendingInvoice(pending);
+    operation.updatedAtMs = nowMs;
+    this.revision++;
+    return writeResult(true, false, StorageWriteCode.UPDATED);
+  }
+
+  /** Host-only reconciliation: caller supplies verified invoice plus measured non-monetary usage. */
+  settleInvoice(invoice: VerifiedInvoice, actual: BudgetAmount, nowMs: number): StorageWriteResult {
+    if (!validVerifiedInvoice(invoice)) return writeResult(false, false, StorageWriteCode.INVALID_INPUT);
+    const index: number = this.findOperation(invoice.operationId);
+    if (index < 0) return writeResult(false, false, StorageWriteCode.NOT_FOUND);
+    const operation: StoredOperation = this.operations[index];
+    const pending: PendingInvoice | undefined = operation.pendingInvoice;
+    if (pending === undefined || !invoiceMatches(pending, invoice, operation.intent.operationId) ||
+      !validCount(nowMs) || !validBudgetAmount(actual) || actual.toolCalls < 1 ||
+      actual.monetaryCostMicros !== invoice.amountMicros) {
+      return writeResult(false, false, StorageWriteCode.INVALID_INPUT);
+    }
+    const budget: StoredBudgetReservation = this.requireBudget(operation.intent.budgetReservationId);
+    if (operation.invoice !== undefined) {
+      const identical: boolean = ContractCodec.stringify(operation.invoice) === ContractCodec.stringify(invoice) &&
+        ContractCodec.stringify(budget.snapshot.actual) === ContractCodec.stringify(actual);
+      return writeResult(identical, identical, identical ? StorageWriteCode.UNCHANGED : StorageWriteCode.STATE_CONFLICT);
+    }
+    if (operation.state !== OperationJournalState.RESULT_RECORDED || this.findLease(operation.intent.taskId) >= 0) {
+      return writeResult(false, false, StorageWriteCode.STATE_CONFLICT);
+    }
+    for (let i: number = 0; i < this.operations.length; i++) {
+      const other: VerifiedInvoice | undefined = this.operations[i].invoice;
+      if (other !== undefined && other.provider === invoice.provider && other.accountScope === invoice.accountScope &&
+        other.invoiceId === invoice.invoiceId && other.lineId === invoice.lineId) {
+        return writeResult(false, false, StorageWriteCode.STATE_CONFLICT);
+      }
+    }
+    if (!this.settleBudgetAuthority(budget.snapshot, actual, nowMs)) {
+      return writeResult(false, false, StorageWriteCode.STATE_CONFLICT);
+    }
+    operation.invoice = copyVerifiedInvoice(invoice);
+    operation.state = OperationJournalState.COMMITTED;
     operation.updatedAtMs = nowMs;
     budget.snapshot.actual = copyBudgetAmount(actual);
     budget.snapshot.state = BudgetReservationState.SETTLED;
@@ -995,14 +1081,15 @@ export class ExecutionRecoveryStore implements TaskRepository, OperationReposito
     migration?: StorageMigrationPort, normalizeInFlight: boolean = true): ExecutionStoreRestoreResult {
     const result: ExecutionStoreRestoreResult = new ExecutionStoreRestoreResult();
     let envelope: StorageSnapshotEnvelope = source;
-    if (envelope.schemaVersion !== AGENT_STORAGE_SCHEMA_VERSION) {
+    const legacy: boolean = source.schemaVersion === '1.2' && migration === undefined;
+    if (envelope.schemaVersion !== AGENT_STORAGE_SCHEMA_VERSION && !legacy) {
       if (migration === undefined) {
         result.code = StorageWriteCode.UNSUPPORTED_SCHEMA;
         return result;
       }
       envelope = migration.migrate(source);
     }
-    if (envelope.schemaVersion !== AGENT_STORAGE_SCHEMA_VERSION || !validCount(envelope.revision) ||
+    if ((!legacy && envelope.schemaVersion !== AGENT_STORAGE_SCHEMA_VERSION) || !validCount(envelope.revision) ||
       !validText(envelope.payloadJson) || !validText(envelope.payloadDigest) ||
       integrity.digest(envelope.payloadJson) !== envelope.payloadDigest) {
       result.code = StorageWriteCode.CORRUPT_SNAPSHOT;
@@ -1011,6 +1098,12 @@ export class ExecutionRecoveryStore implements TaskRepository, OperationReposito
     try {
       const payload: ExecutionStoragePayload = JSON.parse(envelope.payloadJson) as ExecutionStoragePayload;
       if (!ExecutionRecoveryStore.validatePayload(payload)) {
+        result.code = StorageWriteCode.CORRUPT_SNAPSHOT;
+        return result;
+      }
+      if (legacy && payload.operations.some((operation: StoredOperation): boolean =>
+        operation.pendingInvoice !== undefined || operation.invoice !== undefined ||
+        operation.state === OperationJournalState.RESULT_RECORDED)) {
         result.code = StorageWriteCode.CORRUPT_SNAPSHOT;
         return result;
       }
@@ -1044,7 +1137,7 @@ export class ExecutionRecoveryStore implements TaskRepository, OperationReposito
       }
       for (let i: number = 0; i < payload.policies.length; i++) store.policies.push(copyPolicy(payload.policies[i]));
       for (let i: number = 0; i < payload.leases.length; i++) store.leases.push(copyLease(payload.leases[i]));
-      if (normalizedInFlight) {
+      if (normalizedInFlight || legacy) {
         if (!Number.isSafeInteger(store.revision + 1)) {
           result.code = StorageWriteCode.CORRUPT_SNAPSHOT;
           return result;
@@ -1128,6 +1221,9 @@ export class ExecutionRecoveryStore implements TaskRepository, OperationReposito
         (scope.kind === BudgetScopeKind.STEP && scope.scopeId === reservation.stepId) ||
         (scope.kind === BudgetScopeKind.PROVIDER && scope.scopeId === reservation.providerId)) {
         if (!canSubtractBudget(scope.reserved, reservation.requested)) return false;
+        const total: BudgetAmount = copyBudgetAmount(scope.consumed);
+        addBudget(total, actual);
+        if (!validBudgetAmount(total)) return false;
         indexes.push(i);
       }
     }
@@ -1216,6 +1312,21 @@ export class ExecutionRecoveryStore implements TaskRepository, OperationReposito
         !validCount(operation.fencingToken) || !validCount(operation.dispatchCount) ||
         !validCount(operation.updatedAtMs)) return false;
       ids.push(operation.intent.operationId);
+      for (let j: number = 0; j < i; j++) {
+        const prior: StoredOperation = payload.operations[j];
+        const pending: PendingInvoice | undefined = operation.pendingInvoice;
+        const previous: PendingInvoice | undefined = prior.pendingInvoice;
+        if (pending !== undefined && previous !== undefined &&
+          ((pending.provider === previous.provider && pending.requestId === previous.requestId) ||
+          (pending.provider === previous.provider && pending.accountScope === previous.accountScope &&
+            pending.providerRequestId !== undefined && pending.providerRequestId === previous.providerRequestId) ||
+          (operation.intent.taskId === prior.intent.taskId && pending.currency !== previous.currency))) return false;
+        const invoice: VerifiedInvoice | undefined = operation.invoice;
+        const earlier: VerifiedInvoice | undefined = prior.invoice;
+        if (invoice !== undefined && earlier !== undefined && invoice.provider === earlier.provider &&
+          invoice.accountScope === earlier.accountScope && invoice.invoiceId === earlier.invoiceId &&
+          invoice.lineId === earlier.lineId) return false;
+      }
       const linkedBudget: number = findBudgetSnapshot(payload.budgets, operation.intent.budgetReservationId);
       const linkedPolicy: number = findPolicySnapshot(payload.policies, operation.intent.policyRequestId);
       if (linkedBudget < 0 || linkedPolicy < 0 ||
@@ -1353,6 +1464,21 @@ function findTraceCursorSnapshot(values: StoredTraceCursor[], taskId: string, se
 }
 
 function operationStateMatchesBudget(operation: StoredOperation, budget: StoredBudgetReservation): boolean {
+  const pending: PendingInvoice | undefined = operation.pendingInvoice;
+  if (pending !== undefined) {
+    if (!validPendingInvoice(pending) || operation.outcome === undefined ||
+      operation.outcome.status !== ToolOutcomeStatus.SUCCEEDED || operation.outcome.resultJson === undefined ||
+      !validJson(operation.outcome.resultJson) || pending.resultDigest !== operation.outcome.resultDigest) return false;
+    if (operation.state === OperationJournalState.RESULT_RECORDED) {
+      return operation.invoice === undefined && ContractValidator.validateToolOutcome(operation.outcome).valid &&
+        operation.outcome.invocationId === operation.intent.invocationId && operation.fencingToken > 0 &&
+        operation.dispatchCount > 0 && budget.snapshot.state === BudgetReservationState.RESERVED &&
+        zeroBudgetAmount(budget.snapshot.actual);
+    }
+    if (operation.state !== OperationJournalState.COMMITTED || operation.invoice === undefined ||
+      !invoiceMatches(pending, operation.invoice, operation.intent.operationId) ||
+      budget.snapshot.actual.monetaryCostMicros !== operation.invoice.amountMicros) return false;
+  } else if (operation.invoice !== undefined) return false;
   if (operation.state === OperationJournalState.PREPARED) {
     return operation.outcome === undefined && operation.fencingToken === 0 &&
       budget.snapshot.state === BudgetReservationState.RESERVED && zeroBudgetAmount(budget.snapshot.actual);
