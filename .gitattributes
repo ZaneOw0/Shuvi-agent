@@ -1,4 +1,8 @@
-* text=auto
+
+# 仓库级唯一权威：所有文本文件一律以 LF 入库与检出，与机器/缺省 autocrlf 无关。
+# 下面 *.cmd / *.bat 的 eol=crlf 是后置覆盖（.gitattributes 以最后匹配的规则为准），
+# 它们必须保持 CRLF 才能在 cmd.exe 下正常执行。
+* text=auto eol=lf
 
 *.sh  text eol=lf
 *.cmd text eol=crlf
@@ -19,7 +23,12 @@ entry/src/main/ets/knowledge/pipeline/TextNormalizer.ets text eol=lf
 entry/src/main/ets/knowledge/infra/TextRdbRepository.ets text eol=lf
 entry/src/main/ets/knowledge/ui/DocumentParseView.ets text eol=lf
 entry/src/test/eval/text-m1-golden.json text eol=lf
+entry/src/test/eval/round2-pdf-gold-candidate.json text eol=lf
 entry/src/test/eval/round2-semantic-gold-v1.json text eol=lf
 entry/src/main/resources/rawfile/quality/round2-semantic-gold-v1.json text eol=lf
 oh-package.json5 text eol=lf
 entry/src/main/ets/knowledge/domain/TextKnowledgePorts.ets text eol=lf
+
+# Corpus binaries are pinned by bytes (never converted).
+entry/src/test/fixtures/corpus/*.pdf -text
+entry/src/test/fixtures/corpus/*.zip -text

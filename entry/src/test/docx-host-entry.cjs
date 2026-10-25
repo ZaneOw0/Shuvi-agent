@@ -4,7 +4,8 @@ const fs=require('node:fs');
 const path=require('node:path');
 const Module=require('node:module');
 const crypto=require('node:crypto');
-const {DatabaseSync}=require('node:sqlite');
+const { DatabaseSync }=require('node:sqlite');
+const { relativePosix, ensureDir, readTextLf }=require('./lib/portable.cjs');
 const project=path.resolve(__dirname,'../../..');
 const root=path.join(project,'entry/src/main/ets/knowledge');
 const allowed=[
@@ -53,7 +54,7 @@ function harness(){
   const events={START_DOCUMENT:0,END_DOCUMENT:1,START_TAG:2,END_TAG:3,TEXT:4,CDSECT:5,COMMENT:6,DOCDECL:7,INSTRUCTION:8,ENTITY_REFERENCE:9,WHITESPACE:10};
   class Pull{constructor(buffer){this.text=Buffer.from(buffer).toString('utf8');}parseXml(options){const root=require('./docx-pipeline-host-cases.cjs').tree(this.text);let stopped=false;const visit=(node,depth,type,text='')=>{const info={getDepth:()=>depth,getName:()=>node.localName,getNamespace:()=>node.namespace,getPrefix:()=>'',getText:()=>text,getAttributeCount:()=>node.attributes.length};if(options.tokenValueCallbackFunction(type,info)===false)stopped=true;};const walk=(node,depth)=>{if(stopped)return;for(const attr of node.attributes)options.attributeWithTagCallbackFunction?.(node.localName,attr.qname,attr.text);visit(node,depth,events.START_TAG);if(node.text)visit(node,depth,events.TEXT,node.text);for(const child of node.children)walk(child,depth+1);if(!stopped)visit(node,depth,events.END_TAG);};walk(root,1);if(!stopped)visit(root,0,events.END_DOCUMENT);}}
   const kits=new Map([['@kit.ArkData',ark],['@kit.AbilityKit',{}],['@kit.CoreFileKit',{fileIo:io}],['@kit.BasicServicesKit',basic],['@kit.CryptoArchitectureKit',{cryptoFramework:{createMd:()=>{const hash=crypto.createHash('sha256');return {update:async b=>hash.update(b.data),digest:async()=>({data:new Uint8Array(hash.digest())})};}}}],['@kit.ArkTS',{xml:{EventType:events,XmlPullParser:Pull},util:{TextDecoder:{create:(encoding,options)=>({decodeToString:bytes=>new TextDecoder(encoding,options).decode(bytes)})}},taskpool:{Task:{isCanceled:()=>false},GenericsTask:Task,execute:async task=>task.work(...task.args),cancel(){}}}]]);
-  function load(name){const file=path.resolve(name);const relative=path.relative(root,file).replace(/\.ets$/,'');const publicTests=['TextPipelineCases.ets','KnowledgeResultCases.ets'].map(n=>path.join(project,'entry/src/test',n));if(!allowed.includes(relative)&&!publicTests.includes(file)&&file!==path.join(root,'../components/Theme.ets'))throw Error('DOCX_ALLOWLIST:'+relative);if(cache.has(file))return cache.get(file).exports;const mod=new Module(file,module);mod.filename=file;mod.paths=Module._nodeModulePaths(path.dirname(file));cache.set(file,mod);mod.require=id=>{if(kits.has(id))return kits.get(id);if(id.startsWith('.'))return load(path.resolve(path.dirname(file),id+'.ets'));throw Error('DOCX_IMPORT_DENIED');};let source=fs.readFileSync(file,'utf8');if(relative==='ui/DocxIngestionView'){
+  function load(name){const file=path.resolve(name);const relative=relativePosix(root,file).replace(/\.ets$/,'');const publicTests=['TextPipelineCases.ets','KnowledgeResultCases.ets'].map(n=>path.join(project,'entry/src/test',n));if(!allowed.includes(relative)&&!publicTests.includes(file)&&file!==path.join(root,'../components/Theme.ets'))throw Error('DOCX_ALLOWLIST:'+relative);if(cache.has(file))return cache.get(file).exports;const mod=new Module(file,module);mod.filename=file;mod.paths=Module._nodeModulePaths(path.dirname(file));cache.set(file,mod);mod.require=id=>{if(kits.has(id))return kits.get(id);if(id.startsWith('.'))return load(path.resolve(path.dirname(file),id+'.ets'));throw Error('DOCX_IMPORT_DENIED');};let source=readTextLf(file);if(relative==='ui/DocxIngestionView'){
     // Methods only: remove the ArkUI DSL and decorators; this is not an ArkUI runtime or compiler check.
     const marker='\n  build() {';const at=source.indexOf(marker);if(at<0||source.lastIndexOf(marker)!==at||!source.includes('@Component\nexport struct DocxIngestionView'))throw Error('DOCX_UI_METHOD_SHAPE');
     source=(source.slice(0,at)+'\n}').replace('@Component\nexport struct DocxIngestionView','export class DocxIngestionView').replace(/@State\s+/g,'');
@@ -64,7 +65,7 @@ exports.harness=harness;
 exports.run=async()=>{
   const h=harness();let passed=0,failed=0;
   const fixture=require('./docx-fixtures.cjs'),scope=path.join(project,'.cache/m4-docx-synthetic');
-  if(!fs.statSync(path.join(project,'.cache')).isDirectory())throw Error('SyntheticParentMissing');fs.mkdirSync(scope,{recursive:true});
+  if(!fs.existsSync(path.join(project,'.cache')))ensureDir(path.join(project,'.cache'));ensureDir(scope);
   for(const kind of ['basic','table-media','revisions']){const f=fixture.fixture(kind,{descriptor:true,metadata:true});const name=path.join(scope,kind+'.docx');if(fs.existsSync(name)&&!fs.readFileSync(name).equals(f.bytes))throw Error('SyntheticAssetConflict');fs.writeFileSync(name,f.bytes);console.log(`DOCX_GOLD kind=${kind} bytes=${f.bytes.length} sha256=${f.hash} version=${fixture.gold.version}`);}
   for(const suite of ['docx-host-entry.cjs','docx-fixtures.cjs','docx-store-host-cases.cjs','docx-service-host-cases.cjs','docx-pipeline-host-cases.cjs','docx-ui-host-cases.cjs'])console.log(`DOCX_TEST_HASH file=entry/src/test/${suite} sha256=${crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname,suite))).digest('hex')}`);
   for(const suite of ['docx-store-host-cases.cjs','docx-service-host-cases.cjs','docx-pipeline-host-cases.cjs','docx-ui-host-cases.cjs']){
