@@ -23,6 +23,18 @@ if ($PSCmdlet.ParameterSetName -eq 'Studio') {
 }
 $report = Join-Path $runDirectory 'report.json'
 $consoleLog = Join-Path $runDirectory 'console.log'
+# The known-defect exemption inside verify-lint-report.cjs is pinned to one Code Linter
+# build. Record the version the tool reports so a toolchain upgrade cannot silently keep
+# the exemption alive.
+$toolVersion = ''
+try {
+    $ErrorActionPreference = 'Continue'
+    $versionText = (& $tool -v 2>$null | Out-String)
+    $ErrorActionPreference = 'Stop'
+    $versionMatch = [regex]::Match($versionText, '\d+\.\d+\.\d+')
+    if ($versionMatch.Success) { $toolVersion = $versionMatch.Value }
+} catch { $toolVersion = '' }
+Write-Output "Code Linter version: $(if ($toolVersion) { $toolVersion } else { 'unreported' })"
 Push-Location $projectRoot
 try {
     & node scripts/verify-lint-report.cjs snapshot $LogDirectory $runDirectory
@@ -36,7 +48,7 @@ try {
     }
     $toolExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
-    & node scripts/verify-lint-report.cjs verify $runDirectory $toolExit
+    & node scripts/verify-lint-report.cjs verify $runDirectory $toolExit $toolVersion
     if ($LASTEXITCODE -ne 0) { throw "Code Linter gate failed. Evidence: $runDirectory" }
     Write-Output "Code Linter gate passed. Evidence: $runDirectory"
 } finally {

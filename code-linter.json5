@@ -18,18 +18,21 @@
     "plugin:@performance/recommended",
     "plugin:@typescript-eslint/recommended"
   ],
-  "rules": {
-    "@security/no-unsafe-aes": "error",
-    "@security/no-unsafe-hash": "error",
-    "@security/no-unsafe-mac": "warn",
-    "@security/no-unsafe-dh": "error",
-    "@security/no-unsafe-dsa": "error",
-    "@security/no-unsafe-ecdsa": "error",
-    "@security/no-unsafe-rsa-encrypt": "error",
-    "@security/no-unsafe-rsa-sign": "error",
-    "@security/no-unsafe-rsa-key": "error",
-    "@security/no-unsafe-dsa-key": "error",
-    "@security/no-unsafe-dh-key": "error",
-    "@security/no-unsafe-3des": "error"
-  }
+  // 说明：本仓库基线工具链（Code Linter 6.0.240 / DevEco Studio 26.0.0.821）的
+  // ruleSet.json 中没有下面这批规则名，写进 "rules" 只会让引擎报
+  // "Invalid rule name" 并且完全不执行，门禁也无法通过。故此处不再声明，等工具
+  // 支持后连同 scripts/verify-lint-report.cjs 的已知缺陷清单一起恢复。
+  //
+  // 已移除（曾经声明、实际从未执行）：
+  //   @security/no-unsafe-aes / no-unsafe-hash / no-unsafe-mac / no-unsafe-dh
+  //   @security/no-unsafe-dsa / no-unsafe-ecdsa / no-unsafe-rsa-encrypt
+  //   @security/no-unsafe-rsa-sign / no-unsafe-rsa-key / no-unsafe-dsa-key
+  //   @security/no-unsafe-dh-key / no-unsafe-3des
+  //
+  // 本版实际可用的安全规则：
+  //   plugin:@security/recommended -> @security/no-commented-code
+  //   plugin:@security/all         -> 上述 + no-cycle / no-unsafe-{huks,kdf,sm4,ecdh,sm2-*}
+  // 启用 @security/all 会在当前代码上额外产出 4 条 @security/no-cycle 诊断，属独立
+  // 议题，未纳入本仓库门禁基线（见 docs/deployment/持续集成.md）。
+  "rules": {}
 }

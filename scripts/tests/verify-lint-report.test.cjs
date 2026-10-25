@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { snapshot, verify } = require('../verify-lint-report.cjs');
+const { snapshot, verify, KNOWN_ANALYZER_CRASHES, KNOWN_DEFECT_TOOL_VERSION } = require('../verify-lint-report.cjs');
 
 const root = path.resolve(__dirname, '../../.local/lint-gate-tests');
 fs.mkdirSync(root, { recursive: true });
@@ -90,4 +90,48 @@ test('PowerShell UTF-16 console errors are detected', t => {
   const { run } = fixture(t);
   fs.writeFileSync(path.join(run, 'console.log'), Buffer.from('\uFEFFError: EPERM', 'utf16le'));
   assert.equal(verify(run, 0).passed, false);
+});
+
+// Known-defect allowlist: exact signatures only, pinned to the pinned tool version.
+const crashLog = file => '[2026-10-25T16:50:20.973] [ERROR] [44672] [HomeCheck] - [CheckEntry] '
+  + `Error running file check for D:\\runner\\_work\\Shuvi-agent\\Shuvi-agent\\${file}: `
+  + "Cannot read properties of undefined (reading 'getDeclaringMethod')\n";
+
+for (const file of KNOWN_ANALYZER_CRASHES) {
+  test(`known analyzer crash is exempted and recorded as a coverage gap: ${file}`, t => {
+    const { run, logs } = fixture(t);
+    fs.appendFileSync(path.join(logs, 'arkPerfCheck.log'), crashLog(file));
+    const result = verify(run, 1, KNOWN_DEFECT_TOOL_VERSION);
+    assert.equal(result.passed, true);
+    assert.deepEqual(result.coverageGaps.analyzerCrashFiles, [file]);
+    assert.equal(result.coverageGaps.toolVersion, KNOWN_DEFECT_TOOL_VERSION);
+  });
+}
+
+test('analyzer crash on an unlisted file still fails', t => {
+  const { run, logs } = fixture(t);
+  fs.appendFileSync(path.join(logs, 'arkPerfCheck.log'), crashLog('entry/src/main/ets/pages/Other.ets'));
+  assert.equal(verify(run, 1, KNOWN_DEFECT_TOOL_VERSION).passed, false);
+});
+
+test('same file crashing with a different message still fails', t => {
+  const { run, logs } = fixture(t);
+  fs.appendFileSync(path.join(logs, 'arkPerfCheck.log'),
+    '[ERROR] [1] [HomeCheck] - [CheckEntry] Error running file check for D:\\x\\entry\\src\\main\\ets\\pages\\Index.ets: '
+    + 'Cannot read properties of undefined (reading \'getModifierFlags\')\n');
+  assert.equal(verify(run, 1, KNOWN_DEFECT_TOOL_VERSION).passed, false);
+});
+
+test('exemption requires the pinned tool version', t => {
+  const { run, logs } = fixture(t);
+  fs.appendFileSync(path.join(logs, 'arkPerfCheck.log'), crashLog(KNOWN_ANALYZER_CRASHES[0]));
+  assert.equal(verify(run, 1, '6.0.250').passed, false);
+  assert.equal(verify(run, 1).passed, false);
+});
+
+test('no crash exemption leaves the tool version check out of the way', t => {
+  const { run } = fixture(t);
+  const result = verify(run, 0, '6.0.250');
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.coverageGaps.analyzerCrashFiles, []);
 });
