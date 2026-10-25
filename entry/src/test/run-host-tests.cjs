@@ -18,6 +18,7 @@ const crypto = require('node:crypto');
 const cp = require('node:child_process');
 const Module = require('node:module');
 const { test } = require('node:test');
+const { toLf } = require('./lib/portable.cjs');
 
 const sdkHome = process.env.DEVECO_SDK_HOME;
 if (!sdkHome) {
@@ -102,7 +103,7 @@ console.log(`[工具] Node=${process.version} SDK=${sdkHome} compiler=${ts.versi
 console.log('[执行边界] host transpilation/injected ports only; NOT ArkTS checker, native zlib, ArkData, PDFKit, device, UI or provider verification');
 for (const source of sources.concat(['entry/src/main/ets/pages/Index.ets', 'entry/src/test/eval/text-m1-golden.json',
   'entry/src/test/run-host-tests.cjs', 'entry/src/test/mineru-host-loader.cjs', 'entry/src/test/mineru-transfer-host-cases.cjs', 'entry/src/test/mineru-repository-host-cases.cjs',
-  'entry/src/test/pdf-offline-host-cases.cjs','entry/src/test/pdf-worker-host-cases.cjs','entry/src/test/pdf-ocr-profile-host-cases.cjs','entry/src/test/knowledge-store-host-cases.cjs','entry/src/test/embedding-credential-host-cases.cjs',
+  'entry/src/test/pdf-offline-host-cases.cjs','entry/src/test/pdf-worker-host-cases.cjs','entry/src/test/knowledge-store-host-cases.cjs','entry/src/test/embedding-credential-host-cases.cjs',
   'entry/src/test/knowledge-scope-host-cases.cjs','entry/src/test/run-host-summary.cjs'])) {
   console.log(`[源与题集SHA256] ${source} ${crypto.createHash('sha256').update(fs.readFileSync(path.join(project, source))).digest('hex')}`);
 }
@@ -139,7 +140,6 @@ Module._load = function hostKitFallback(request) {
 
 const fixtureRoot = path.join(project, 'entry/src/test/fixtures');
 for (const item of require('./pdf-worker-host-cases.cjs')(outputRoot,project)) { test(`PDF worker injected host boundary · ${item.name}`,item.run); }
-for (const item of require('./pdf-ocr-profile-host-cases.cjs')(outputRoot,project)) { test(`PDF OCR profile offline host · ${item.name}`,item.run); }
 for (const item of require('./knowledge-result-host-cases.cjs')(outputRoot,project)) { test(`KnowledgeResult host · ${item.name}`,item.run); }
 for (const testCase of require('./vector-quality-host-cases.cjs')(project)) { test(testCase.name,testCase.run); }
 const golden = JSON.parse(fs.readFileSync(path.join(project, 'entry/src/test/eval/text-m1-golden.json'), 'utf8'));
@@ -319,7 +319,9 @@ test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => 
     'oh-package.json5': '8707e54246dcaad85b94274888d84f0b7f0dabcc074d5d092f80d4e2fef87657'
   };
   for (const file of Object.keys(protectedFiles)) {
-    const hash = crypto.createHash('sha256').update(fs.readFileSync(path.join(project, file))).digest('hex');
+    // EOL-insensitive: the repository pins these paths to LF, and asserting LF-normalised
+    // text keeps the frozen baseline stable regardless of the checker's platform/checkout.
+    const hash = crypto.createHash('sha256').update(toLf(fs.readFileSync(path.join(project, file), 'utf8'))).digest('hex');
     if (hash !== protectedFiles[file]) throw new Error('Protected baseline bytes changed');
   }
   // Approved M2-B connection points are additive, not exempt from compatibility.

@@ -1,5 +1,5 @@
 'use strict';
-// Only the two explicitly authorized inputs. No device, network, directory scan or source mutation.
+// Only the two frozen corpus fixtures. No device, network, directory scan or source mutation.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -11,11 +11,13 @@ async function readAuthorized(project) {
   const domain = require(path.join(root,'domain/PdfKnowledgeModels.js'));
   const policy = require(path.join(root,'pipeline/SafeZipPolicy.js'));
   const { MineruPdfNormalizer } = require(path.join(root,'pipeline/MineruPdfNormalizer.js'));
-  const originalPath = path.join(project,'.cache/m2-input/user-pdf/02_第02章_模型评估与选择.pdf');
-  const zipPath = path.join(project,'.cache/m2-result-analysis/result-m2-7eaa150e269374313fd776f12a2ae9fa.zip');
-  for (const file of [originalPath,zipPath]) { const stat=fs.lstatSync(file); assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.size<=31457280); }
-  assert.equal(digest(fs.readFileSync(originalPath)),'7f959de85fdab10b15e2aada044d9f1fbd75dbc90b2fabfca79eb9ecb4b3df3a');
-  const zip=fs.readFileSync(zipPath); assert.equal(digest(zip),'548162c5bb0f6a93d0fe76d4a5a17399f87b0a882c84d4510e7c2ead5fc12a05');
+  const { requireCorpus } = require('./corpus-fixtures.cjs');
+  const pdfCorpus = requireCorpus('m2-user-pdf');
+  const zipCorpus = requireCorpus('m2-result-zip');
+  const originalPath = pdfCorpus.file;
+  const zipPath = zipCorpus.file;
+  assert(originalPath.endsWith('.pdf') && pdfCorpus.bytes.length <= 31457280);
+  const zip = zipCorpus.bytes;
   const cancel=new domain.KnowledgeCancellation();
   const manifest=await policy.pdfInspectZip({length:zip.length,async read(at,n){assert(n<=1048576);return new Uint8Array(zip.subarray(at,at+n));},async close(){}},cancel);
   const outputs=new Map(); let expanded=0;

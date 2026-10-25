@@ -68,6 +68,8 @@ jobs:
           node scripts/verify-agent-docs.cjs || exit /b 1
           node scripts/test-agent-fixture.cjs || exit /b 1
           node --test scripts/tests/verify-lint-report.test.cjs || exit /b 1
+          node --test scripts/tests/corpus-fixtures.test.cjs || exit /b 1
+          node --test scripts/tests/host-portability.test.cjs || exit /b 1
 
       - name: 搜索服务构建与自动测试（无真实供应商调用）
         shell: cmd
