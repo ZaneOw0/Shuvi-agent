@@ -1,0 +1,1 @@
+# Library obfuscation is disabled for the initial public TestKit contract.

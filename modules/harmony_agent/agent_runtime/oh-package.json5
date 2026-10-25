@@ -1,0 +1,12 @@
+{
+  "name": "@harmony_agent/agent-runtime",
+  "version": "0.16.0",
+  "description": "Headless orchestration, policy and authorization runtime for the harmony_agent agent",
+  "main": "Index.ets",
+  "author": "harmony_agent",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@harmony_agent/agent-contracts": "file:../agent_contracts",
+    "@harmony_agent/agent-core": "file:../agent_core"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "module": {
+    "name": "test_host",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "TestHostAbility",
+    "deviceTypes": ["phone", "tablet", "2in1"],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "abilities": [
+      {
+        "name": "TestHostAbility",
+        "srcEntry": "./ets/testhostability/TestHostAbility.ets",
+        "description": "$string:ability_desc",
+        "label": "$string:ability_label",
+        "startWindowIcon": "$media:start_icon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": false
+      }
+    ],
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.INTERNET"
+      }
+    ]
+  }
+}
+

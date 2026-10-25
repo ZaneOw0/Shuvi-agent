@@ -1,0 +1,3 @@
+# Public API symbols are exported from Index.ets. Consumers may add their own
+# obfuscation policy after the first stable release.
+

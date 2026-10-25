@@ -1,0 +1,13 @@
+{
+  "name": "@harmony_agent/agent-connectors",
+  "version": "0.13.0",
+  "description": "Headless MCP adapters for the harmony_agent runtime",
+  "main": "Index.ets",
+  "author": "harmony_agent",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@harmony_agent/agent-contracts": "file:../agent_contracts",
+    "@harmony_agent/agent-runtime": "file:../agent_runtime",
+    "@harmony_agent/mcp-client": "file:../mcp_client"
+  }
+}

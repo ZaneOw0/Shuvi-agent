@@ -6,6 +6,7 @@ rem
 rem Requires these environment variables:
 rem   CLT_HOME  Command Line Tools install dir, e.g. D:\command-line-tools
 rem   JAVA_HOME compatible JDK dir, e.g. C:\Univ\jdk21
+rem   CODELINTER_LOG_DIR actual CLT analyzer log directory
 rem
 rem Usage:
 rem   scripts\ci-windows.cmd               full gate (install + lint + build)
@@ -14,8 +15,8 @@ rem
 rem Notes:
 rem  - Keep this file ASCII-only and CRLF-terminated. cmd.exe parses batch
 rem    files using the system code page, so non-ASCII text can break parsing.
-rem  - codelinter.bat always exits with code 1, even on clean code, so its
-rem    exit code is NOT used here. This gate reads its JSON report instead.
+rem  - Code Linter exit behavior differs by version. The gate verifies the
+rem    current report AND complete engine logs; exit code alone is insufficient.
 rem  - ArkTS strict rules (arkts-*) are enforced by the build step
 rem    (hvigorw assembleHap), which fails on any ArkTS compiler error.
 
@@ -25,6 +26,10 @@ if "%CLT_HOME%"=="" (
 )
 if "%JAVA_HOME%"=="" (
   echo [ERROR] JAVA_HOME is not set. Point it to a compatible JDK ^(JDK 21 verified^).
+  exit /b 1
+)
+if "%CODELINTER_LOG_DIR%"=="" (
+  echo [ERROR] CODELINTER_LOG_DIR is not set. See docs/deployment CI instructions.
   exit /b 1
 )
 
@@ -38,27 +43,20 @@ if not exist "build-profile.json5" (
 )
 
 echo ==^> toolchain versions
-call hvigorw.bat -v
-call codelinter.bat -v
-java -version
+call "%CLT_HOME%\bin\hvigorw.bat" -v || exit /b 1
+call "%CLT_HOME%\bin\codelinter.bat" -v
+"%JAVA_HOME%\bin\java.exe" -version || exit /b 1
 
 if not "%~1"=="--no-install" (
   echo ==^> install dependencies
-  call ohpm.bat install --all || exit /b 1
+  call "%CLT_HOME%\bin\ohpm.bat" install --all || exit /b 1
 )
 
 echo ==^> lint
-set "REPORT=%TEMP%\shuvi-codelinter.json"
-if exist "%REPORT%" del /q "%REPORT%"
-call codelinter.bat -f json -o "%REPORT%"
-if not exist "%REPORT%" (
-  echo [ERROR] codelinter did not produce a report at %REPORT%
-  exit /b 1
-)
-node -e "const fs=require('fs');const p=process.argv[1];const r=JSON.parse(fs.readFileSync(p,'utf8'));const n=Array.isArray(r)?r.length:0;if(n>0){console.error('[ERROR] codelinter reported '+n+' issue(s), see '+p);process.exit(1);}console.log('[OK] codelinter: no issues');" "%REPORT%" || exit /b 1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\ci-lint.ps1" -CodeLinterPath "%CLT_HOME%\bin\codelinter.bat" -LogDirectory "%CODELINTER_LOG_DIR%" || exit /b 1
 
 echo ==^> build
-call hvigorw.bat assembleHap --no-daemon || exit /b 1
+call "%CLT_HOME%\bin\hvigorw.bat" assembleHap --no-daemon || exit /b 1
 
 echo ==^> gate passed
 exit /b 0

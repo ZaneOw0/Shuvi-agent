@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\LocalAIGateway.Core\LocalAIGateway.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Backup\Assets\aigw_backup_crypto.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             TargetPath="runtime-tools\aigw_backup_crypto.py" />
+    <Content Include="UsageData\Assets\aigw_usage_query.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             TargetPath="runtime-tools\aigw_usage_query.py" />
+    <Content Include="Update\Assets\aigw_update_verify.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             TargetPath="runtime-tools\aigw_update_verify.py" />
+  </ItemGroup>
+</Project>

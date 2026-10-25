@@ -1,0 +1,187 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/AlterGo-xzy/Harmony_agent",
+  "commit": "f1771764f129193725a8bccb5da2be6c3604e998",
+  "importedAt": "2026-10-23",
+  "adaptations": [
+    "历史警示与当前文档链接",
+    "相对链接指向固定上游版本",
+    "LF 行尾与单一尾部换行"
+  ],
+  "files": [
+    {
+      "sourcePath": "PROJECT_STATUS.md",
+      "path": "PROJECT_STATUS.md",
+      "sourceSha256": "d9cd6cbdef545f32c6926d9dec9c829edff453b6fc71f3dda50926c35b6b8304",
+      "importedSha256": "bea1a805015e5c1d1c4267e8c0961bedcdab5c6ad0880d528ef73c097a5c2169"
+    },
+    {
+      "sourcePath": "README.md",
+      "path": "README.md",
+      "sourceSha256": "97d7ac517cb4092bf310671b6ca6bf75546620c6fa936aa5788f66ed8c50a89c",
+      "importedSha256": "9e2a3a524f71d94b853c671f5b20b2bcc12100d302a47d36231b7b66ff8c2b22"
+    },
+    {
+      "sourcePath": "docs/AGENT_ARTIFACT_POLICY_LOADER_INTEGRATION.md",
+      "path": "docs/AGENT_ARTIFACT_POLICY_LOADER_INTEGRATION.md",
+      "sourceSha256": "c670e8eb40b3865650e96a4d69ae64dd274a1e68d9a6cae0ea7e0b0336fc0043",
+      "importedSha256": "825b8f3acb16da1279fb99891142e9d44235788df7926d7241efa83fd922fd83"
+    },
+    {
+      "sourcePath": "docs/AGENT_ARTIFACT_REGISTRY_INTEGRATION.md",
+      "path": "docs/AGENT_ARTIFACT_REGISTRY_INTEGRATION.md",
+      "sourceSha256": "44b8efc72d38e7318998d716709dd44d7202357e84311ba11bf75b2f57dcd28e",
+      "importedSha256": "5da5eed1493426e85061213a03dba66eea5d144b8f79ad225da77538bf2d3eae"
+    },
+    {
+      "sourcePath": "docs/AGENT_ASSET_CREDENTIAL_STORE.md",
+      "path": "docs/AGENT_ASSET_CREDENTIAL_STORE.md",
+      "sourceSha256": "7574ae69722a7666b416a0f4f73a21a7f3fad60375fe4e42920bde2b172c65f4",
+      "importedSha256": "891207301064ee24820813844277f60803748b94c0146ab66a4c3d73ef6a7bb1"
+    },
+    {
+      "sourcePath": "docs/AGENT_ENCRYPTED_RDB_CONFIGURATION.md",
+      "path": "docs/AGENT_ENCRYPTED_RDB_CONFIGURATION.md",
+      "sourceSha256": "4cb02bb0951ab9b759b24b2b7649698161b0e165b7f024ec9b275fa3f31f061e",
+      "importedSha256": "a8e20bf9e6bf8a19fba7802b9462555bda34da0d20bb8531205df06f5850526c"
+    },
+    {
+      "sourcePath": "docs/AGENT_MCP_ADAPTER_INTEGRATION.md",
+      "path": "docs/AGENT_MCP_ADAPTER_INTEGRATION.md",
+      "sourceSha256": "6846db9e3a9bfd599ce67860c52720e70d95c5506c183a877e1d6df03ff6fff1",
+      "importedSha256": "ee031c89f5bd30c5c8760d994e5a9749baa18a1287005f91a16397aa7665f953"
+    },
+    {
+      "sourcePath": "docs/AGENT_MEMORY_CONTEXT_INTEGRATION.md",
+      "path": "docs/AGENT_MEMORY_CONTEXT_INTEGRATION.md",
+      "sourceSha256": "e7c58d831958eacbd1e8a65f7bffaf68606dc5f8f121f00eabd85cc5a277ad28",
+      "importedSha256": "5a34f1b118e1c7f385572ba243e88ab38176e8da4cd5bb2c4843a29cd210ab36"
+    },
+    {
+      "sourcePath": "docs/AGENT_MEMORY_DEVICE_ACCEPTANCE.md",
+      "path": "docs/AGENT_MEMORY_DEVICE_ACCEPTANCE.md",
+      "sourceSha256": "5532561e04e990c087047f0da62ed1f41a088884c1d04f26c28c725de26ac434",
+      "importedSha256": "bd41533afe0d0b4f387e022a690e589a710cceb53e4f7fa21d8df065bdcd1801"
+    },
+    {
+      "sourcePath": "docs/AGENT_NATIVE_TOOL_INTEGRATION.md",
+      "path": "docs/AGENT_NATIVE_TOOL_INTEGRATION.md",
+      "sourceSha256": "0bfa0dc176509669d9ef30027f11285243dac203f894bd2155f94640991fba06",
+      "importedSha256": "d93dc77a774679a8d5bd9fb4175e59d517ec63ab20715e0d6d09bd3864a5926c"
+    },
+    {
+      "sourcePath": "docs/AGENT_PLANNER_CANCELLATION.md",
+      "path": "docs/AGENT_PLANNER_CANCELLATION.md",
+      "sourceSha256": "d5599d28cd522111bcda741b85702186a9e41d77555b800e0248db838774e6c0",
+      "importedSha256": "f43b57af623a62f01cbb665524e522be18e0611ae6111108efcd39dafc13a1ec"
+    },
+    {
+      "sourcePath": "docs/AGENT_PROVIDER_CONNECTOR_INTEGRATION.md",
+      "path": "docs/AGENT_PROVIDER_CONNECTOR_INTEGRATION.md",
+      "sourceSha256": "8ea05b4b7e15b6d73cc93222bd6e3bb988fd28b83d47eb816f819038faed893b",
+      "importedSha256": "368ea4ee258e78bdad51dedd32e030d13da070691b854710ba534706925c75f6"
+    },
+    {
+      "sourcePath": "docs/AGENT_RUNTIME_STORAGE_INTEGRATION.md",
+      "path": "docs/AGENT_RUNTIME_STORAGE_INTEGRATION.md",
+      "sourceSha256": "4e6aaae0f5e4ed219c4357e445d58b3fb5eec031debb814d023ed7cb33c006c8",
+      "importedSha256": "db6865e8ebee2cc2e7eb4de143399119859ea1af48e0deb258c8bab8d508d287"
+    },
+    {
+      "sourcePath": "docs/AGENT_SINGLE_HOST_COMPOSITION.md",
+      "path": "docs/AGENT_SINGLE_HOST_COMPOSITION.md",
+      "sourceSha256": "aafea95be10f6c7ab320706b18c85ba415815784853650848ece5e966b0fe47f",
+      "importedSha256": "1b0272623291e97681e9f3ad4a4a9fe6b245e3c011ad5368075591599a501d8f"
+    },
+    {
+      "sourcePath": "docs/AGENT_STORAGE_DEVICE_ACCEPTANCE.md",
+      "path": "docs/AGENT_STORAGE_DEVICE_ACCEPTANCE.md",
+      "sourceSha256": "0227713ead3fe8a6fbb07eb5b1adc315ec33b37d3aa5f8376f287df3dff438e2",
+      "importedSha256": "6d02878ee6ae1e8024313fd1dabcdd6add3272a873873c81f35b4d3f043dabae"
+    },
+    {
+      "sourcePath": "docs/AGENT_TEST_HOST_SIGNING.md",
+      "path": "docs/AGENT_TEST_HOST_SIGNING.md",
+      "sourceSha256": "3d67e5d235e8cfe3feeb75bdb8e08abc6be03394a287175098067cb4d2ba9a68",
+      "importedSha256": "dcbaf9e46a6a38631d465b5864569a350810f005bb0169198b47336dc79ba502"
+    },
+    {
+      "sourcePath": "docs/BACKEND_GAP_AUDIT.md",
+      "path": "docs/BACKEND_GAP_AUDIT.md",
+      "sourceSha256": "c6483f8371fafbea5e7e21b0d936251ab47e3b7cc6be56de7a48c0fd1e072ac4",
+      "importedSha256": "ca25fb410a3ec24657065f8e12676601b3c8f6b396957202dfc1b2ddd72c7c7e"
+    },
+    {
+      "sourcePath": "docs/ENVIRONMENT_IMPACT.md",
+      "path": "docs/ENVIRONMENT_IMPACT.md",
+      "sourceSha256": "0de405f90b8b3a42a14baf2a7d98fae7e084e17caf81eb9c427bd8cf638845c0",
+      "importedSha256": "978cb7e4b81c0e7d011f05cce519bfb34a0eb7055538a2c5ea550fbc74149440"
+    },
+    {
+      "sourcePath": "docs/HARMONY_AGENT_NAMING.md",
+      "path": "docs/HARMONY_AGENT_NAMING.md",
+      "sourceSha256": "8cd926f42eab891233dfa36012ea14b61b9c591af1c3167ce0aec02778c3ac05",
+      "importedSha256": "5685a364c5dd6e069ddf768b59cec96ffbb5bf9828246a8043c63409632a21d7"
+    },
+    {
+      "sourcePath": "docs/HARMONY_AGENT_REMAINING_TASKS_HANDOFF.md",
+      "path": "docs/HARMONY_AGENT_REMAINING_TASKS_HANDOFF.md",
+      "sourceSha256": "1c6c2a3c064d3a3393598930ea48e612b8b93a8af2539abd09831d076425174d",
+      "importedSha256": "c19363549e9b3d26f9c201a95fb8089255e6269408b768e9b4984664c6d89365"
+    },
+    {
+      "sourcePath": "docs/LOCAL_AI_GATEWAY_INTEGRATION.md",
+      "path": "docs/LOCAL_AI_GATEWAY_INTEGRATION.md",
+      "sourceSha256": "4ec22a62df4f1621669744762c82e4f4d722b4ef6d094d9db69f95e4b5ed2de1",
+      "importedSha256": "d332db7672fbd34d565d77cdabc0a4dc98e3044d87878a2e75b9f0df5a6960a8"
+    },
+    {
+      "sourcePath": "docs/MTRouter_TRAINING_REPOSITORY_HANDOFF.md",
+      "path": "docs/MTRouter_TRAINING_REPOSITORY_HANDOFF.md",
+      "sourceSha256": "2c60f146aca5f06a725b6fd23db54002fc0e4683562c33e8d17c9055b9fe9804",
+      "importedSha256": "3b89e7103d568eb36a427c6297f997c0367f7aac4fbffab618303ec71058b29f"
+    },
+    {
+      "sourcePath": "docs/PROTOCOL_IMPLEMENTATION.md",
+      "path": "docs/PROTOCOL_IMPLEMENTATION.md",
+      "sourceSha256": "cdc6642cd95e0764450abc5afefcac9f55a5f4e949853edd078fcb934b056ba5",
+      "importedSha256": "f11f98b70c16b11ff5a846a9da6a0bad8a34a66ed13524af77ded544879db9dd"
+    },
+    {
+      "sourcePath": "docs/SHUVI_WEB_SEARCH_MCP_INTEGRATION.md",
+      "path": "docs/SHUVI_WEB_SEARCH_MCP_INTEGRATION.md",
+      "sourceSha256": "cac3ec4a567ca66aca6bc0fd2a1218f50ecc68acf9062c99f8bfab15910975c6",
+      "importedSha256": "bcf1c4f8a950be9c2645c8bcc5121eab5821cf0f64ba38f706c6d6bd5ee9f827"
+    },
+    {
+      "sourcePath": "docs/TEST_MATRIX.md",
+      "path": "docs/TEST_MATRIX.md",
+      "sourceSha256": "d375cb36a5b24cac7f5d34fbf06e4c7e1ed49ec6b82bb408d08b7ee7d2d01f2f",
+      "importedSha256": "4da88d7564222f1ddd69ae76dd836cc0d79df6e2532497f2d89d9a1c4ad0859f"
+    },
+    {
+      "sourcePath": "docs/architecture/ADR-016-T53-协作策略异步准备.md",
+      "path": "docs/architecture/ADR-016-T53-协作策略异步准备.md",
+      "sourceSha256": "a4c47857e9062638eeba6e3f7f9fe759cd8633a9c34d98c56b62a580c56cf21c",
+      "importedSha256": "0ad831eedc88b63481dc47f10dacb794ae33e457c47cd6c13cc3bd2c7c572714"
+    },
+    {
+      "sourcePath": "docs/architecture/HARMONY_AGENT_ARCHITECTURE.md",
+      "path": "docs/architecture/HARMONY_AGENT_ARCHITECTURE.md",
+      "sourceSha256": "e4f3d70063f32c3a36025f3d2429f9dfcbe0073313a9a96a2a9cfb98870767e1",
+      "importedSha256": "6116314888fd1c1c405cb1170710c63d7e58ef5066388018133b58f1b54e7ad1"
+    },
+    {
+      "sourcePath": "docs/architecture/HARMONY_AGENT_DEVELOPMENT_MODULES.md",
+      "path": "docs/architecture/HARMONY_AGENT_DEVELOPMENT_MODULES.md",
+      "sourceSha256": "5cab2851e039663b0bbd9b1268f5071f77384e506a157ec808e1629619b129e6",
+      "importedSha256": "ec8264903f7f868f73b45a4f0763e7ef3b748d506cf27358a32485ecb0913331"
+    },
+    {
+      "sourcePath": "docs/architecture/T53-协作策略接入与验收.md",
+      "path": "docs/architecture/T53-协作策略接入与验收.md",
+      "sourceSha256": "42a11e5f2f3d43d1d2a4c23da9c7588666e2b18d635fe29f2a7713fbbdd9b457",
+      "importedSha256": "81496b114acf815a891482609e1833ac72d20e030dc4a190673d0e92b312a17b"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "@harmony_agent/agent-core",
+  "version": "0.2.0",
+  "description": "Deterministic workflow kernel for the harmony_agent agent runtime",
+  "main": "Index.ets",
+  "author": "harmony_agent",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@harmony_agent/agent-contracts": "file:../agent_contracts"
+  }
+}

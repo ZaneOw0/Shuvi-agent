@@ -1,0 +1,41 @@
+{
+  "version": "shuvi-corpus-v1",
+  "policy": "Frozen offline corpora for the host tests. Committed on purpose (sanitized + hash-pinned); never fetched or generated at test time. Only scripts/import-corpus-fixtures.cjs may update this file.",
+  "entries": [
+    {
+      "id": "m2-user-pdf",
+      "file": "m2-user-pdf.pdf",
+      "acceptNames": [
+        "02_第02章_模型评估与选择.pdf",
+        "m2-user-pdf.pdf"
+      ],
+      "purpose": "原始 PDF；result-pages-offline 校验页面绑定、证据定位与原始哈希",
+      "usedBy": [
+        "entry/src/test/result-pages-offline.cjs"
+      ],
+      "provenance": "RAG 线提供的授权材料，脱敏后随仓库分发（授权与脱敏记录见 README）",
+      "status": "committed",
+      "bytes": 8656018,
+      "sha256": "7f959de85fdab10b15e2aada044d9f1fbd75dbc90b2fabfca79eb9ecb4b3df3a",
+      "sanitization": "bytes unchanged: only metadata is Producer=pypdf (software identifier, no personal data); original bytes keep the historical sha256 7f959de8...; 30 pages"
+    },
+    {
+      "id": "m2-result-zip",
+      "file": "m2-result-analysis.zip",
+      "acceptNames": [
+        "result-m2-7eaa150e269374313fd776f12a2ae9fa.zip",
+        "m2-result-analysis.zip"
+      ],
+      "purpose": "MinerU 解析结果 ZIP；pdf-offline / result-pages 校验 ZIP 边界、CRC、成员与归一化",
+      "usedBy": [
+        "entry/src/test/pdf-offline-host-cases.cjs",
+        "entry/src/test/result-pages-offline.cjs"
+      ],
+      "provenance": "RAG 线提供的授权材料，脱敏后随仓库分发（授权与脱敏记录见 README）",
+      "status": "committed",
+      "bytes": 8461084,
+      "sha256": "548162c5bb0f6a93d0fe76d4a5a17399f87b0a882c84d4510e7c2ead5fc12a05",
+      "sanitization": "scan clean: 70 members, no email/user-path/token/tenant hits; member names are MinerU output paths only"
+    }
+  ]
+}

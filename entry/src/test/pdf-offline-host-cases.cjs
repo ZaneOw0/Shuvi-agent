@@ -1,5 +1,5 @@
 'use strict';
-// Authorized ignored ZIP only. Never logs member names, document text or paths.
+// Frozen corpus fixture, committed with a pinned hash. Never logs member names, document text or paths.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -11,13 +11,13 @@ module.exports = (outputRoot, project) => {
   const { MineruPdfNormalizer } = require(path.join(outputRoot,'entry/src/main/ets/knowledge/pipeline/MineruPdfNormalizer.js'));
   const codec = require(path.join(outputRoot,'entry/src/main/ets/knowledge/pipeline/PdfSnapshotCodec.js'));
   const { BoundedDocumentJson } = require(path.join(outputRoot,'entry/src/main/ets/knowledge/pipeline/BoundedDocumentJson.js'));
-  const filename = path.join(project,'.cache/m2-result-analysis/result-m2-7eaa150e269374313fd776f12a2ae9fa.zip');
+  const corpus = require('./corpus-fixtures.cjs').requireCorpus('m2-result-zip');
+  const filename = corpus.file;
   const table = Array.from({length:256},(_,n) => { for (let bit=0;bit<8;bit++) n=(n&1)?0xedb88320^(n>>>1):n>>>1; return n>>>0; });
   const crc32 = bytes => { let crc=0xffffffff; for (const byte of bytes) crc=table[(crc^byte)&255]^(crc>>>8); return (crc^0xffffffff)>>>0; };
   let archive;
   async function inspect() {
-    const stat = fs.lstatSync(filename); assert(stat.isFile() && !stat.isSymbolicLink()); assert.equal(stat.size,8461084);
-    const zip = fs.readFileSync(filename); assert.equal(crypto.createHash('sha256').update(zip).digest('hex'),'548162c5bb0f6a93d0fe76d4a5a17399f87b0a882c84d4510e7c2ead5fc12a05');
+    const zip = corpus.bytes;
     const reader = { length:zip.length, async read(offset,length) { assert(length<=1048576); return new Uint8Array(zip.subarray(offset,offset+length)); }, async close() {} };
     const manifest = await policy.pdfInspectZip(reader,new domain.KnowledgeCancellation());
     let expanded=0; const outputs=new Map();

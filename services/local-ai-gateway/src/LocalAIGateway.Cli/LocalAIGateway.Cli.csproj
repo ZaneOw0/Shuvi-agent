@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>aigw</AssemblyName>
+    <RootNamespace>LocalAIGateway.Cli</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+    <ProjectReference Include="..\LocalAIGateway.Core\LocalAIGateway.Core.csproj" />
+    <ProjectReference Include="..\LocalAIGateway.Launcher\LocalAIGateway.Launcher.csproj" />
+    <ProjectReference Include="..\LocalAIGateway.Windows\LocalAIGateway.Windows.csproj" />
+  </ItemGroup>
+</Project>
