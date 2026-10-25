@@ -108,22 +108,63 @@ test('repository pins LF for text and CRLF only for batch scripts', () => {
   assert.ok(batRule > globalRule, '*.bat must override the global rule with eol=crlf');
 });
 
-test('no tracked text file is checked out with CRLF (batch scripts excepted)', t => {
+// Files that `.gitattributes` pins to `eol=lf` are the ones whose bytes tests depend on
+// (frozen fixtures, hashed sources, gold sets). The global `* text=auto eol=lf` rule is not a
+// pin: it only guarantees LF on a fresh checkout, whereas a long-lived CI worktree may still
+// hold pre-pin CRLF bytes for unrelated files.
+function lfPinMatchers(attributes) {
+  const matchers = [];
+  for (const line of attributes.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const parts = trimmed.split(/\s+/);
+    if (parts.length < 2 || parts[0] === '*') continue;
+    if (!parts.includes('eol=lf')) continue;
+    const escaped = parts[0].replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*');
+    matchers.push({ pattern: parts[0], regex: new RegExp('^' + escaped + '$') });
+  }
+  return matchers;
+}
+
+test('attribute matcher understands wildcard and literal LF pins', () => {
+  const matchers = lfPinMatchers([
+    '* text=auto eol=lf',
+    '*.cmd text eol=crlf',
+    '*.md text eol=lf',
+    'entry/src/test/fixtures/*.txt text eol=lf',
+    'oh-package.json5 text eol=lf'
+  ].join('\n'));
+  const matches = file => matchers.some(m => m.regex.test(file));
+  assert.equal(matchers.length, 3);
+  assert.equal(matches('LICENSE.md'), true);
+  assert.equal(matches('entry/src/test/fixtures/apache-license-2.0.txt'), true);
+  assert.equal(matches('entry/src/test/fixtures/corpus/manifest.json'), false);
+  assert.equal(matches('oh-package.json5'), true);
+  assert.equal(matches('scripts/ci-windows.cmd'), false);
+});
+
+test('files pinned to eol=lf are actually checked out as LF', t => {
+  const matchers = lfPinMatchers(fs.readFileSync(path.join(projectRoot, '.gitattributes'), 'utf8'));
+  assert.ok(matchers.length >= 5, 'expected several explicit eol=lf pins');
   let files;
   try {
     files = cp.execFileSync('git', ['ls-files', '-z'], { cwd: projectRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
       .split('\0').filter(Boolean);
   } catch {
-    t.skip('git unavailable; the CRLF invariant is enforced by CI checkout instead');
+    t.skip('git unavailable; the LF pin invariant is enforced by the checkout instead');
     return;
   }
   const offenders = [];
+  let checked = 0;
   for (const file of files) {
-    if (/\.(?:cmd|bat)$/i.test(file)) continue;
+    const posix = file.replace(/\\/g, '/');
+    if (!matchers.some(m => m.regex.test(posix))) continue;
     let bytes;
     try { bytes = fs.readFileSync(path.join(projectRoot, file)); } catch { continue; }
     if (bytes.includes(0)) continue; // binary fixture, pinned by bytes
-    if (bytes.includes(Buffer.from('\r\n'))) offenders.push(file.replace(/\\/g, '/'));
+    checked++;
+    if (bytes.includes(Buffer.from('\r\n'))) offenders.push(posix);
   }
+  assert.ok(checked > 0, 'expected at least one pinned file to be checked');
   assert.deepEqual(offenders, []);
 });
