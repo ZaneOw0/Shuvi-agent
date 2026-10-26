@@ -32,11 +32,11 @@ const allowed = [
   ,'infra/ParsedPublicationBudget'
   ,'ui/ParsedDocumentView'
   ,'domain/UnifiedProcessingPorts','domain/UnifiedEmbeddingPorts','pipeline/VisionPolicy','pipeline/UnifiedTextPolicy','pipeline/UnifiedProcessingCodec',
-  'application/ImageKnowledgeService','application/UnifiedProcessingQueue','application/UnifiedEmbeddingService','application/UnifiedSettingsService',
+  'application/ImageKnowledgeService','application/UnifiedProcessingQueue','application/UnifiedEmbeddingService','application/UnifiedSettingsService','application/EmbeddingService',
   'infra/UnifiedVectorRepository','pipeline/EmbeddingBasisPolicy','pipeline/EmbeddingPolicy','pipeline/EmbeddingSpacePolicy',
   'infra/VisionCredentialStore','infra/VisionTransportAdapter','infra/EmbeddingCredentialStore','infra/EmbeddingTransportAdapter',
   'infra/EmbeddingTokenAdapter','infra/EmbeddingTokenCounter','infra/EmbeddingCountWorker'
-  ,'ui/VisionSettingsView','ui/ImageKnowledgeView'
+  ,'ui/VisionSettingsView','ui/ImageKnowledgeView','ui/EmbeddingSettingsView'
   ,'infra/VectorRdbRepository','infra/KnowledgeCapabilityAudit'
   ,'domain/ParsedMigrationModels','pipeline/ParsedMigrationCodec','infra/ParsedMigrationStore','infra/LegacyParsedDocumentReader','infra/PdfLegacySnapshotFiles','application/ParsedDocumentMigrationService','ui/KnowledgeMigrationView'
   ,'domain/UnifiedQueryModels','domain/UnifiedQueryPorts','infra/UnifiedQueryRepository','application/UnifiedQueryService','application/KnowledgeQuerySession','infra/UnifiedKnowledgeHistoryRepository','pipeline/UnifiedHistoryCodec',
@@ -59,7 +59,7 @@ exports.changedEts = [
   'application/ParsedDocumentIngestionService','application/PdfIngestionService','application/ImageIngestionService','domain/KnowledgePorts',
   'application/DocumentParseService','ui/ParsedDocumentView','infra/ParsedPublicationBudget','infra/KnowledgePublicationBudget','infra/ImageStoreLayout','infra/DocxStoreLayout'
   ,'domain/UnifiedProcessingPorts','domain/UnifiedEmbeddingPorts','pipeline/VisionPolicy','pipeline/UnifiedTextPolicy','pipeline/UnifiedProcessingCodec',
-  'application/ImageKnowledgeService','application/UnifiedProcessingQueue','application/UnifiedEmbeddingService','application/UnifiedSettingsService',
+  'application/ImageKnowledgeService','application/UnifiedProcessingQueue','application/UnifiedEmbeddingService','application/UnifiedSettingsService','application/EmbeddingService',
   'infra/UnifiedVectorRepository','pipeline/EmbeddingBasisPolicy','infra/VisionCredentialStore','infra/VisionTransportAdapter',
   'infra/EmbeddingTransportAdapter','infra/EmbeddingTokenAdapter','infra/VectorRdbRepository','domain/EmbeddingModels',
   'ui/VisionSettingsView','ui/ImageKnowledgeView','ui/EmbeddingSettingsView',
@@ -128,12 +128,12 @@ exports.harness = () => {
     if (!allowed.includes(relative) && file!==path.join(root,'../components/Theme.ets')) throw Error('UPD_ALLOWLIST:'+relative);
     if (cache.has(file)) return cache.get(file).exports;
     const mod = new Module(file,module); mod.filename=file; cache.set(file,mod);
-    mod.require = id => { if (kits.has(id)) return kits.get(id); if(relative==='ui/UnifiedKnowledgeView' && id==='./KnowledgeResultCard')return {}; if (id.startsWith('.')) return load(path.resolve(path.dirname(file),id+'.ets')); throw Error('UPD_IMPORT_DENIED'); };
+    mod.require = id => { if (kits.has(id)) return kits.get(id); if(relative==='ui/UnifiedKnowledgeView' && id==='./KnowledgeResultCard')return {}; if(relative==='ui/EmbeddingSettingsView' && id==='../infra/EmbeddingPublicAudit')return {embeddingPublicAudit:async()=>{throw Error('HostPublicAuditForbidden');}}; if (id.startsWith('.')) return load(path.resolve(path.dirname(file),id+'.ets')); throw Error('UPD_IMPORT_DENIED'); };
     let source=readTextLf(file);if(relative==='ui/ParsedDocumentView'){
       const start=source.indexOf('\n  build() {'),end=source.indexOf('\nclass ParsedViewParseListener');if(start<0||end<0)throw Error('UPD_UI_METHOD_SHAPE');
       source=(source.slice(0,start)+'\n}\n'+source.slice(end)).replace('@Component\nexport struct ParsedDocumentView','export class ParsedDocumentView').replace(/@(State|Prop)(?:\s+@Watch\('[^']+'\))?\s+/g,'');
     }
-    if(relative==='ui/DocumentParseView'||relative==='ui/VisionSettingsView'||relative==='ui/ImageKnowledgeView'||relative==='ui/KnowledgeMigrationView'||relative==='ui/UnifiedKnowledgeView'){
+    if(relative==='ui/DocumentParseView'||relative==='ui/VisionSettingsView'||relative==='ui/ImageKnowledgeView'||relative==='ui/KnowledgeMigrationView'||relative==='ui/UnifiedKnowledgeView'||relative==='ui/EmbeddingSettingsView'){
       const name=relative.split('/').pop(),start=source.indexOf('\n  build() {');if(start<0)throw Error('UPD_UI_METHOD_SHAPE');
       source=(source.slice(0,start)+'\n}').replace('@Component\nexport struct '+name,'export class '+name).replace(/@(State|Prop|Link)(?:\s+@Watch\('[^']+'\))?\s+/g,'');
     }

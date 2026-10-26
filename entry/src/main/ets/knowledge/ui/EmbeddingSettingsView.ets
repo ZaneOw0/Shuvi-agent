@@ -6,6 +6,7 @@ import { embeddingFingerprint } from '../pipeline/EmbeddingPolicy';
 import { embeddingPublicAudit } from '../infra/EmbeddingPublicAudit';
 import { UnifiedSettingsService } from '../application/UnifiedSettingsService';
 import { UnifiedProcessingSettings } from '../domain/UnifiedKnowledgeModels';
+import { embeddingConfigBinding } from '../pipeline/EmbeddingBasisPolicy';
 
 @Component
 export struct EmbeddingSettingsView {
@@ -15,7 +16,27 @@ export struct EmbeddingSettingsView {
   @State unifiedCost: boolean=false;
   @State unifiedBaseline: boolean=false;
   @State unifiedOn: boolean=false;
-  private async saveUnified(): Promise<void> { this.feedbackVisible=true; try { await this.unifiedSettings?.enableEmbedding(!this.unifiedOn,this.unifiedCost,this.unifiedBaseline); this.unifiedOn=(await this.unifiedSettings?.setting('Embedding'))?.enabled ?? false; this.unifiedCost=false; this.unifiedBaseline=false; this.message='自动入库设置已保存'; } catch { this.message='请先确认发送范围与可能费用，并接受当前配置基线'; } }
+  @State unifiedNeedsConfirmation: boolean=false;
+  @State unifiedSaving: boolean=false;
+  private unifiedRefreshEpoch: number=0;
+  private unifiedObservedBinding: string='';
+  private async refreshUnified(): Promise<void> {
+    const epoch: number=++this.unifiedRefreshEpoch;
+    try {
+      const settings: UnifiedProcessingSettings | undefined=await this.unifiedSettings?.setting('Embedding');
+      if (epoch!==this.unifiedRefreshEpoch || settings===undefined) { return; }
+      const matches: boolean=settings.configBinding===embeddingConfigBinding(this.config) && settings.credentialRevision===this.config.credentialRevision && !this.config.mutationPending;
+      this.unifiedOn=settings.enabled && settings.baselineAccepted && matches;
+      this.unifiedNeedsConfirmation=settings.configBinding.length>0 && (!matches || settings.paused && !settings.baselineAccepted);
+    } catch { if (epoch===this.unifiedRefreshEpoch) { this.unifiedOn=false; this.message='自动入库设置读取失败'; } }
+  }
+  private async saveUnified(): Promise<void> {
+    if (this.unifiedSaving || this.busy || this.unifiedSettings===undefined) { return; }
+    this.feedbackVisible=true; this.unifiedSaving=true;
+    try { await this.unifiedSettings.enableEmbedding(!this.unifiedOn,this.unifiedCost,this.unifiedBaseline); await this.refreshUnified(); this.unifiedCost=false; this.unifiedBaseline=false; this.message='自动入库设置已保存'; }
+    catch { this.message='请先确认发送范围与可能费用，并接受当前配置基线'; }
+    finally { this.unifiedSaving=false; }
+  }
   service: EmbeddingService | undefined = undefined;
   onBack: () => void = (): void => {};
   @Prop @Watch('clearSecret') clearEpoch: number = 0;
@@ -30,15 +51,18 @@ export struct EmbeddingSettingsView {
   @State detectionLabel: string = 'Untested';
   private passwordController: TextInputController = new TextInputController();
   private listener: KnowledgeCallbackListener = new KnowledgeCallbackListener((): void => { this.changed(); });
-  aboutToAppear(): void { this.service?.subscribe(this.listener); this.changed(); this.unifiedSettings?.setting('Embedding').then((s: UnifiedProcessingSettings): void=> { this.unifiedOn=s.enabled; }).catch((): void=> { this.message='自动入库设置读取失败'; }); }
-  aboutToDisappear(): void { this.clearSecret(); this.service?.unsubscribe(this.listener); }
+  aboutToAppear(): void { this.service?.subscribe(this.listener); this.changed(); }
+  aboutToDisappear(): void { this.unifiedRefreshEpoch++; this.clearSecret(); this.service?.unsubscribe(this.listener); }
   clearSecret(): void { this.secretInput = ''; this.passwordController.stopEditing(); }
   changed(): void {
     if (this.service === undefined) { this.message = '本机配置服务不可用，未发送请求'; return; }
     this.config = copyEmbeddingConfig(this.service.state.config); this.credentialLabel = this.service.state.credential;
+    const binding: string=embeddingConfigBinding(this.config);
+    if (this.unifiedObservedBinding!==binding) { this.unifiedObservedBinding=binding; this.unifiedCost=false; this.unifiedBaseline=false; }
     this.message = this.service.state.message; this.busy = this.service.state.busy; this.modelRows = this.service.state.models.slice();
     this.detectionLabel = this.detectionText(this.service.state.detection.status, this.service.state.detection.dimension, this.service.state.detection.elapsedMs);
     this.clearSecret();
+    this.refreshUnified();
   }
   private async selectProvider(index: number): Promise<void> {
     this.clearSecret(); this.freeList = false; this.freeProbe = false;
@@ -94,6 +118,7 @@ export struct EmbeddingSettingsView {
       Column({ space: 12 }) {
         Text('自动入库').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
         Text('开启后，新导入资料的正文、图片文字和图片描述会自动准备成可语义搜索的内容。当前使用硅基流动 BGE-M3，可能产生费用。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+        if (this.unifiedNeedsConfirmation) { Text('配置或 Key 已变化，自动入库已暂停。请重新确认当前配置、发送范围与可能费用；已完成内容保留。').fontColor(Theme.amber).fontSize(13).lineHeight(21).width('100%').id('upd-embedding-config-changed') }
         Row({ space: 8 }) {
           Checkbox().selectedColor(Theme.accent).id('upd-embedding-cost').select(this.unifiedCost).onChange((v: boolean): void=> { this.unifiedCost=v; })
           Text('我确认上述内容会自动发送，并接受可能费用').fontColor(Theme.ink).fontSize(13).layoutWeight(1)
@@ -102,7 +127,7 @@ export struct EmbeddingSettingsView {
           Checkbox().selectedColor(Theme.accent).id('upd-embedding-baseline').select(this.unifiedBaseline).onChange((v: boolean): void=> { this.unifiedBaseline=v; })
           Text('接受当前配置作为本次处理的基准（不代表服务商用量保证）').fontColor(Theme.ink).fontSize(13).layoutWeight(1)
         }.width('100%')
-        Button(this.unifiedOn?'关闭自动入库':'开启自动入库').fontSize(14).fontColor(this.unifiedOn ? Theme.accent : Color.White).backgroundColor(this.unifiedOn ? Theme.soft : Theme.accent).borderRadius(12).constraintSize({ minHeight: 46 }).width('100%').id('upd-embedding-enable').enabled(this.unifiedSettings!==undefined && (this.unifiedOn || this.unifiedCost && this.unifiedBaseline)).onClick((): void=> { this.saveUnified(); })
+        Button(this.unifiedOn?'关闭自动入库':this.unifiedNeedsConfirmation?'重新确认并恢复自动入库':'开启自动入库').fontSize(14).fontColor(this.unifiedOn ? Theme.accent : Color.White).backgroundColor(this.unifiedOn ? Theme.soft : Theme.accent).borderRadius(12).constraintSize({ minHeight: 46 }).width('100%').id('upd-embedding-enable').enabled(this.unifiedSettings!==undefined && !this.busy && !this.unifiedSaving && (this.unifiedOn || this.unifiedCost && this.unifiedBaseline)).onClick((): void=> { this.saveUnified(); })
       }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
       Column({ space: 12 }) {
         Row({ space: 10 }) {

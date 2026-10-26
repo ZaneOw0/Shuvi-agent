@@ -165,6 +165,7 @@ export class KnowledgeAssembly {
     this.unifiedEmbedding=new UnifiedEmbeddingService(this.unified,this.unifiedVectors,counter,transport,unifiedConfig,new KnowledgePlatformIdentity());
     this.unifiedQueue=new UnifiedProcessingQueue(this.unified,this.unified,this.unifiedAssets,new KnowledgePlatformIdentity(),this.imageKnowledge,this.unifiedEmbedding);
     this.unifiedSettings=new UnifiedSettingsService(this.unified,visionCredential,unifiedConfig,this.unifiedQueue);
+    this.embedding.attachConfigInvalidation(async (): Promise<void>=> { await this.unifiedSettings.invalidateEmbedding(); });
     const queryRepository: UnifiedQueryRepository=new UnifiedQueryRepository(this.host,this.unified,this.vectors,unifiedConfig,new KnowledgePlatformIdentity());
     this.sourceRegistry.attachUnifiedAdmission(queryRepository); transport.attachUnifiedQuery(counter,this.sourceRegistry);
     const queryEngine: UnifiedQueryService=new UnifiedQueryService(queryRepository,queryRepository,this.unified,this.vectors,unifiedConfig,counter,transport,new KnowledgePlatformIdentity());
@@ -227,7 +228,7 @@ export class KnowledgeAssembly {
     if (this.repository.ready()) { for (const document of await this.repository.list()) { if (!document.tombstone && document.activeVectorGeneration.length > 0) { try { await this.workflow.restoreActive(document.id); } catch { this.extensionMessage = '关键词可用；活动向量读回或镜像恢复未确认，向量路保持降级'; } } } }
     if (this.images.ready()) { for (const document of await this.images.list()) { if (!document.tombstone && document.chunkCount > 0) { try { await this.workflow.restoreActive(document.id); } catch { this.extensionMessage = '图片关键词保留；图片向量读回未确认'; } } } }
     if (this.docx.ready()) { for (const document of await this.docx.list()) { if (!document.tombstone && document.chunkCount > 0) { try { await this.workflow.restoreActive(document.id); } catch { this.extensionMessage = 'DOCX关键词保留；向量镜像读回未确认'; } } } }
-    if (this.unified.ready()) { try { await this.unifiedLifecycle.sync(); await this.unifiedQueue.initialize(); } catch { this.unifiedMessage='增强队列恢复失败；正文保留，可重试'; } try { await this.unifiedHistory.recoverPending(); } catch { this.unifiedMessage+='；历史回执恢复待重试，检索不受阻'; } }
+    if (this.unified.ready()) { try { await this.unifiedSettings.reconcileEmbeddingConfig(); await this.unifiedLifecycle.sync(); await this.unifiedQueue.initialize(); } catch { this.unifiedMessage='增强队列恢复失败；正文保留，可重试'; } try { await this.unifiedHistory.recoverPending(); } catch { this.unifiedMessage+='；历史回执恢复待重试，检索不受阻'; } }
   }
   private localFailure(error: Object): string {
     if (error instanceof DocxFailure || error instanceof KnowledgeFailure || error instanceof ImageKnowledgeFailure) {

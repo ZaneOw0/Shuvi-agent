@@ -135,6 +135,7 @@ struct Index {
   @State parseOpen: boolean = false;
   @State parseSettings: boolean = false;
   @State embeddingOpen: boolean = false;
+  @State embeddingOpening: boolean = false;
   @State pdfIngestionOpen: boolean = false;
   private pdfIngestionService: PdfIngestionService | undefined = undefined;
   private unifiedSearchService: KnowledgeSearchService | undefined = undefined;
@@ -433,12 +434,16 @@ struct Index {
   }
   private closeEmbedding(): void { this.embeddingClearEpoch++; this.embeddingService?.clearInput(); this.embeddingOpen = false; this.scroller.scrollEdge(Edge.Top); }
   private async openEmbedding(): Promise<void> {
-    this.embeddingOpen = true; this.scroller.scrollEdge(Edge.Top);
-    if (this.sharedKnowledge !== undefined) { this.embeddingService = this.sharedKnowledge.repository.ready() ? this.sharedKnowledge.embedding : undefined; return; }
-    const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
-    const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
-    try { await assembly.acquire(); this.embeddingService = assembly.repository.ready() ? assembly.embedding : undefined; }
+    if (this.embeddingOpening) { return; }
+    this.embeddingOpen = true; this.embeddingOpening = true; this.scroller.scrollEdge(Edge.Top);
+    try {
+      if (this.sharedKnowledge !== undefined) { this.embeddingService = this.sharedKnowledge.repository.ready() ? this.sharedKnowledge.embedding : undefined; return; }
+      const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
+      const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
+      await assembly.acquire(); this.embeddingService = assembly.repository.ready() ? assembly.embedding : undefined;
+    }
     catch { this.sharedKnowledge = undefined; this.embeddingService = undefined; }
+    finally { this.embeddingOpening = false; }
   }
   private async preparePdf(resultId: string): Promise<void> {
     await this.consumeParsed(resultId);
@@ -1268,7 +1273,10 @@ struct Index {
                PdfIngestionView({ service: this.pdfIngestionService, lifecycle: this.derivedLifecycle, onBack: (): void => { this.pdfIngestionOpen = false; } })
              } else { Text('PDF 准备服务尚未就绪，原件和 ZIP 保留').width('100%') }
            } else if (this.embeddingOpen) {
-             if (this.embeddingService !== undefined) {
+             if (this.embeddingOpening) {
+               LoadingProgress().width(32).height(32)
+               Text('正在读取嵌入配置…').width('100%')
+             } else if (this.embeddingService !== undefined) {
                 EmbeddingSettingsView({ service: this.embeddingService, unifiedSettings:this.sharedKnowledge?.unifiedSettings, clearEpoch: this.embeddingClearEpoch, onBack: (): void => { this.closeEmbedding(); } })
              } else {
                Text('本机配置服务尚未就绪或不可用，未发送请求').width('100%')

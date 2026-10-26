@@ -29,6 +29,8 @@ export function copyEmbeddingConfig(source: EmbeddingConfig): EmbeddingConfig {
   config.mutationPending = source.mutationPending; config.contractVersion = source.contractVersion; return config;
 }
 export class EmbeddingService {
+  private configInvalidation: (() => Promise<void>) | undefined;
+  attachConfigInvalidation(callback: () => Promise<void>): void { this.configInvalidation = callback; }
   private workflow: EmbeddingWorkflow | undefined;
   attachWorkflow(workflow: EmbeddingWorkflow): void { this.workflow = workflow; workflow.subscribe(new KnowledgeCallbackListener((): void => { this.emit(); })); }
   async preparePinnedModel(): Promise<void> { const config = copyEmbeddingConfig(this.state.config); config.modelId = EmbeddingPinnedBasis.model; await this.saveConfiguration(config); }
@@ -84,6 +86,8 @@ export class EmbeddingService {
     this.state.message = existing?.mutationPending ? '配置变更未确认，须重新保存并检测；未外发' : '配置未检测；语料与问题外发关闭'; this.emit();
   }
   private async invalidate(): Promise<void> {
+    const callback: (() => Promise<void>) | undefined = this.configInvalidation;
+    if (callback !== undefined) { await callback(); }
     this.pause(); await this.repository.revokeGrants(embeddingFingerprint(this.state.config));
     this.state.models = []; this.state.detection = new EmbeddingDetection(); this.state.detection.status = EmbeddingDetectionStatus.Stale;
   }
@@ -91,6 +95,10 @@ export class EmbeddingService {
     if (this.state.busy || input.provider !== this.state.config.provider) { return; }
     embeddingValidateConfig(input); this.state.busy = true;
     try {
+      const current: EmbeddingConfig = this.state.config;
+      if (!current.mutationPending && input.provider === current.provider && input.region === current.region && input.access === current.access && input.workspaceId === current.workspaceId && input.modelId === current.modelId && input.modelSource === current.modelSource && input.contractVersion === current.contractVersion) {
+        this.state.message = '配置未变化，已保留当前检测与自动入库确认'; return;
+      }
       await this.invalidate(); const config: EmbeddingConfig = copyEmbeddingConfig(input);
       config.revision = this.state.config.revision + 1; config.credentialRevision = this.state.config.credentialRevision;
       config.mutationPending = false; await this.repository.saveConfig(config); this.state.config = config;
