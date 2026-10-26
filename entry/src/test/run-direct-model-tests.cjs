@@ -2377,6 +2377,163 @@ test('knowledge answer parser enforces schema, citation bounds and markers', () 
   assert.equal(knowledgeAnswerSupport.parseKnowledgeModelInsufficient('{"answer":"资料中没有足够依据","citations":[1]}'), undefined);
 });
 
+const semanticRagAdapterModule = load(path.join(root,
+  'entry/src/main/ets/knowledge/application/KnowledgeSemanticRuntimeSearchAdapter.ets'), {
+  './KnowledgeQuerySession': { KnowledgeQuerySession: class {} }
+});
+function runtimeRagResult() {
+  return { schemaVersion:'1.0', provider:'shuvi-local-knowledge', query:'same query', route:'local-rag',
+    citations:[knowledgeCitation()] };
+}
+function runtimeRagPort(options = {}) {
+  const trace = { opened:0, closed:0, searched:0, cancel:undefined };
+  return { trace, async open() { trace.opened++; }, async close() { trace.closed++; },
+    async readiness() { return { ready:!options.notReady, code:options.notReady?'EmbeddingSettingsRequired':'Ready',
+      message:options.notReady?'Embedding 未就绪':'知识库 RAG 已就绪。' }; },
+    async search(request, cancel) {
+      trace.searched++; trace.cancel = cancel;
+      if (options.gate) await options.gate.promise;
+      cancel.check(); const result = runtimeRagResult(); result.query = request.query; return result;
+    } };
+}
+test('prepared RAG enables only after readiness, retrieves before one PERSONAL answer and keeps the key private', async () => {
+  const h = liveKnowledgeHarness(); const rag = runtimeRagPort();
+  const key = new TextEncoder().encode('test-only-key');
+  await h.ui.prepareRag(rag, h.answerFactory, key);
+  try {
+    assert(key.every(value => value === 0)); assert.equal(rag.trace.opened, 1);
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(h.ui.snapshot().consent, false);
+    assert.equal(await h.ui.send('same query'), false); assert.equal(rag.trace.searched, 0); assert.equal(h.trace.models, 0);
+    const readiness = await h.ui.activateRag(); assert.equal(readiness.ready, true); assert.equal(h.ui.snapshot().consent, true);
+    assert.equal(await h.ui.send('same query'), true); await waitKnowledge(h.ui);
+    assert.equal(rag.trace.searched, 1); assert.equal(h.trace.models, 1); assert.equal(h.ui.snapshot().stage, 'complete');
+    const prompt = h.trace.bodies[0].messages[1].content;
+    for (const forbidden of ['internal-evidence-1','upd-internal-document','generation-internal']) assert(!prompt.includes(forbidden));
+  } finally { await h.ui.stop(); }
+  assert.equal(rag.trace.closed, 1); assert.equal(h.trace.answerClosed, 1);
+});
+test('RAG readiness fails closed without disabling the prepared ordinary-chat peer session', async () => {
+  const h = liveKnowledgeHarness(); const rag = runtimeRagPort({ notReady:true });
+  await h.ui.prepareRag(rag, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    const readiness = await h.ui.activateRag(); assert.equal(readiness.ready, false);
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(h.ui.snapshot().consent, false);
+    assert.equal(await h.ui.send('same query'), false); assert.equal(rag.trace.searched, 0); assert.equal(h.trace.models, 0);
+  } finally { await h.ui.stop(); }
+});
+test('turning RAG off preserves its prepared answer session while blocking further knowledge queries', async () => {
+  const h = liveKnowledgeHarness(); const rag = runtimeRagPort();
+  await h.ui.prepareRag(rag, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); await h.ui.deactivateRag();
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(h.ui.snapshot().consent, false);
+    assert.equal(rag.trace.closed, 0); assert.equal(await h.ui.send('same query'), false);
+    await h.ui.activateRag(); assert.equal(h.ui.snapshot().consent, true);
+  } finally { await h.ui.stop(); }
+});
+test('late RAG readiness cannot re-enable consent after the session is stopped', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness(); const rag = runtimeRagPort();
+  rag.readiness = async () => { await gate.promise; return {ready:true,code:'Ready',message:'知识库 RAG 已就绪。'}; };
+  await h.ui.prepareRag(rag, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  const enabling = h.ui.activateRag(); const stopping = h.ui.stop(); gate.resolve();
+  const readiness = await enabling; await stopping;
+  assert.equal(readiness.ready, false); assert.equal(h.ui.snapshot().consent, false);
+  assert.notEqual(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY);
+});
+test('cancelling retrieval invalidates the exact RAG query and never dispatches DeepSeek', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness(); const rag = runtimeRagPort({ gate });
+  await h.ui.prepareRag(rag, h.answerFactory, new TextEncoder().encode('test-only-key')); await h.ui.activateRag();
+  try {
+    assert.equal(await h.ui.send('same query'), true);
+    for (let i = 0; i < 200 && rag.trace.searched === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    await h.ui.cancelCurrent(); assert.equal(rag.trace.cancel.invalid, true); assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(h.trace.models, 0);
+  } finally { gate.resolve(); await h.ui.stop(); }
+});
+test('semantic Runtime adapter executes local then review then embedding, filters tag-only cards and bounds evidence', async () => {
+  const order = []; let receivedCancel;
+  const direct = { key:'direct-1', kind:'Text', title:'Direct', text:'direct body', documentKey:'doc-1', generation:'gen-1',
+    current:true, reasons:[{route:'BodyDirect'}] };
+  const tagOnly = { key:'tag-1', kind:'Image', title:'Tag', text:'tag text', documentKey:'doc-2', generation:'gen-2',
+    current:true, reasons:[{route:'Tag'}] };
+  const vector = { key:'vector-1', kind:'Text', title:'Vector', text:'vector body', documentKey:'doc-3', generation:'gen-3',
+    current:true, reasons:[{route:'Tag'},{route:'Vector'}] };
+  const session = { state:{ direct:{cards:[direct],error:''}, related:{cards:[tagOnly,vector],error:''}, semanticState:'Complete' },
+    async start(query, archived, cancel) { order.push('local'); assert.equal(query,'same query'); assert.equal(archived,false); receivedCancel=cancel; },
+    async review() { order.push('review'); }, async allowSemantic(consent,cost) { order.push('embedding'); assert(consent && cost); },
+    async close() { order.push('close'); } };
+  const adapter = new semanticRagAdapterModule.KnowledgeSemanticRuntimeSearchAdapter(() => session);
+  const cancel = { invalid:false, check() { if (this.invalid) throw Error('cancelled'); } };
+  const result = await adapter.search({query:'same query',maxResults:5}, cancel);
+  assert.equal(receivedCancel, cancel); assert.deepEqual(order, ['local','review','embedding','close']);
+  assert.equal(result.route, 'local-rag'); assert.equal(result.citations.length, 2);
+  assert.equal(result.citations[0].evidence, 'BodyDirect'); assert.equal(result.citations[1].evidence, 'Vector');
+  assert(!result.citations.some(citation => citation.evidence === 'Tag'));
+});
+test('semantic Runtime adapter fails closed when the exact-query embedding step is unavailable', async () => {
+  const session = { state:{ direct:{cards:[],error:''}, related:{cards:[],error:''}, semanticState:'NoRequest' },
+    async start() {}, async review() {}, async allowSemantic() {}, async close() {} };
+  const adapter = new semanticRagAdapterModule.KnowledgeSemanticRuntimeSearchAdapter(() => session);
+  const cancel = { invalid:false, check() {} };
+  await assert.rejects(adapter.search({query:'same query',maxResults:5}, cancel), /RuntimeRagSemanticUnavailable/);
+});
+test('assistant coordinator consumes one caller key and gives isolated copies to PUBLIC chat and PERSONAL RAG', async () => {
+  const trace = { chatKey:undefined, ragKey:undefined, chatStopped:0, ragStopped:0 }; let chatState = ShuviRuntimeState.IDLE;
+  const fakeKnowledgeSession = { answerContext:{},
+    async prepareRag(_search, _factory, key) { trace.ragKey = key.slice(); key.fill(0); },
+    answerOutcomeRejected() {}, async activateRag() { return {ready:true}; }, async deactivateRag() {},
+    snapshot() { return {lifecycle:ShuviRuntimeState.IDLE}; }, async stop() { trace.ragStopped++; } };
+  const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
+    './ChatRuntimeAssembly': { chatRuntimeFactory() { return {kind:'chat'}; } },
+    './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {kind:'answer'}; } },
+    './RuntimeChatService': { RuntimeChatService:{session:{
+      async start(_factory, key) { trace.chatKey = key.slice(); key.fill(0); chatState=ShuviRuntimeState.READY; },
+      snapshot() { return {lifecycle:chatState}; }, async stop() { trace.chatStopped++; }
+    }}},
+    './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:fakeKnowledgeSession} },
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
+    '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class { constructor(assembly) { this.assembly=assembly; } } }
+  });
+  const key = new TextEncoder().encode('one-session-key');
+  await coordinator.RuntimeAssistantCoordinator.start({}, true, key);
+  assert(key.every(value => value === 0)); assert.deepEqual(trace.chatKey, trace.ragKey);
+  assert.notEqual(trace.chatKey, trace.ragKey); assert.equal(new TextDecoder().decode(trace.chatKey), 'one-session-key');
+  await coordinator.RuntimeAssistantCoordinator.stop(); assert.equal(trace.chatStopped,1); assert.equal(trace.ragStopped,1);
+});
+test('assistant coordinator does not retain or prepare a RAG key when PUBLIC chat startup fails', async () => {
+  let prepared = 0; const fakeKnowledgeSession = { answerContext:{}, snapshot() { return {lifecycle:ShuviRuntimeState.IDLE}; },
+    async prepareRag() { prepared++; }, answerOutcomeRejected() {}, async stop() {} };
+  const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
+    './ChatRuntimeAssembly': { chatRuntimeFactory() { return {}; } },
+    './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {}; } },
+    './RuntimeChatService': { RuntimeChatService:{session:{ async start(_factory,key) { key.fill(0); },
+      snapshot() { return {lifecycle:ShuviRuntimeState.FAILED}; }, async stop() {} }}},
+    './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:fakeKnowledgeSession} },
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
+    '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class {} }
+  });
+  const key = new TextEncoder().encode('rejected-session-key');
+  await coordinator.RuntimeAssistantCoordinator.start({}, true, key);
+  assert(key.every(value => value === 0)); assert.equal(prepared, 0);
+});
+test('assistant coordinator rejects duplicate start without rotating the prepared RAG key', async () => {
+  let chatStarts = 0; let ragPrepares = 0; let ragStops = 0;
+  const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
+    './RuntimeChatService': { RuntimeChatService:{session:{ snapshot() { return {lifecycle:ShuviRuntimeState.READY}; },
+      async start() { chatStarts++; }, async stop() {} }}},
+    './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:{ answerContext:{},
+      snapshot() { return {lifecycle:ShuviRuntimeState.READY}; }, async prepareRag() { ragPrepares++; },
+      answerOutcomeRejected() {}, async stop() { ragStops++; } }}},
+    './ChatRuntimeAssembly': { chatRuntimeFactory() { return {}; } },
+    './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {}; } },
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
+    '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class {} }
+  });
+  const key = new TextEncoder().encode('duplicate-key');
+  await coordinator.RuntimeAssistantCoordinator.start({}, true, key);
+  assert(key.every(value => value === 0)); assert.equal(chatStarts,0); assert.equal(ragPrepares,0); assert.equal(ragStops,0);
+});
+
 
 for (const kind of ['execution', 'memory']) {
   test(`RDB ${kind} insert is awaited and its rejection is propagated`, async () => {

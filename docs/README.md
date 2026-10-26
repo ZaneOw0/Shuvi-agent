@@ -1,11 +1,11 @@
 # Shuvi 文档导航
 
 > 状态：已实现待验收（整合中的索引）。
-> 更新日期：2026-10-24。当前摘要以整合分支 `30bb008` 为准，PR #18 尚为草稿；历史文档不替代当前完成度。
+> 更新日期：2026-10-26。当前摘要以 `feat/agent-grounded-qa` 的检索优先 RAG 接线为准；历史文档不替代当前完成度。
 
 ## 项目规则和当前能力
 
-debug Runtime 单轮对话与授权搜索已接入页面，用户确认主要模拟器交互；知识库本机检索已接入，后端已实现显式同意的 PERSONAL 回答，当前页面仍为仅本机检索、待前端接入，日程仍为 Mock。当前设备直连 DeepSeek，搜索仍依赖电脑 Node 服务。先读 [项目进度](08-项目进度与验收.md) 和 [Agent 架构](architecture/Agent运行时架构.md)，再按功能 spec 核对限制与证据。
+debug Runtime 单轮对话与授权搜索已接入页面；现有知识库开关已接入检索优先 RAG，复用普通对话的一次 DeepSeek Key，并在 Embedding Provider/向量空间就绪后执行本机混合检索与 PERSONAL 回答。日程仍为 Mock。当前设备直连 DeepSeek，搜索仍依赖电脑 Node 服务。先读 [项目进度](08-项目进度与验收.md) 和 [Agent 架构](architecture/Agent运行时架构.md)，再按功能 spec 核对限制与证据。
 
 | 文档 | 用途 |
 |---|---|

@@ -91,9 +91,9 @@ import { NativeAgentRdbOpen } from '../services/model/AgentRdbResources';
 import { RuntimeChatView } from '../services/model/RuntimeChatSession';
 import { RuntimeKnowledgeService } from '../services/model/RuntimeKnowledgeService';
 import { RuntimeKnowledgeView } from '../services/model/RuntimeKnowledgeSession';
-import { knowledgeRuntimeFactory } from '../services/model/KnowledgeRuntimeAssembly';
 import { ShuviRuntimeState } from '../services/model/ShuviRuntimeController';
-import { chatRuntimeFactory } from '../services/model/ChatRuntimeAssembly';
+import { RuntimeAssistantCoordinator } from '../services/model/RuntimeAssistantCoordinator';
+import { KnowledgeRagReadiness } from '../knowledge/domain/KnowledgeRuntimePorts';
 
 @Entry
 @Component
@@ -266,8 +266,7 @@ struct Index {
   private changeTab(index: number): void {
     if (index !== this.tab && this.tab === 0) {
       void RuntimeSearchService.session.stop();
-      void RuntimeKnowledgeService.session.stop();
-      void RuntimeChatService.session.stop().catch((): void => {});
+      void RuntimeAssistantCoordinator.stop().catch((): void => {});
       this.runtimeChat.clearEpoch++;
     }
     this.floatingPlacement.cancelDrag();
@@ -486,7 +485,7 @@ struct Index {
     try {
       const context = this.getUIContext().getHostContext();
       if (context === undefined || !DEBUG || !this.realChatMode || this.searchEnabled || this.knowledgeEnabled || this.tab !== 0) return;
-      await RuntimeChatService.session.start(chatRuntimeFactory(context, DEBUG), key);
+      await RuntimeAssistantCoordinator.start(context, DEBUG, key);
     } finally { key.fill(0); }
   }
 
@@ -494,7 +493,7 @@ struct Index {
     if (this.blocked()) return;
     this.runtimeSwitching = true;
     try {
-      await RuntimeSearchService.session.stop(); await RuntimeKnowledgeService.session.stop(); await RuntimeChatService.session.stop();
+      await RuntimeSearchService.session.stop(); await RuntimeAssistantCoordinator.stop();
       if (!this.alive || this.tab !== 0) return;
       this.resetConversation(); this.searchEnabled = false; this.knowledgeEnabled = false; this.realChatMode = !this.realChatMode;
     } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
@@ -505,7 +504,7 @@ struct Index {
     try {
       const context = this.getUIContext().getHostContext();
       if (context === undefined || !DEBUG || !this.realChatMode || !this.searchEnabled || this.tab !== 0) return;
-      await RuntimeChatService.session.stop(); await RuntimeKnowledgeService.session.stop();
+      await RuntimeAssistantCoordinator.stop();
       if (!this.alive || this.tab !== 0 || !this.searchEnabled || !this.realChatMode) return;
       await RuntimeSearchService.session.start(searchRuntimeFactory(context, DEBUG),
         new ChatRuntimeFactory(new NativeAgentRdbOpen(context), DEBUG, RuntimeSearchService.session.context), key);
@@ -517,28 +516,28 @@ struct Index {
     if (!this.realChatMode) { this.searchEnabled = !this.searchEnabled; return; }
     this.runtimeSwitching = true;
     try {
-      await RuntimeChatService.session.stop(); await RuntimeSearchService.session.stop(); await RuntimeKnowledgeService.session.stop();
+      await RuntimeSearchService.session.stop(); await RuntimeAssistantCoordinator.stop();
       if (this.alive && this.tab === 0) { this.searchEnabled = !this.searchEnabled; this.knowledgeEnabled = false; }
     } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
     finally { this.runtimeSwitching = false; }
   }
 
-  private async startRuntimeKnowledge(): Promise<void> {
-    const context = this.getUIContext().getHostContext();
-    if (context === undefined || !DEBUG || !this.realChatMode || !this.knowledgeEnabled || this.tab !== 0) return;
-    await RuntimeChatService.session.stop(); await RuntimeSearchService.session.stop();
-    if (!this.alive || this.tab !== 0 || !this.knowledgeEnabled || !this.realChatMode) return;
-    await RuntimeKnowledgeService.session.startLocal(knowledgeRuntimeFactory(context, DEBUG,
-      (taskId: string): void => { RuntimeKnowledgeService.session.toolOutcomeRejected(taskId); }));
-  }
-
   private async toggleKnowledge(): Promise<void> {
     if (this.blocked()) return;
-    if (!this.realChatMode) { this.notice('请先打开真实功能', '本机知识库检索不会回退为演示数据。请先切换到真实功能模式。'); return; }
+    if (!this.realChatMode) { this.notice('请先打开真实功能', '知识库 RAG 不会回退为演示数据。请先切换到真实功能模式。'); return; }
     this.runtimeSwitching = true;
     try {
-      await RuntimeChatService.session.stop(); await RuntimeSearchService.session.stop(); await RuntimeKnowledgeService.session.stop();
-      if (this.alive && this.tab === 0) { this.knowledgeEnabled = !this.knowledgeEnabled; this.searchEnabled = false; }
+      if (this.knowledgeEnabled) {
+        await RuntimeAssistantCoordinator.disableKnowledge();
+        if (this.alive && this.tab === 0) { this.knowledgeEnabled = false; }
+        return;
+      }
+      if (this.searchEnabled || this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
+        this.notice('请先启用普通对话', '请先使用同一份 DeepSeek Key 启用普通对话，再开启知识库 RAG。'); return;
+      }
+      const readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge();
+      if (!readiness.ready) { this.notice('知识库 RAG 尚不可用', readiness.message); return; }
+      if (this.alive && this.tab === 0) { this.knowledgeEnabled = true; this.searchEnabled = false; }
     } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
     finally { this.runtimeSwitching = false; }
   }
@@ -552,9 +551,7 @@ struct Index {
           this.runtimeChat.lifecycle !== ShuviRuntimeState.STOPPING)
         .id('runtime-chat-mode').onClick((): void => { void this.switchChatMode(); })
       if (this.realChatMode && this.knowledgeEnabled) {
-        RuntimeKnowledgePanel({ view: this.runtimeKnowledge, onStart: (): void => {
-          void this.startRuntimeKnowledge().catch((): void => {});
-        } })
+        RuntimeKnowledgePanel({ view: this.runtimeKnowledge, onDisable: (): void => { void this.toggleKnowledge(); } })
       } else if (this.realChatMode && this.searchEnabled) {
         RuntimeSearchPanel({ view: this.runtimeSearch, onStart: (key: Uint8Array): void => {
           void this.startRuntimeSearch(key).catch((): void => {});
@@ -569,7 +566,7 @@ struct Index {
         } else if (this.runtimeChat.lifecycle === ShuviRuntimeState.READY || this.runtimeChat.lifecycle === ShuviRuntimeState.STARTING) {
           Button('停止真实对话').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft)
             .constraintSize({ minHeight: 44 }).id('runtime-chat-stop')
-            .onClick((): void => { void RuntimeChatService.session.stop().catch((): void => {}); })
+            .onClick((): void => { void RuntimeAssistantCoordinator.stop().catch((): void => {}); })
         }
       }
     }.width('100%').padding({ bottom: 12 })
@@ -1136,7 +1133,7 @@ struct Index {
             }.borderRadius(22).backgroundColor(Theme.soft).border({ width: 1, color: Theme.line })
               .margin({ right: 4, bottom: 4 }).enabled(!this.blocked()).onClick(() => this.useSample())
               .id('chat-sample').accessibilityText(this.realChatMode ? (this.knowledgeEnabled ?
-                '知识库样例，填入问题，点击发送后只读检索本机资料' : '提问样例，填入公开问题，点击发送才请求模型') :
+                '知识库样例，填入问题，点击发送后执行本机 RAG 检索并由 DeepSeek 整理' : '提问样例，填入公开问题，点击发送才请求模型') :
                 `${this.searchEnabled ? '搜索' : '日程'}样例，填入固定演示文字`)
             Button({ type: ButtonType.Normal }) {
               Row({ space: 4 }) {
@@ -1185,7 +1182,7 @@ struct Index {
       if (this.input.length > 500) {
         Text('最多 500 字，请缩短后发送。').fontSize(12).fontColor(Theme.danger).width('100%')
       }
-      Text(this.realChatMode ? (this.knowledgeEnabled ? '本机知识库 · 直接正文证据 · 不发送外部模型' :
+      Text(this.realChatMode ? (this.knowledgeEnabled ? '知识库 RAG · 问题向量化 · 本机 KNN · DeepSeek 带引用整理' :
         (this.searchEnabled ? '真实搜索 · 逐次授权 · 费用待核对 · 未读取知识库' : '真实模型 · 单轮问答 · 未搜索或读取知识库')) :
         (this.searchEnabled ? '固定样例演示 · 未联网 · 回答非模型生成' : '演示数据 · 重启后重置 · 图片与语音待接入'))
         .fontSize(10).fontColor(Theme.muted)

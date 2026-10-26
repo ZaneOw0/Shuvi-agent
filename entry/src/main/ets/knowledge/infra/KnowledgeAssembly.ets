@@ -55,7 +55,9 @@ import { UnifiedEmbeddingService } from '../application/UnifiedEmbeddingService'
 import { UnifiedProcessingQueue } from '../application/UnifiedProcessingQueue';
 import { UnifiedSettingsService } from '../application/UnifiedSettingsService';
 import { UnifiedEmbeddingConfigPort } from '../domain/UnifiedEmbeddingPorts';
-import { EmbeddingConfig } from '../domain/EmbeddingModels';
+import {
+  EmbeddingConfig, EmbeddingCredentialStatus, EmbeddingDetectionStatus, EmbeddingProvider
+} from '../domain/EmbeddingModels';
 import { LegacyParsedDocumentReader } from './LegacyParsedDocumentReader';
 import { ParsedDocumentMigrationService } from '../application/ParsedDocumentMigrationService';
 import { UnifiedQueryRepository } from './UnifiedQueryRepository';
@@ -64,6 +66,10 @@ import { KnowledgeQuerySession } from '../application/KnowledgeQuerySession';
 import { UnifiedKnowledgeHistoryRepository } from './UnifiedKnowledgeHistoryRepository';
 import { KnowledgeDatabaseAdapter } from '../application/KnowledgeDatabaseAdapter';
 import { KnowledgeRuntimeSearchAdapter } from '../application/KnowledgeRuntimeSearchAdapter';
+import { KnowledgeRagReadiness } from '../domain/KnowledgeRuntimePorts';
+import { UnifiedProcessingSettings } from '../domain/UnifiedKnowledgeModels';
+import { embeddingConfigBinding } from '../pipeline/EmbeddingBasisPolicy';
+import { embeddingFingerprint } from '../pipeline/EmbeddingPolicy';
 
 export { KnowledgePlatformIdentity } from './KnowledgeIdentity';
 class UnifiedAssemblyEmbeddingConfig implements UnifiedEmbeddingConfigPort {
@@ -92,6 +98,9 @@ export class KnowledgeAssembly {
   unifiedHistory: UnifiedKnowledgeHistoryRepository;
   knowledgeDatabase: KnowledgeDatabaseAdapter;
   runtimeSearch: KnowledgeRuntimeSearchAdapter;
+  private runtimeUnifiedConfig: UnifiedAssemblyEmbeddingConfig;
+  private runtimeQueryRepository: UnifiedQueryRepository;
+  private runtimeQueryEngine: UnifiedQueryService;
   unifiedLifecycle: ParsedDocumentLifecycle;
   unifiedMessage: string = '';
   text: TextKnowledgeAssembly;
@@ -166,16 +175,16 @@ export class KnowledgeAssembly {
     const visionCredential: VisionCredentialStore=new VisionCredentialStore();
     this.imageKnowledge=new ImageKnowledgeService(this.unified,this.unifiedAssets,this.unified,new KnowledgePlatformIdentity(),new VisionTransportAdapter(visionCredential,new KnowledgePlatformIdentity()));
     this.unifiedVectors=new UnifiedVectorRepository(this.unified,this.vectors,new KnowledgePlatformIdentity());
-    const unifiedConfig: UnifiedAssemblyEmbeddingConfig=new UnifiedAssemblyEmbeddingConfig(this.embedding);
+    const unifiedConfig: UnifiedAssemblyEmbeddingConfig=new UnifiedAssemblyEmbeddingConfig(this.embedding); this.runtimeUnifiedConfig=unifiedConfig;
     this.unifiedEmbedding=new UnifiedEmbeddingService(this.unified,this.unifiedVectors,counter,transport,unifiedConfig,new KnowledgePlatformIdentity());
     this.unifiedQueue=new UnifiedProcessingQueue(this.unified,this.unified,this.unifiedAssets,new KnowledgePlatformIdentity(),this.imageKnowledge,this.unifiedEmbedding);
     this.unifiedSettings=new UnifiedSettingsService(this.unified,visionCredential,unifiedConfig,this.unifiedQueue);
-    const queryRepository: UnifiedQueryRepository=new UnifiedQueryRepository(this.host,this.unified,this.vectors,unifiedConfig,new KnowledgePlatformIdentity());
+    const queryRepository: UnifiedQueryRepository=new UnifiedQueryRepository(this.host,this.unified,this.vectors,unifiedConfig,new KnowledgePlatformIdentity()); this.runtimeQueryRepository=queryRepository;
     this.runtimeSearch=new KnowledgeRuntimeSearchAdapter(queryRepository,unifiedConfig);
     this.sourceRegistry.attachUnifiedAdmission(queryRepository); transport.attachUnifiedQuery(counter,this.sourceRegistry);
-    const queryEngine: UnifiedQueryService=new UnifiedQueryService(queryRepository,queryRepository,this.unified,this.vectors,unifiedConfig,counter,transport,new KnowledgePlatformIdentity());
+    const queryEngine: UnifiedQueryService=new UnifiedQueryService(queryRepository,queryRepository,this.unified,this.vectors,unifiedConfig,counter,transport,new KnowledgePlatformIdentity()); this.runtimeQueryEngine=queryEngine;
     this.unifiedHistory=new UnifiedKnowledgeHistoryRepository(this.unified,this.unifiedAssets,queryRepository);
-    this.querySession=new KnowledgeQuerySession(queryRepository,queryEngine,unifiedConfig,this.unifiedHistory,new KnowledgePlatformIdentity());
+    this.querySession=this.createQuerySession();
     this.unifiedLifecycle=new ParsedDocumentLifecycle(this.unified,this.unifiedAssets,this.unifiedVectors,(): void=> { this.querySession.invalidate(); },(): void=> { this.changed(); });
     this.unifiedQueue.attachSettled(async (): Promise<void>=> { await this.unifiedLifecycle.sync(); });
     this.unifiedIngestion.attachPublished(async (document: ParsedDocument): Promise<void>=> { await this.unifiedLifecycle.sync(); await this.unifiedQueue.enqueue(document); });
@@ -208,6 +217,41 @@ export class KnowledgeAssembly {
   subscribe(listener: () => void): void { if (this.listeners.indexOf(listener) < 0) { this.listeners.push(listener); } }
   unsubscribe(listener: () => void): void { this.listeners = this.listeners.filter((item: () => void): boolean => item !== listener); }
   changed(): void { for (const listener of this.listeners) { listener(); } }
+  createQuerySession(): KnowledgeQuerySession {
+    return new KnowledgeQuerySession(this.runtimeQueryRepository,this.runtimeQueryEngine,this.runtimeUnifiedConfig,
+      this.unifiedHistory,new KnowledgePlatformIdentity());
+  }
+  async ragReadiness(): Promise<KnowledgeRagReadiness> {
+    const result: KnowledgeRagReadiness=new KnowledgeRagReadiness();
+    if (!this.unified.ready()) { result.code='UnifiedStoreUnavailable'; result.message='知识库统一存储尚未就绪。'; return result; }
+    const config: EmbeddingConfig=this.runtimeUnifiedConfig.currentConfig(); const state=this.embedding.state;
+    if (config.provider!==EmbeddingProvider.SiliconFlow || config.modelId!=='BAAI/bge-m3' || config.mutationPending) {
+      result.code='EmbeddingConfigRequired'; result.message='请先配置并保存 SiliconFlow / BAAI/bge-m3。'; return result;
+    }
+    if (state.credential!==EmbeddingCredentialStatus.Configured) {
+      result.code='EmbeddingCredentialRequired'; result.message='请先配置 Embedding Provider 的 Key。'; return result;
+    }
+    if (state.detection.status!==EmbeddingDetectionStatus.Passed ||
+      state.detection.configFingerprint!==embeddingFingerprint(config) ||
+      state.detection.credentialRevision!==config.credentialRevision ||
+      state.detection.requestedModel!==config.modelId || state.detection.returnedModel!==config.modelId ||
+      state.detection.dimension<1) {
+      result.code='EmbeddingDetectionRequired'; result.message='Embedding Provider 尚未通过当前配置检测。'; return result;
+    }
+    const settings: UnifiedProcessingSettings=await this.unifiedSettings.setting('Embedding');
+    if (!settings.enabled || !settings.automatic || !settings.costAcknowledged || !settings.baselineAccepted ||
+      settings.paused || settings.configBinding!==embeddingConfigBinding(config) || settings.model!==config.modelId ||
+      settings.credentialRevision!==config.credentialRevision) {
+      result.code='EmbeddingSettingsRequired'; result.message='请先开启当前 Embedding 配置的自动入库并确认基线与费用。'; return result;
+    }
+    const cancel: ParsedCancellation=new ParsedCancellation(); const scope=await this.runtimeQueryRepository.capture(config,false,cancel);
+    if (!scope.complete || scope.space===undefined || scope.targets.length===0 ||
+      scope.space.dimension!==state.detection.dimension || scope.space.requestedModel!==config.modelId ||
+      scope.space.returnedModel!==config.modelId) {
+      result.code='VectorKnowledgeRequired'; result.message='当前知识库还没有可用于 RAG 的完整向量数据。'; return result;
+    }
+    result.ready=true; result.code='Ready'; result.message='知识库 RAG 已就绪。'; return result;
+  }
   sourceReadLease(sourceId: string, generation: string): KnowledgeReadLease {
     const lease: KnowledgeReadLease = new KnowledgeReadLease(); lease.id = new KnowledgePlatformIdentity().id(); lease.sourceId = sourceId; lease.generation = generation; lease.sessionId = this.sessionId; return lease;
   }

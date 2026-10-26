@@ -1,33 +1,31 @@
 # 知识库回答 UI 交接契约
 
-> 状态：后端已实现待前端接入。
-> 归属：本文描述的后端接口与状态由 Agent/应用服务维护；`RuntimeKnowledgePanel.ets` 与 `Index.ets` 的页面实现由前端负责。
-> 当前页面状态：仍使用 `RuntimeKnowledgeSession.startLocal()` 的“仅本机检索”路径，不发送外部模型。前端接入本文的完整流程后，才会出现 Key 输入、同意按钮和 DeepSeek 回答。
+> 状态：检索优先 RAG 已接入 debug 首页，待设备验收。
+> 归属：`RuntimeAssistantCoordinator` 负责同一 DeepSeek Key 下的普通聊天与 RAG 会话；知识库仍负责 Embedding 配置、问题向量化、本机 KNN 和证据生命周期。
+> 当前页面状态：普通聊天输入一次 DeepSeek Key；点击现有“知识库”开关即检查并启用 RAG，不新增 Key 输入或逐问题确认控件。
 
 ## 1. 边界
 
-- 前端只调用 `RuntimeKnowledgeService.session` 暴露的方法，不直接调用 Provider、Runtime、RDB、知识库仓储或 `knowledgeAnswerRuntimeFactory` 内部实现。
+- 前端通过 `RuntimeAssistantCoordinator` 启停组合会话，通过 `RuntimeKnowledgeService.session.send(...)` 发送 RAG 问题；不直接调用 Provider、Runtime、RDB 或知识库仓储。
 - 前端不读取、不记录、不持久化 API Key；Key 以 `Uint8Array` 传入后端，后端消费并清零。
-- 前端不自行判断“是否同意外发”；必须把用户的明确同意作为 `start(..., consent=true)` 的前置条件。
+- 用户点击现有“知识库”开关即表示允许当前会话按既有 Embedding 设置处理问题；关闭开关立即撤销新问题的 RAG 使用权，但保留普通聊天会话。
+- Embedding Provider 的 Key 与 DeepSeek Key 是两套凭据：前者继续由知识库设置和 AssetStore 管理，后者只保留在本次 Runtime 会话内。
 - 后端不负责页面布局、视觉样式、动画、无障碍朗读和截图验收；这些由前端负责。
 
 ## 2. 后端入口
 
 ```ts
-const session = RuntimeKnowledgeService.session;
-session.start(
-  knowledgeRuntimeFactory(context, DEBUG, (taskId) => session.toolOutcomeRejected(taskId)),
-  knowledgeAnswerRuntimeFactory(context, DEBUG, session.answerContext,
-    (taskId) => session.answerOutcomeRejected(taskId)),
-  keyBytes,
-  true
-);
+await RuntimeAssistantCoordinator.start(context, DEBUG, keyBytes);
+const readiness = await RuntimeAssistantCoordinator.enableKnowledge();
+if (readiness.ready) {
+  await RuntimeKnowledgeService.session.send(question);
+}
 ```
 
-- `keyBytes`：`Uint8Array`，仅本次会话；后端 `ShuviRuntimeSession.start` 会消费并清零调用方的缓冲区。
-- `consent`：只有用户明确勾选并点击同意按钮后才传 `true`；传 `false` 时后端不启动任何会话。
-- 启用本身不发送模型请求；只有 `send(query)` 会先执行本机检索，再在检索成功后提交 PERSONAL 模型任务。
-- 两个 `onOutcomeRejected` 回调必须按上面的方式接到会话；结果写入失败时后端会立即结束检索/回答并保留本机引用。不要省略回调。
+- `RuntimeAssistantCoordinator.start(...)` 在内存中生成两份隔离副本：普通聊天保持 PUBLIC，知识库回答保持 PERSONAL；调用方缓冲区和临时副本都会清零。
+- `enableKnowledge()` 只做本机就绪检查，不发送问题、不调用 DeepSeek，也不调用 Embedding Provider。
+- `send(query)` 固定先加载本机正文/标签，再对当前问题调用一次已配置的 Embedding Provider，随后执行本机 KNN；只有得到可引用片段后才提交 PERSONAL DeepSeek 回答。
+- `disableKnowledge()` 取消当前 RAG 并撤销新问题许可，但不会停止普通聊天或清除其 Key；`stop()`、退后台、页面销毁才关闭两条会话并清除凭据。
 - 旧页面兼容入口：`startLocal(knowledgeRuntimeFactory(context, DEBUG, (taskId) => session.toolOutcomeRejected(taskId)))`，仅本机检索，不启动模型会话，不需要 Key。
 
 其他方法：
@@ -37,7 +35,9 @@ session.start(
 | `send(query: string): Promise<boolean>` | 新问题。依次执行本机检索和模型回答；同一时间只允许一个任务。 |
 | `retryAnswer(): Promise<void>` | 仅重试模型回答，复用同一证据快照，不重新检索。 |
 | `cancelCurrent(): Promise<void>` | 取消当前检索或模型任务；保留已显示的引用。 |
-| `stop(): Promise<void>` | 停止两个会话、清除同意状态与凭据；已显示的引用保留。 |
+| `activateRag(): Promise<KnowledgeRagReadiness>` | 检查 Provider、检测、设置、向量空间和当前目标；成功后允许 RAG 问题。 |
+| `deactivateRag(): Promise<void>` | 撤销 RAG 许可并取消当前 RAG，不关闭普通聊天。 |
+| `stop(): Promise<void>` | 停止 RAG 回答会话、释放知识库租约并清除凭据；已显示引用保留。 |
 | `clearConversation(): void` | 非忙碌时清空问题、回答和引用。 |
 | `snapshot(): RuntimeKnowledgeView` | 读取当前视图投影；不要直接读内部字段。 |
 | `attach(listener)` / `detach()` | 订阅视图变化；页面离开时 `detach`，后台/销毁由 Ability 调用。 |
@@ -71,27 +71,28 @@ session.start(
 
 ## 4. 页面必须覆盖的内容
 
-1. **Key 输入**：密码输入、关闭自动填充/预览、组件消失时清空本地字符串。
-2. **明确同意**：在启用前完整展示以下范围，并提供复选框 + 明确按钮“同意上述范围并启用”：
+1. **Key 输入**：复用普通聊天现有密码输入；不增加第二个 DeepSeek Key 输入框。
+2. **知识库开关即当前会话许可**：点击现有开关后允许以下固定范围，不再逐问题弹确认：
    - 发送目的地为 DeepSeek API。
    - 发送本次问题。
    - 最多发送 5 条知识片段。
    - 每条最多 800 字符，总计最多 3200 字符。
    - 不发送完整文档、文件路径、数据库标识、`sourceHash`、`generation`、`evidenceId` 或其他内部元数据。
    - DeepSeek 的实际处理、留存和费用以供应商规则为准。
-3. **启用不发送模型请求**：按钮文案和后端行为一致。
+3. **启用不发送请求**：开关只做本机状态检查；点击发送后才调用问题 Embedding，取得证据后才调用 DeepSeek。
 4. **两阶段状态**：分别显示“本机检索”和“模型回答”的当前阶段。
 5. **原始引用常驻**：只要本轮有引用，无论模型成功、失败、取消或停止，都保留编号引用供用户核对。
 6. **回答标识**：模型回答必须标注“DeepSeek 整理回答（依据下方片段，不是原始资料）”，不能与原始片段混同。
 7. **失败与重试**：`stage=answerFailed` 时显示“仅重试回答”；重试不触发检索。
 8. **资料不足**：`stage=insufficient` 时显示“资料中没有足够依据”，保留本机引用，不标记为成功，不显示“仅重试回答”。
-9. **停止/取消**：忙碌时提供取消当前任务；空闲时提供停止会话；停止后必须重新输入 Key 并重新同意才能再次启用。
+9. **停止/取消**：忙碌时取消当前任务；空闲时关闭知识库开关即可返回同一普通聊天会话，不要求重新输入 Key。
 10. **后台/切页**：页面离开、切换标签或 Ability 退后台时停止会话；返回前台不自动重试或恢复旧任务。
 11. **无障碍**：Key 输入、同意复选框、启用/取消/重试按钮均需可读标签和最小 44vp 点击区域。
 
 ## 5. 后端保证
 
 - 普通 PUBLIC 对话未被放宽：普通聊天仍只接受 PUBLIC；知识库回答使用独立 PERSONAL profile、Planner、Adapter 和加密执行库 `shuvi_knowledge_answer_v1.db`。
+- 每个 RAG 问题使用独立 `KnowledgeQuerySession`，不会取消知识库页面的查询；检索顺序固定为本机 Direct/Tag → 当前问题 Embedding → 本机 KNN → 合并去重。
 - 空结果、Tag-only、失效证据、scope 不完整、结果校验失败：不调用模型。
 - 模型输出严格 JSON，校验 `[1]..[N]`、至少一个有效引用、无重复/越界/未声明编号；持久化成功后才显示成功。
 - 无引用且明确说明“资料中没有足够依据”的输出映射为 `insufficient` 非成功状态，不伪造引用、不标记成功。
@@ -102,7 +103,7 @@ session.start(
 
 ## 6. 已知限制
 
-- 当前页面仍是 `startLocal` 的仅本机检索，未接入 Key/同意/模型回答；旧页面忙碌按钮仍调用 `stop()`，完整 UI 应按 §4.8 改为 `cancelCurrent()`。
+- 当前只完成 host 与未签名 HAP 构建验证；尚未用真实 Embedding/DeepSeek 凭据做模拟器或真机端到端验收。
 - 每次启用最多 10 次模型调用（含失败重试）；达到上限后新回答会失败，需要停止会话、重新输入 Key 并重新同意。
 - 回答执行库最多保留 128 个任务；达到上限后新任务失败关闭，不自动清理或覆盖用户记录；后续需要保留/清理方案。
 - `recordOutcome` 拒写会立即结束检索/回答；`saveCheckpoint`/`beforeDispatch` 拒写仍可能等待最长 120 秒 watchdog，后续可补同类回调。
@@ -110,9 +111,9 @@ session.start(
 - 带数字的方括号（例如年份 `[2026]`）会被当作引用并因越界拒绝；这是严格 fail-closed 的已知取舍。
 - 本机工具执行库没有容量上限/保留策略；长期使用需后续清理方案。
 - 宿主测试使用替身网络与数据库，不等同于设备验收。
-- 前端接入后仍需在模拟器/真机验证：同意边界、后台清理、Key 清空、两阶段展示、失败重试、最大字体与读屏。
+- 仍需在模拟器/真机验证：开关边界、后台清理、Key 清空、两阶段展示、失败重试、最大字体与读屏。
 - 不得把后端 host 测试或未签名构建宣称为前端设备验收。
 
 ## 7. 验证依据
 
-后端测试与构建证据见 `specs/09-Runtime普通对话接入.md` 第 8 节和 `docs/08-项目进度与验收.md` 第 1.1 节；前端接入后应单独补充设备日志、包身份和工作区指纹。
+本轮即时验证：`entry/src/test/run-direct-model-tests.cjs` 175/175；`entry/src/test/run-host-tests.cjs` 309/309；未签名 `entry:assembleHap` 81 任务成功（35 执行、46 最新）。这些是 host 与构建证据，不等同于设备端真实 Provider 验收；设备日志、包身份和工作区指纹仍待单独归档。

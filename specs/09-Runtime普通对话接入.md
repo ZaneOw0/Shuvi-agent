@@ -1,6 +1,6 @@
 # 09 Runtime 普通对话接入
 
-> 状态：v0.1 已实现待验收；用户已确认四项主要模拟器交互符合预期；2026-10-26 后端增加显式同意的 PERSONAL 知识库回答（host 150/150、知识库统一宿主 182/182、完整知识库宿主 309/309、未签名构建 207 任务通过），模拟器冒烟已归档；当前页面仍为仅本机检索、待前端按契约接入。
+> 状态：v0.1 已实现待验收；用户已确认普通对话四项主要模拟器交互符合预期；2026-10-26 工作区已将现有知识库开关接入检索优先 RAG，本轮 Runtime host 175/175、完整知识库 host 309/309、未签名 `entry:assembleHap` 81 任务通过；真实 Provider、签名安装、页面交互和真机待验证。
 > 优先级：先验证 UX → Runtime → 模型的最小真实链路。
 > 负责人：UX 应用接入；Agent / 平台共同审核。
 > 最后更新：2026-10-26。
@@ -115,9 +115,9 @@
 - 暂不展示细分错误码和恢复历史；存储异常时可能需要关闭/重启排查，禁止清库“解决”。
 - 四项主要模拟器交互已有用户反馈，设备日志尚未归档；实际 HTTP 与持久化的设备级取证、离开助手页、最大字体、读屏及 OpenHarmony 真机仍待验收。
 
-## 8. 本机知识库回答后端增量（2026-10-26）
+## 8. 本机知识库回答与 RAG 增量（2026-10-26）
 
-> 归属：本节只记录后端/应用服务实现。`RuntimeKnowledgePanel.ets` 与 `Index.ets` 的页面实现由前端负责；当前页面仍使用 `startLocal()` 的仅本机检索路径，尚未接入 Key、同意按钮与模型回答。前端契约见第 9 节。
+> 归属：下列前半部分保留旧的 Direct-only 两段式回答基线和历史证据；当前产品接线已升级为“本机正文/标签 → 当前问题 Embedding → 本机 KNN → DeepSeek 带引用回答”，见 8.2。前端契约见第 9 节。
 
 - 本机工具链路为 `RuntimeKnowledgeSession → ProductionAgentRuntime → native://shuvi/knowledge.search.local → KnowledgeRuntimeSearchAdapter → UnifiedQueryRepository`，模型不决定是否检索。
 - 工具只接受 PERSONAL 任务、零费用、无权限、无网络、低风险、无副作用和单次派发；严格匹配后由应用自动批准本机读取。授权、checkpoint、调用和结果通过独立加密库 `shuvi_knowledge_runtime_v1.db` 持久化，结果一致时零金额提交，不伪造账单。
@@ -145,8 +145,18 @@
 - 证据：`.cache/test-logs/2026-10-26-device-smoke-42101a3/`、`.cache/test-logs/2026-10-26-device-smoke-logs-42101a3/`、`.cache/test-logs/2026-10-26-device-smoke-summary-42101a3/`；截图 `.cache/device-smoke/home.png`、`.cache/device-smoke/knowledge-empty.png`。
 - 复现：`BUNDLE=com.example.shuvi RUN_CMD="bash scripts/dev-run.sh --emulator 'Pura 90 Pro' --product default --no-emulator" bash scripts/capture-test-log.sh device-smoke 30m 127.0.0.1:5555`。签名材料未入库，`build-profile.json5` 已恢复模板。
 
+### 8.2 检索优先 RAG 产品接线（2026-10-26）
+
+- 删除未跟踪的模型优先实验 `KnowledgeRagRuntimeAssembly.ets` / `KnowledgeRagTaskSupport.ets`，不再让 DeepSeek 先判断是否搜索。
+- `RuntimeAssistantCoordinator` 消费用户一次输入的 DeepSeek Key，在内存中为 PUBLIC 普通聊天与 PERSONAL 知识库回答建立隔离会话；知识库开关关闭后普通聊天继续可用，退后台、离开页面或停止真实对话时两份凭据一起清除。
+- `KnowledgeSemanticRuntimeSearchAdapter` 为每个问题创建独立 `KnowledgeQuerySession`，固定执行本机 Direct/Tag、精确问题授权、一次问题 Embedding、本机向量 KNN，再合并去重；Tag-only 不作为事实证据。
+- 开启知识库只执行本机就绪检查：当前仅接受已保存并检测通过的 SiliconFlow / `BAAI/bge-m3`、已确认基线和费用的自动入库设置，以及至少一个完整当前向量目标；开关本身不产生外部请求。
+- 检索结果仍限制为最多 5 条、每条 800 字符、总计 3200 字符；内部路径、数据库 ID、generation、hash 和 evidenceId 不进入 DeepSeek 提示词。空结果或语义检索失败不调用 DeepSeek。
+- 页面未新增 Key 输入或确认页；现有知识库开关即当前会话 RAG 许可，关闭开关只撤销 RAG，不停止普通对话。
+- 本轮即时验证：Runtime/模型 host 175/175；完整知识库 host 309/309；未签名 `entry:assembleHap` 81 任务成功（35 执行、46 最新）。尚未执行真实 Provider、签名安装、模拟器交互或真机验收。
+
 ## 9. 前端交接契约
 
-- 前端负责 `RuntimeKnowledgePanel.ets` 与 `Index.ets` 的页面/交互实现；后端负责 `RuntimeKnowledgeSession`、`KnowledgeAnswer*`、测试与构建。
-- 完整接口、视图字段、阶段、同意文案、数据范围、失败/重试与生命周期约定见 [知识库回答 UI 交接契约](../docs/integration/知识库回答UI交接契约.md)。
-- 当前页面仍为 `startLocal()` 的仅本机检索；前端接入前不得声称页面已具备模型回答或设备验收。
+- `Index.ets` 已通过 `RuntimeAssistantCoordinator` 接入同一 Key 的普通聊天/RAG 切换；`RuntimeKnowledgePanel.ets` 保持原有布局，只更新为真实 RAG 状态与取消/关闭行为。
+- 完整接口、就绪检查、数据范围、失败/重试与生命周期约定见 [知识库回答 UI 交接契约](../docs/integration/知识库回答UI交接契约.md)。
+- 当前只证明 host 与未签名构建通过；在真实 Embedding Provider 和 DeepSeek 上完成设备证据前，不宣称产品端到端验收。

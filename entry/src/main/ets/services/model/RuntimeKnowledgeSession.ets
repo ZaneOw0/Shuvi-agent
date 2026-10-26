@@ -3,7 +3,11 @@ import {
   AgentFrontendAuthorizationPrompt, AgentFrontendClarificationPrompt, AgentFrontendEvent, AgentFrontendEventListener,
   AgentFrontendSubscription, AgentFrontendTaskRequest
 } from '@harmony_agent/agent-runtime';
-import { KnowledgeRuntimeCitation } from '../../knowledge/domain/KnowledgeRuntimePorts';
+import {
+  KnowledgeRagReadiness, KnowledgeRagSearchPort, KnowledgeRuntimeCitation, KnowledgeRuntimeSearchRequest,
+  KnowledgeRuntimeSearchResult
+} from '../../knowledge/domain/KnowledgeRuntimePorts';
+import { ParsedCancellation } from '../../knowledge/domain/ParsedDocumentModels';
 import { KnowledgeAnswerContext, parseKnowledgeAnswer, parseKnowledgeInsufficient } from './KnowledgeAnswerTaskSupport';
 import { KNOWLEDGE_RUNTIME_TOOL_ID, parseKnowledgeToolResult } from './KnowledgeTaskSupport';
 import { ShuviRuntimeController, ShuviRuntimeState } from './ShuviRuntimeController';
@@ -43,6 +47,9 @@ export class RuntimeKnowledgeSession {
   private subscription?: AgentFrontendSubscription; private timer?: number; private stopping: boolean = false;
   private consentGranted: boolean = false; private answering: boolean = false; private localOnly: boolean = false;
   private modelTaskDispatched: boolean = false; private cancelRequested: boolean = false;
+  private rag: KnowledgeRagSearchPort | undefined = undefined;
+  private ragCancel: ParsedCancellation | undefined = undefined;
+  private ragPrepared: boolean = false;
 
   attach(listener: (view: RuntimeKnowledgeView) => void): void { this.listener = listener; this.publish(); }
   detach(): void { this.listener = undefined; void this.stop(); }
@@ -63,6 +70,71 @@ export class RuntimeKnowledgeSession {
   }
   async onDestroy(): Promise<void> { await this.onBackground(); }
 
+  /** Prepares the PERSONAL answer session without sending a question or granting RAG query egress. */
+  async prepareRag(search: KnowledgeRagSearchPort, answerFactory: ShuviRuntimeSessionFactory,
+    key: Uint8Array): Promise<void> {
+    if (this.view.lifecycle === ShuviRuntimeState.STARTING || this.view.lifecycle === ShuviRuntimeState.READY ||
+      this.view.lifecycle === ShuviRuntimeState.BLOCKED || this.stopping || this.rag !== undefined) {
+      key.fill(0); return;
+    }
+    const generation: number = ++this.generation; this.rag = search; this.ragPrepared = false;
+    this.consentGranted = false; this.localOnly = false; this.answering = false;
+    this.modelTaskDispatched = false; this.cancelRequested = false;
+    this.view.consent = false; this.view.stage = 'starting'; this.view.lifecycle = ShuviRuntimeState.STARTING;
+    this.view.clearEpoch++; this.view.message = '正在准备知识库 RAG 会话…'; this.publish();
+    try {
+      await search.open();
+      if (generation !== this.generation) { return; }
+      await this.answer.start(answerFactory, key);
+      if (generation !== this.generation) { return; }
+      this.ragPrepared = true; this.answerContext.clear();
+      this.view.query = ''; this.view.answer = ''; this.view.citations = [];
+      this.view.lifecycle = ShuviRuntimeState.READY;
+      this.view.message = '知识库 RAG 后端已准备；开启知识库后才允许问题向量化和资料整理。';
+      this.publish();
+    } catch {
+      if (generation === this.generation) {
+        let closeFailed: boolean = false;
+        try { await search.close(); } catch { closeFailed = true; }
+        try { await this.answer.stop(); } catch { closeFailed = true; }
+        this.rag = undefined; this.ragPrepared = false; this.view.consent = false;
+        this.view.lifecycle = closeFailed || this.answer.lifecycleState() === ShuviRuntimeState.BLOCKED ?
+          ShuviRuntimeState.BLOCKED : ShuviRuntimeState.FAILED;
+        this.view.message = closeFailed ? 'RAG 准备失败且资源关闭未确认，请重启应用排查。' :
+          '知识库 RAG 准备失败；普通对话仍可继续。';
+        this.view.clearEpoch++; this.publish();
+      }
+    } finally { key.fill(0); }
+  }
+
+  async activateRag(): Promise<KnowledgeRagReadiness> {
+    const unavailable: KnowledgeRagReadiness = new KnowledgeRagReadiness();
+    if (!this.ragPrepared || this.rag === undefined || this.view.lifecycle !== ShuviRuntimeState.READY) {
+      unavailable.code = 'RagSessionUnavailable'; unavailable.message = '知识库 RAG 会话尚未准备好。';
+      this.consentGranted = false; this.view.consent = false; this.view.message = unavailable.message; this.publish();
+      return unavailable;
+    }
+    const generation: number = this.generation; const rag: KnowledgeRagSearchPort = this.rag;
+    const readiness: KnowledgeRagReadiness = await rag.readiness();
+    if (generation !== this.generation || this.rag !== rag || !this.ragPrepared || this.stopping ||
+      this.view.lifecycle !== ShuviRuntimeState.READY) {
+      unavailable.code = 'RagSessionChanged'; unavailable.message = '知识库 RAG 会话状态已变化，请重新开启。';
+      return unavailable;
+    }
+    this.consentGranted = readiness.ready; this.view.consent = readiness.ready;
+    this.view.message = readiness.message; this.publish(); return readiness;
+  }
+
+  async deactivateRag(): Promise<void> {
+    if (this.view.busy) { await this.cancelCurrent(); }
+    else { ++this.generation; }
+    this.consentGranted = false; this.view.consent = false; this.answerContext.clear();
+    if (this.ragPrepared && this.view.lifecycle === ShuviRuntimeState.READY) {
+      this.view.message = '知识库 RAG 已关闭；普通 DeepSeek 对话仍保持就绪。';
+    }
+    this.publish();
+  }
+
   async start(toolFactory: ShuviRuntimeSessionFactory, answerFactory: ShuviRuntimeSessionFactory,
     key: Uint8Array, consent: boolean): Promise<void> {
     if (!consent) {
@@ -76,7 +148,7 @@ export class RuntimeKnowledgeSession {
       return;
     }
     if (this.view.lifecycle === ShuviRuntimeState.STARTING || this.view.lifecycle === ShuviRuntimeState.READY ||
-      this.view.lifecycle === ShuviRuntimeState.BLOCKED || this.stopping) {
+      this.view.lifecycle === ShuviRuntimeState.BLOCKED || this.stopping || this.rag !== undefined) {
       key.fill(0); return;
     }
     const generation: number = ++this.generation; const answerKey: Uint8Array = key.slice();
@@ -111,7 +183,7 @@ export class RuntimeKnowledgeSession {
   /** Legacy page path: local citations only, no model session and no consent. */
   async startLocal(toolFactory: ShuviRuntimeSessionFactory): Promise<void> {
     if (this.view.lifecycle === ShuviRuntimeState.STARTING || this.view.lifecycle === ShuviRuntimeState.READY ||
-      this.view.lifecycle === ShuviRuntimeState.BLOCKED || this.stopping) { return; }
+      this.view.lifecycle === ShuviRuntimeState.BLOCKED || this.stopping || this.rag !== undefined) { return; }
     const generation: number = ++this.generation;
     this.localOnly = true; this.consentGranted = false; this.answering = false; this.modelTaskDispatched = false; this.cancelRequested = false;
     this.view.consent = false; this.view.stage = 'starting'; this.view.lifecycle = ShuviRuntimeState.STARTING;
@@ -144,17 +216,22 @@ export class RuntimeKnowledgeSession {
       this.answer.lifecycleState() === ShuviRuntimeState.IDLE) {
       this.clearWatch();
       this.consentGranted = false; this.answering = false; this.localOnly = false; this.modelTaskDispatched = false; this.cancelRequested = false;
-      this.answerContext.clear(); this.view.consent = false; this.view.clearEpoch++; this.publish(); return;
+      this.answerContext.clear(); this.ragCancel = undefined; this.ragPrepared = false;
+      const idleRag: KnowledgeRagSearchPort | undefined = this.rag; this.rag = undefined;
+      if (idleRag !== undefined) { try { await idleRag.close(); } catch { this.view.lifecycle = ShuviRuntimeState.BLOCKED; } }
+      this.view.consent = false; this.view.clearEpoch++; this.publish(); return;
     }
     const mayBill: boolean = this.modelTaskDispatched;
     this.stopping = true; ++this.generation; this.clearWatch();
     this.consentGranted = false; this.answering = false; this.localOnly = false; this.modelTaskDispatched = false; this.cancelRequested = false;
-    this.answerContext.clear();
+    this.answerContext.clear(); if (this.ragCancel !== undefined) { this.ragCancel.invalid = true; } this.ragCancel = undefined;
     this.view.consent = false; this.view.busy = false; this.view.clearEpoch++;
     this.view.lifecycle = ShuviRuntimeState.STOPPING; this.view.message = '正在停止并清除凭据…'; this.publish();
     let failed: boolean = false;
     try { await this.knowledge.stop(); } catch { failed = true; }
     try { await this.answer.stop(); } catch { failed = true; }
+    const rag: KnowledgeRagSearchPort | undefined = this.rag; this.rag = undefined; this.ragPrepared = false;
+    if (rag !== undefined) { try { await rag.close(); } catch { failed = true; } }
     this.stopping = false; this.view.lifecycle = failed ? ShuviRuntimeState.BLOCKED : ShuviRuntimeState.STOPPED;
     this.view.stage = 'stopped';
     this.view.message = failed ? '资源关闭未确认，请重启应用排查；资料未删除。' : (mayBill ?
@@ -170,7 +247,40 @@ export class RuntimeKnowledgeSession {
     this.answerContext.clear(); this.view.query = value; this.view.answer = ''; this.view.citations = [];
     this.view.busy = true; this.view.stage = 'retrieving'; this.view.message = '正在检索本机知识库…';
     this.answering = false; this.cancelRequested = false; const generation: number = ++this.generation; this.watch(generation);
-    this.publish(); await this.submit(generation, false); return true;
+    this.publish();
+    if (this.ragPrepared && this.rag !== undefined) { void this.retrieveRag(generation, value); }
+    else { await this.submit(generation, false); }
+    return true;
+  }
+
+  private async retrieveRag(generation: number, query: string): Promise<void> {
+    const rag: KnowledgeRagSearchPort | undefined = this.rag;
+    if (rag === undefined) { this.finish('retrievalFailed', '知识库 RAG 会话不可用；未调用 DeepSeek。'); return; }
+    const cancel: ParsedCancellation = new ParsedCancellation(); this.ragCancel = cancel;
+    const request: KnowledgeRuntimeSearchRequest = new KnowledgeRuntimeSearchRequest(); request.query = query; request.maxResults = 5;
+    try {
+      const result: KnowledgeRuntimeSearchResult = await rag.search(request, cancel);
+      if (!this.active(generation) || cancel.invalid) { return; }
+      this.ragCancel = undefined; this.view.citations = result.citations;
+      if (result.route !== 'local-rag') {
+        this.finish('retrievalFailed', 'RAG 检索结果类型无效；未调用 DeepSeek。'); return;
+      }
+      if (result.citations.length === 0) {
+        this.finish('empty', '本机正文、标签与向量检索均无可引用结果；未调用 DeepSeek。'); return;
+      }
+      if (!this.answerContext.freeze(this.view.query, result.citations)) {
+        this.finish('retrievalFailed', 'RAG 证据无法安全固定；未调用 DeepSeek。'); return;
+      }
+      this.view.stage = 'answering'; this.view.message = '本机 RAG 检索完成；正在请求 DeepSeek 整理回答…';
+      this.publish(); this.clearWatch(); const next: number = ++this.generation;
+      if (!this.active(next)) { return; }
+      this.modelTaskDispatched = true; this.answering = true; this.watch(next); void this.submit(next, true);
+    } catch {
+      if (this.active(generation)) {
+        this.ragCancel = undefined;
+        this.finish('retrievalFailed', '本机 RAG 检索未完成；没有向 DeepSeek 发送知识片段。');
+      }
+    }
   }
 
   private watch(generation: number): void {
@@ -313,6 +423,10 @@ export class RuntimeKnowledgeSession {
   async cancelCurrent(): Promise<void> {
     if (!this.view.busy) { return; }
     const generation: number = this.generation; const taskId: string = this.taskId; const answering: boolean = this.answering;
+    if (!answering && this.ragCancel !== undefined) {
+      this.cancelRequested = true; this.ragCancel.invalid = true; this.ragCancel = undefined;
+      this.finish('retrievalFailed', '已取消本机 RAG 检索；未调用 DeepSeek 回答。'); return;
+    }
     if (!taskId) { await this.stop(); return; }
     this.cancelRequested = true;
     this.view.message = '正在取消当前任务…'; this.publish();
