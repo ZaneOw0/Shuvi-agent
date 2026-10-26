@@ -1,0 +1,178 @@
+{
+  "version": "R2-REAL-PDF-GOLD-1",
+  "status": "FrozenAwaitingOfflineAlignment",
+  "frozen": true,
+  "confirmedOn": "2026-10-17",
+  "confirmation": "用户确认题集、原页预期、多证据评分及12个定位抽检点；先冻结不外发",
+  "cloudRequestsAuthorized": false,
+  "source": {
+    "fileName": "02_第02章_模型评估与选择.pdf",
+    "originalSha256": "7f959de85fdab10b15e2aada044d9f1fbd75dbc90b2fabfca79eb9ecb4b3df3a",
+    "recordedBytes": 8656018,
+    "physicalPages": 30,
+    "pageNumberBase": 1,
+    "evidenceBasis": "OriginalPageImages;ParsedTextForNavigationOnly",
+    "retrievalResultsUsedToCreateGold": false,
+    "providerPageMappingVerified": false,
+    "pageRegionBoxesCreated": false
+  },
+  "anchors": [
+    { "id": "S01", "physicalPages": [1], "printedLabels": [null], "section": "2.1", "location": "过拟合定义及新样本表现段", "concept": "训练误差很小不保证泛化，样本特有性质不等于普遍规律" },
+    { "id": "S02", "physicalPages": [2], "printedLabels": ["24"], "section": "2.1末至2.2", "location": "图2.1下方模型选择段", "concept": "训练误差因过拟合不适合作为模型选择标准" },
+    { "id": "S03", "physicalPages": [3], "printedLabels": ["25"], "section": "2.2.1", "location": "分层采样与类别比例段", "concept": "划分尽量保持分布一致，避免额外偏差" },
+    { "id": "S04", "physicalPages": [3], "printedLabels": ["25"], "section": "2.2.1", "location": "多种划分与重复实验取平均段", "concept": "固定比例仍有多种划分，重复随机划分使估计更稳定" },
+    { "id": "S05", "physicalPages": [4], "printedLabels": ["26"], "section": "2.2.2", "location": "开头定义及图2.2", "concept": "互斥k子集，k-1训练、余1测试，轮换k次取均值" },
+    { "id": "S06", "physicalPages": [5], "printedLabels": ["27"], "section": "2.2.3", "location": "有放回采样、式2.1、包外估计段", "concept": "m次有放回抽取，未抽中近似36.8%，D'训练、D差D'测试" },
+    { "id": "S07", "physicalPages": [8], "printedLabels": ["30"], "section": "2.3.2", "location": "表2.1与式2.8、2.9及定义段", "concept": "P=TP/(TP+FP)，R=TP/(TP+FN)，两种分母语义不同" },
+    { "id": "S08", "physicalPages": [11], "printedLabels": ["33"], "section": "2.3.3", "location": "ROC轴向定义及式2.18、2.19", "concept": "纵TPR=TP/(TP+FN)，横FPR=FP/(TN+FP)" },
+    { "id": "S09", "physicalPages": [12], "printedLabels": ["34"], "section": "2.3.3", "location": "图2.4(a)、(b)轴标签", "concept": "ROC横FPR、纵TPR的图示替代依据，不支持排序损失公式" },
+    { "id": "S10", "physicalPages": [13], "printedLabels": ["35"], "section": "2.3.3", "location": "式2.21、2.22及解释段", "concept": "成对排序损失低分罚1、同分罚0.5、按正反对总数归一，AUC=1-loss" },
+    { "id": "S11", "physicalPages": [20], "printedLabels": ["42"], "section": "2.4.4", "location": "表2.5", "concept": "D2上B/C各2.5；平均A1、B2.125、C2.875" },
+    { "id": "S12", "physicalPages": [22], "printedLabels": ["44"], "section": "2.4.4", "location": "开头示例计算与显著性结论", "concept": "alpha0.05、CD1.657；仅A/C显著，A优于C" },
+    { "id": "S13", "physicalPages": [23], "printedLabels": ["45"], "section": "2.5", "location": "式2.37至2.42及噪声期望前提", "concept": "误差=bias²(x)+var(x)+噪声项ε²；ε²本身定义为噪声" },
+    { "id": "S14", "physicalPages": [23,24], "printedLabels": ["45","46"], "section": "2.5", "location": "23页最后一段延续到24页开头", "concept": "偏差对应拟合，方差对应同规模训练集扰动，噪声对应任务难度与下界" },
+    { "id": "S15", "physicalPages": [5], "printedLabels": ["27"], "section": "2.2.2末", "location": "留一法计算开销与非永远最准确段", "concept": "训练m模型可能昂贵，留一法未必永远比其他方法准确" },
+    { "id": "S16", "physicalPages": [6], "printedLabels": ["28"], "section": "2.2.4", "location": "最后一段验证集与测试数据区分", "concept": "基于验证集选模调参，测试集估计实际泛化表现" },
+    { "id": "S17", "physicalPages": [2,3], "printedLabels": ["24","25"], "section": "2.2", "location": "训练测试互斥及习题考试类比续段", "concept": "训练中使用测试样本使评估过于乐观" },
+    { "id": "S18", "physicalPages": [10], "printedLabels": ["32"], "section": "2.3.2", "location": "式2.11下方beta条件说明", "concept": "0<beta<1更重视precision，beta>1更重视recall" },
+    { "id": "S19", "physicalPages": [25], "printedLabels": ["47"], "section": "2.6", "location": "最后一段偏差方差分解适用范围", "concept": "式2.42形式基于均方误差回归推导，分类0/1损失推导困难但可估计研究" }
+  ],
+  "cases": [
+    {
+      "id": "P01", "kind": "paraphrase",
+      "question": "一个分类器把训练样本全部判对，能保证它遇到新样本也表现好吗？为什么不能只凭训练误差选模型？",
+      "expected": ["不能保证新样本表现", "可能学到训练样本特有性质而过拟合", "模型选择目标是泛化而不是仅训练误差"],
+      "requiredEvidenceGroups": [["S01"],["S02"]],
+      "forbiddenClaims": ["零训练误差必然过拟合", "训练精度100%证明泛化好"]
+    },
+    {
+      "id": "P02", "kind": "paraphrase",
+      "question": "训练集和测试集比例已经固定，为什么不同划分仍会得到不同评价？怎样减小这种波动，同时避免类别分布被划分歪了？",
+      "expected": ["同一比例仍有多种具体划分", "多次随机划分重复实验取平均", "分层采样保持类别比例和分布"],
+      "requiredEvidenceGroups": [["S03"],["S04"]],
+      "forbiddenClaims": ["分层必须正反例各半", "本章指定了固定随机种子"]
+    },
+    {
+      "id": "P03", "kind": "paraphrase",
+      "question": "把一份数据分成k份以后，每轮怎样训练和测试，一次k折交叉验证最终返回什么？",
+      "expected": ["大小相似且互斥、尽量保持分布的k个子集", "每次k-1训练余1测试共k轮", "返回k个测试结果均值"],
+      "requiredEvidenceGroups": [["S05"]],
+      "forbiddenClaims": ["一次k折只训练一次", "10次10折只训练10次"]
+    },
+    {
+      "id": "P04", "kind": "paraphrase",
+      "question": "自助采样抽了m次，为什么还会有约三分之一的原样本没有被抽到？这些未抽到的样本如何用于评估？",
+      "expected": ["有放回抽取m次构成D'", "未抽中概率(1-1/m)^m极限约0.368", "D'训练，D差D'用于包外估计"],
+      "requiredEvidenceGroups": [["S06"]],
+      "forbiddenClaims": ["未抽中比例每轮固定36.8%", "m次抽取必有m个不同样本", "自助法完全无估计偏差"]
+    },
+    {
+      "id": "P05", "kind": "paraphrase",
+      "question": "找出的正例有多少是真的，以及所有真实正例找回了多少，分别对应什么度量？它们在混淆矩阵中如何计算？",
+      "expected": ["前者查准率P=TP/(TP+FP)", "后者查全率R=TP/(TP+FN)", "TP、FP、FN的真实与预测类别方向正确"],
+      "requiredEvidenceGroups": [["S07"]],
+      "forbiddenClaims": ["交换FP与FN", "查准率等于整体accuracy"]
+    },
+    {
+      "id": "P06", "kind": "paraphrase",
+      "question": "ROC的横轴和纵轴分别是什么？本章如何用正反样本对的排序损失说明AUC？",
+      "expected": ["横FPR=FP/(TN+FP)，纵TPR=TP/(TP+FN)", "正例低于反例罚1，相等罚0.5，按正反对总数归一", "AUC=1-l_rank"],
+      "requiredEvidenceGroups": [["S08"],["S10"]],
+      "supplementalAnchors": ["S09"],
+      "forbiddenClaims": ["横轴是precision", "只命中轴向就算全部证据齐全", "把本题解释为未提供的rank-sum代码步骤"]
+    },
+    {
+      "id": "P07", "kind": "paraphrase",
+      "question": "表2.5中算法A、B、C的平均序值分别是多少？按后续检验，哪些算法对具有显著差别？",
+      "expected": ["A=1，B=2.125，C=2.875", "alpha=0.05、CD=1.657下只有A/C显著，A优于C", "A/B、B/C无显著差别"],
+      "requiredEvidenceGroups": [["S11"],["S12"]],
+      "forbiddenClaims": ["平均序值不同就必然显著", "无显著差别证明完全相同", "推测ABC具体算法名称"]
+    },
+    {
+      "id": "P08", "kind": "paraphrase",
+      "question": "本章把期望泛化误差分成哪三项？它们分别反映算法、训练数据变化和任务本身的什么影响？",
+      "expected": ["偏差平方bias²(x)、方差var(x)与噪声项ε²", "偏差反映拟合及期望预测偏离真实结果", "方差反映同规模训练集扰动，噪声项ε²反映任务难度和误差下界"],
+      "requiredEvidenceGroups": [["S13"],["S14"]],
+      "forbiddenClaims": ["把bias平方写成未平方bias", "无条件推广到所有损失"]
+    },
+    {
+      "id": "N01", "kind": "negation-scope",
+      "question": "留一法是不是总比其他评估方法更准确，因此应该无条件优先选它？",
+      "expected": ["不是，未必永远更准确", "训练m个模型的计算开销可能难以承受"],
+      "requiredEvidenceGroups": [["S15"]],
+      "forbiddenClaims": ["划分唯一所以永远最准"]
+    },
+    {
+      "id": "N02", "kind": "negation-scope",
+      "question": "能否反复用最终测试集挑参数，再把这个测试集的成绩作为最终泛化评估？本章把调参依据放在哪个集合？",
+      "expected": ["不能将参与选择的数据仍作为独立最终测试", "验证集用于选择和调参", "测试参与训练选择会导致过于乐观的评估"],
+      "requiredEvidenceGroups": [["S16"],["S17"]],
+      "forbiddenClaims": ["调参后的同一测试成绩仍是独立泛化证明", "混用验证集与最终测试集"]
+    },
+    {
+      "id": "N03", "kind": "negation-scope",
+      "question": "当0<β<1时，Fβ是不是更重视查全率？",
+      "expected": ["不是，此时更重视查准率"],
+      "requiredEvidenceGroups": [["S18"]],
+      "forbiddenClaims": ["beta小于1更重视recall", "把beta条件改成Fbeta小于1"]
+    },
+    {
+      "id": "N04", "kind": "negation-scope",
+      "question": "式2.42的形式是否无条件适用于分类错误率等所有学习任务？",
+      "expected": ["否，该形式基于均方误差回归推导", "分类0/1损失推导困难，但不是完全不能研究或估计偏差方差"],
+      "requiredEvidenceGroups": [["S19"]],
+      "forbiddenClaims": ["适用于一切损失", "分类完全不能研究偏差方差"]
+    },
+    {
+      "id": "A01", "kind": "no-answer",
+      "question": "按本章给出sklearn的StratifiedKFold完整调用代码，以及作者设置的shuffle和random_state值。",
+      "expected": ["本PDF未提供该API的完整调用与指定参数"],
+      "requiredEvidenceGroups": [],
+      "absenceReviewPhysicalPages": [1,30],
+      "absenceReviewMeaning": "inclusive range; all original pages reviewed",
+      "distractorPhysicalPages": [3,4,19],
+      "forbiddenClaims": ["编造代码或随机种子"]
+    },
+    {
+      "id": "A02", "kind": "no-answer",
+      "question": "本章对实际数据集最终选出的最优超参数具体是多少？",
+      "expected": ["未提供具名实际数据集的最终最优超参数结果"],
+      "requiredEvidenceGroups": [],
+      "absenceReviewPhysicalPages": [1,30],
+      "absenceReviewMeaning": "inclusive range; all original pages reviewed",
+      "distractorPhysicalPages": [6],
+      "forbiddenClaims": ["把候选范围或125种组合当实际最优值"]
+    },
+    {
+      "id": "A03", "kind": "no-answer",
+      "question": "表2.5中算法A、B、C分别是哪三个具体机器学习算法？",
+      "expected": ["原件未说明这些代号对应的具体算法名称"],
+      "requiredEvidenceGroups": [],
+      "absenceReviewPhysicalPages": [1,30],
+      "absenceReviewMeaning": "inclusive range; all original pages reviewed",
+      "distractorPhysicalPages": [20,22],
+      "forbiddenClaims": ["从其他段落提到的算法名称推测代号绑定"]
+    },
+    {
+      "id": "A04", "kind": "no-answer",
+      "question": "本章比较实验使用的GPU型号、实际训练耗时和显存峰值分别是多少？",
+      "expected": ["未提供这些实验硬件及实测数值"],
+      "requiredEvidenceGroups": [],
+      "absenceReviewPhysicalPages": [1,30],
+      "absenceReviewMeaning": "inclusive range; all original pages reviewed",
+      "distractorPhysicalPages": [5,6,29],
+      "forbiddenClaims": ["把计算开销讨论当硬件实测", "补造GPU和耗时"]
+    }
+  ],
+  "scoringProposal": {
+    "answerCaseCount": 12,
+    "noAnswerCaseCount": 4,
+    "requiredEvidenceGroupsMeaning": "all groups required; any fully sufficient anchor within one group is an alternative",
+    "metrics": ["HitAt5", "MRRAt5", "EvidenceCoverageAt5", "FullEvidenceAt5"],
+    "noAnswerIncludedInMrrDenominator": false,
+    "sourceToChunkAlignmentStatus": "NotPerformed;must use original-source matching before retrieval scoring",
+    "modelAnswersGenerated": false,
+    "scoreComputed": false,
+    "regionMappingStatus": "CandidateOriginalPageReferencesOnly;NoProductionUpgrade"
+  }
+}

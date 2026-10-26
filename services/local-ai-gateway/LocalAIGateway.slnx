@@ -1,0 +1,23 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LocalAIGateway.Core/LocalAIGateway.Core.csproj" />
+    <Project Path="src/LocalAIGateway.Windows/LocalAIGateway.Windows.csproj" />
+    <Project Path="src/LocalAIGateway.Cli/LocalAIGateway.Cli.csproj" />
+    <Project Path="src/LocalAIGateway.LiteLlm/LocalAIGateway.LiteLlm.csproj" />
+    <Project Path="src/LocalAIGateway.Launcher/LocalAIGateway.Launcher.csproj" />
+    <Project Path="src/LocalAIGateway.Runtime/LocalAIGateway.Runtime.csproj" />
+    <Project Path="src/LocalAIGateway.Tray/LocalAIGateway.Tray.csproj" />
+    <Project Path="src/LocalAIGateway.Updater/LocalAIGateway.Updater.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LocalAIGateway.Core.Tests/LocalAIGateway.Core.Tests.csproj" />
+    <Project Path="tests/LocalAIGateway.LiteLlm.Tests/LocalAIGateway.LiteLlm.Tests.csproj" />
+    <Project Path="tests/LocalAIGateway.Launcher.Tests/LocalAIGateway.Launcher.Tests.csproj" />
+    <Project Path="tests/LocalAIGateway.Windows.Tests/LocalAIGateway.Windows.Tests.csproj" />
+    <Project Path="tests/LocalAIGateway.Runtime.Tests/LocalAIGateway.Runtime.Tests.csproj" />
+    <Project Path="tests/LocalAIGateway.Cli.Tests/LocalAIGateway.Cli.Tests.csproj" />
+    <Project Path="tests/LocalAIGateway.Tray.Tests/LocalAIGateway.Tray.Tests.csproj" />
+    <Project Path="tests/LocalAIGateway.Updater.Tests/LocalAIGateway.Updater.Tests.csproj" />
+    <Project Path="tests/LocalAIGateway.ProcessFixture/LocalAIGateway.ProcessFixture.csproj" />
+  </Folder>
+</Solution>

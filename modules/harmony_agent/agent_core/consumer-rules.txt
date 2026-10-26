@@ -1,0 +1,1 @@
+# Consumer obfuscation rules for @harmony_agent/agent-core.

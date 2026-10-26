@@ -1,0 +1,10 @@
+{
+  "name": "@harmony_agent/mcp-client",
+  "version": "0.2.0",
+  "description": "ArkTS MCP Streamable HTTP client for harmony_agent",
+  "main": "Index.ets",
+  "author": "harmony_agent",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}
+

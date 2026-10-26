@@ -1,0 +1,1 @@
+# Public contract names must remain stable for consumers.

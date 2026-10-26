@@ -1,0 +1,24 @@
+export const AGENT_CONTRACTS_VERSION: string = '0.3.0';
+export const AGENT_CONTRACT_SCHEMA_VERSION: string = '1';
+
+export const CONTRACT_TYPE_TASK_SUBMISSION: string = 'TaskSubmission';
+export const CONTRACT_TYPE_TASK_HANDLE: string = 'TaskHandle';
+export const CONTRACT_TYPE_TASK_ENVELOPE: string = 'TaskEnvelope';
+export const CONTRACT_TYPE_TASK_CONTROL_COMMAND: string = 'TaskControlCommand';
+export const CONTRACT_TYPE_COMMAND_RECEIPT: string = 'CommandReceipt';
+export const CONTRACT_TYPE_AGENT_RUNTIME_EVENT: string = 'AgentRuntimeEvent';
+export const CONTRACT_TYPE_AGENT_TASK_SNAPSHOT: string = 'AgentTaskSnapshot';
+export const CONTRACT_TYPE_RECONCILIATION_REPORT: string = 'ReconciliationReport';
+export const CONTRACT_TYPE_CLARIFICATION_REQUEST: string = 'ClarificationRequest';
+export const CONTRACT_TYPE_CLARIFICATION_RESPONSE: string = 'ClarificationResponse';
+export const CONTRACT_TYPE_WORKFLOW_GRAPH: string = 'WorkflowGraph';
+export const CONTRACT_TYPE_ROUTER_REQUEST: string = 'RouterRequest';
+export const CONTRACT_TYPE_ROUTER_DECISION: string = 'RouterDecision';
+export const CONTRACT_TYPE_TOOL_DESCRIPTOR: string = 'ToolDescriptor';
+export const CONTRACT_TYPE_TOOL_INVOCATION: string = 'ToolInvocation';
+export const CONTRACT_TYPE_TOOL_OUTCOME: string = 'ToolOutcome';
+export const CONTRACT_TYPE_POLICY_REQUEST: string = 'PolicyRequest';
+export const CONTRACT_TYPE_AUTHORIZATION_DECISION: string = 'AuthorizationDecision';
+export const CONTRACT_TYPE_AUTHORIZATION_GRANT: string = 'AuthorizationGrant';
+export const CONTRACT_TYPE_TRACE_EVENT: string = 'TraceEvent';
+export const CONTRACT_TYPE_ARTIFACT_MANIFEST: string = 'ArtifactManifest';

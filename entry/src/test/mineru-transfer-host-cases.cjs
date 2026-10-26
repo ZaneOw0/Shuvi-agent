@@ -9,8 +9,6 @@ const { TextEncoder, TextDecoder } = require('node:util');
 module.exports = function transferHostCases(outputRoot, asset) {
   const files = new Map(); const handles = new Map(); let nextFd = 1; let calls = [];
   let behavior = 'OK'; let shortRead = 65536; let activeTimers = new Map(); let serial = 0; const secrets = new Map(); let lateDestination;
-  const models = require(path.join(outputRoot, 'entry/src/main/ets/knowledge/domain/DocumentParseModels.js'));
-  const codec = require(path.join(outputRoot, 'entry/src/main/ets/knowledge/pipeline/MineruProtocolCodec.js'));
   const stat = bytes => ({ size: bytes.length, mtime: 1, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false });
   const io = {
     OpenMode: { READ_ONLY: 0, READ_WRITE: 2, CREATE: 64, NOFOLLOW: 128 },
@@ -83,14 +81,21 @@ module.exports = function transferHostCases(outputRoot, asset) {
       const hash = crypto.createHash('sha256'); return { update: async blob => hash.update(blob.data), digest: async () => ({ data: new Uint8Array(hash.digest()) }) };
     } } }
   };
+  // Each suite owns its SDK doubles; never reuse another suite's compiled adapters.
+  const adapterModules = new Map();
   function load(relative) {
-    const name = path.join(outputRoot, relative); if (require.cache[name]) return require.cache[name].exports; const loaded = new Module(name, module); loaded.filename = name; loaded.paths = Module._nodeModulePaths(path.dirname(name));
+    const name = path.join(outputRoot, relative); if (adapterModules.has(name)) return adapterModules.get(name).exports; const loaded = new Module(name, module); loaded.filename = name; loaded.paths = Module._nodeModulePaths(path.dirname(name));
     const original = loaded.require.bind(loaded); loaded.require = id => { if(Object.hasOwn(kit,id))return kit[id]; if(id.startsWith('.')){const target=path.resolve(path.dirname(name),id+'.js');if(!target.startsWith(path.resolve(outputRoot)+path.sep))throw Error('HostModuleBoundary');return load(path.relative(outputRoot,target));}return original(id); };
     // Only this adapter gets virtual timers. The test runner and other suites keep real timers.
-    loaded._compile(`const setTimeout = global.__mineruHostTimers.set; const clearTimeout = global.__mineruHostTimers.clear;\n${fs.readFileSync(name, 'utf8')}`, name);
-    require.cache[name] = loaded; return loaded.exports;
+    adapterModules.set(name, loaded);
+    try {
+      loaded._compile(`const setTimeout = global.__mineruHostTimers.set; const clearTimeout = global.__mineruHostTimers.clear;\n${fs.readFileSync(name, 'utf8')}`, name);
+      loaded.loaded = true; return loaded.exports;
+    } catch (error) { adapterModules.delete(name); throw error; }
   }
   global.__mineruHostTimers = { set: fn => { const id = ++serial; activeTimers.set(id, fn); if (behavior === 'TIMEOUT') setImmediate(() => activeTimers.get(id)?.()); return id; }, clear: id => activeTimers.delete(id) };
+  const models = load('entry/src/main/ets/knowledge/domain/DocumentParseModels.js');
+  const codec = load('entry/src/main/ets/knowledge/pipeline/MineruProtocolCodec.js');
   load('entry/src/main/ets/knowledge/infra/DocumentFileOperations.js');
   const { DocumentFileAdapter } = load('entry/src/main/ets/knowledge/infra/DocumentFileAdapter.js');
   const { MineruTransportAdapter } = load('entry/src/main/ets/knowledge/infra/MineruTransportAdapter.js');

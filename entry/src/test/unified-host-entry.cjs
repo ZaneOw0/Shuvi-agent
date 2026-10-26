@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const Module = require('node:module');
 const { DatabaseSync } = require('node:sqlite');
+const { toPosix, relativePosix, readTextLf } = require('./lib/portable.cjs');
 const project = path.resolve(__dirname, '../../..');
 const root = path.join(project, 'entry/src/main/ets/knowledge');
 const allowed = [
@@ -96,7 +97,7 @@ exports.harness = () => {
   const io = { OpenMode: { READ_ONLY: 0, READ_WRITE: 1, CREATE: 2, NOFOLLOW: 128 },
     access: async p => memoryFiles.has(p), mkdir: async p => { if (memoryFiles.has(p)) throw Error('Exists'); memoryFiles.set(p,null); },
     lstat: async p => stat(p), stat: async fd => stat(typeof fd==='string'?fd:handles.get(fd)),
-    listFile: async p => [...memoryFiles.keys()].filter(k => k.startsWith(p+'/') && !k.slice(p.length+1).includes('/')).map(k => k.slice(p.length+1)),
+    listFile: async p => { const base = toPosix(p); return [...memoryFiles.keys()].filter(k => k.startsWith(base+'/') && !k.slice(base.length+1).includes('/')).map(k => k.slice(base.length+1)); },
     open: async (p, mode) => { if (!memoryFiles.has(p)) { if (!(mode & 2)) throw Error('HostFileMissing'); memoryFiles.set(p,Buffer.alloc(0)); } handles.set(++sequence,p); return { fd: sequence }; },
     close: async f => handles.delete(typeof f === 'number' ? f : f.fd),
     read: async (fd, target, o) => { const bytes = memoryFiles.get(handles.get(fd)); const n = Math.max(0,Math.min(o.length,bytes.length-o.offset)); new Uint8Array(target).set(bytes.subarray(o.offset,o.offset+n)); return n; },
@@ -123,12 +124,12 @@ exports.harness = () => {
   ]);
   const identity = { id: () => 'upd-'+String(++sequence).padStart(16,'0'), hash: async b => crypto.createHash('sha256').update(b).digest('hex') };
   function load(file) {
-    const relative = path.relative(root,file).replace(/\.ets$/,'');
+    const relative = relativePosix(root,file).replace(/\.ets$/,'');
     if (!allowed.includes(relative) && file!==path.join(root,'../components/Theme.ets')) throw Error('UPD_ALLOWLIST:'+relative);
     if (cache.has(file)) return cache.get(file).exports;
     const mod = new Module(file,module); mod.filename=file; cache.set(file,mod);
     mod.require = id => { if (kits.has(id)) return kits.get(id); if(relative==='ui/UnifiedKnowledgeView' && id==='./KnowledgeResultCard')return {}; if (id.startsWith('.')) return load(path.resolve(path.dirname(file),id+'.ets')); throw Error('UPD_IMPORT_DENIED'); };
-    let source=fs.readFileSync(file,'utf8');if(relative==='ui/ParsedDocumentView'){
+    let source=readTextLf(file);if(relative==='ui/ParsedDocumentView'){
       const start=source.indexOf('\n  build() {'),end=source.indexOf('\nclass ParsedViewParseListener');if(start<0||end<0)throw Error('UPD_UI_METHOD_SHAPE');
       source=(source.slice(0,start)+'\n}\n'+source.slice(end)).replace('@Component\nexport struct ParsedDocumentView','export class ParsedDocumentView').replace(/@(State|Prop)(?:\s+@Watch\('[^']+'\))?\s+/g,'');
     }

@@ -1,0 +1,11 @@
+{
+  "name": "@harmony_agent/agent-testkit",
+  "version": "0.6.0",
+  "description": "Deterministic fault injection, integration fixtures, and benchmark evaluation for harmony_agent",
+  "main": "Index.ets",
+  "author": "harmony_agent",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@harmony_agent/agent-contracts": "file:../agent_contracts"
+  }
+}
