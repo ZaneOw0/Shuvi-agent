@@ -62,6 +62,8 @@ import { UnifiedQueryRepository } from './UnifiedQueryRepository';
 import { UnifiedQueryService } from '../application/UnifiedQueryService';
 import { KnowledgeQuerySession } from '../application/KnowledgeQuerySession';
 import { UnifiedKnowledgeHistoryRepository } from './UnifiedKnowledgeHistoryRepository';
+import { KnowledgeDatabaseAdapter } from '../application/KnowledgeDatabaseAdapter';
+import { KnowledgeRuntimeSearchAdapter } from '../application/KnowledgeRuntimeSearchAdapter';
 
 export { KnowledgePlatformIdentity } from './KnowledgeIdentity';
 class UnifiedAssemblyEmbeddingConfig implements UnifiedEmbeddingConfigPort {
@@ -88,6 +90,8 @@ export class KnowledgeAssembly {
   migration: ParsedDocumentMigrationService;
   querySession: KnowledgeQuerySession;
   unifiedHistory: UnifiedKnowledgeHistoryRepository;
+  knowledgeDatabase: KnowledgeDatabaseAdapter;
+  runtimeSearch: KnowledgeRuntimeSearchAdapter;
   unifiedLifecycle: ParsedDocumentLifecycle;
   unifiedMessage: string = '';
   text: TextKnowledgeAssembly;
@@ -117,6 +121,7 @@ export class KnowledgeAssembly {
     this.unifiedAssets = new ParsedDocumentAssets(context.filesDir,context.cacheDir,KnowledgeStorageScope.production(),this.unified,new KnowledgePlatformIdentity(),this.sessionId);
     this.unified.attachPublicationVerifier(this.unifiedAssets);
     this.unifiedIngestion = new ParsedDocumentIngestionService(this.unified,this.unifiedAssets,new KnowledgePlatformIdentity());
+    this.knowledgeDatabase = new KnowledgeDatabaseAdapter(this.unified,this.unifiedAssets,this.unifiedIngestion,new KnowledgePlatformIdentity());
     this.unifiedImports = new ParsedDocumentImportAdapter(context,this.host,new KnowledgePlatformIdentity(),this.unifiedIngestion);
     this.migration=new ParsedDocumentMigrationService(new LegacyParsedDocumentReader(context,this.host,new KnowledgePlatformIdentity()),this.unified,this.unifiedAssets,new KnowledgePlatformIdentity());
     this.text = new TextKnowledgeAssembly(context, (): void => { this.changed(); }, this.host);
@@ -166,6 +171,7 @@ export class KnowledgeAssembly {
     this.unifiedQueue=new UnifiedProcessingQueue(this.unified,this.unified,this.unifiedAssets,new KnowledgePlatformIdentity(),this.imageKnowledge,this.unifiedEmbedding);
     this.unifiedSettings=new UnifiedSettingsService(this.unified,visionCredential,unifiedConfig,this.unifiedQueue);
     const queryRepository: UnifiedQueryRepository=new UnifiedQueryRepository(this.host,this.unified,this.vectors,unifiedConfig,new KnowledgePlatformIdentity());
+    this.runtimeSearch=new KnowledgeRuntimeSearchAdapter(queryRepository,unifiedConfig);
     this.sourceRegistry.attachUnifiedAdmission(queryRepository); transport.attachUnifiedQuery(counter,this.sourceRegistry);
     const queryEngine: UnifiedQueryService=new UnifiedQueryService(queryRepository,queryRepository,this.unified,this.vectors,unifiedConfig,counter,transport,new KnowledgePlatformIdentity());
     this.unifiedHistory=new UnifiedKnowledgeHistoryRepository(this.unified,this.unifiedAssets,queryRepository);
@@ -247,7 +253,16 @@ export class KnowledgeAssembly {
   }
   async retryUnifiedProcessing(): Promise<void> { await this.unifiedQueue.stop(); await this.retryUnifiedInitialization(); await this.unifiedLifecycle.sync(); await this.unifiedQueue.initialize(); await this.unifiedIngestion.refresh(); }
   async acquire(): Promise<void> {
-    const operation = this.gate.then(async (): Promise<void> => { if (this.initializing === undefined) { this.initializing = this.start(); } const initializing: Promise<void> = this.initializing; await initializing; this.leases++; }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
+    const operation = this.gate.then(async (): Promise<void> => {
+      let initializing: Promise<void> | undefined = this.initializing;
+      if (initializing === undefined) { initializing = this.start(); this.initializing = initializing; }
+      try { await initializing; } catch (error) {
+        if (this.initializing === initializing) { this.initializing = undefined; }
+        if (error instanceof Error) { throw error; }
+        throw new Error('KNOWLEDGE_INITIALIZATION_FAILED');
+      }
+      this.leases++;
+    }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
   }
   async release(): Promise<void> {
     const operation = this.gate.then(async (): Promise<void> => { if (this.leases <= 0) { return; } if (this.leases === 1) { this.closing = this.closeSession(); const closing: Promise<void> = this.closing; try { await closing; } finally { this.closing = undefined; } } this.leases--; }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
@@ -276,6 +291,7 @@ export class KnowledgeAssembly {
     }
   }
   private async closeSession(): Promise<void> {
+    try {
        await this.quiesceUnified();
        await this.retrySourceReleases(); await this.imageSources.close(); await this.docxSources.close();
         this.embedding.pause(); this.ingestion.pause(); this.search.pause(); this.pages.pause();
@@ -283,7 +299,8 @@ export class KnowledgeAssembly {
        const deadline: number = Date.now()+120000;
         while (this.embedding.state.busy || this.ingestion.state.busy || this.ingestion.state.releasing || this.search.state.busy || this.pages.reading()) { if (Date.now() >= deadline) { throw new Error('KnowledgeSessionReleaseUnconfirmed'); } await new Promise<void>((resolve: () => void): void => { setTimeout(resolve,20); }); }
         await this.retrySourceReleases();
-       this.pages.clearCache(); await this.vectors.close(); await this.docx.close(); await this.images.close(); await this.repository.close(); await this.unified.close(); await this.text.close(); this.initializing = undefined;
+       this.pages.clearCache(); await this.vectors.close(); await this.docx.close(); await this.images.close(); await this.repository.close(); await this.unified.close(); await this.text.close();
+    } finally { this.initializing = undefined; }
   }
    async quiesceUnified(): Promise<void> { this.unifiedIngestion.pause(); this.migration.pause(); await this.querySession.close(); await this.unifiedQueue.stop(); await this.migration.close(); await this.unifiedIngestion.stop(); }
    static foreground(): void { for (const session of KnowledgeAssembly.sessions) { session.unifiedQueue.resumeForeground(); } }

@@ -18,7 +18,10 @@ class Decoder {
 }
 const nativeModules = {
   '@ohos.net.http': http,
-  '@ohos.util': { TextEncoder: Encoder, TextDecoder: Decoder, generateRandomUUID: () => crypto.randomUUID() },
+  '@ohos.util': { TextEncoder: Encoder, TextDecoder: Decoder, generateRandomUUID: () => crypto.randomUUID(),
+    Type: { BASIC: 0 }, Base64Helper: class {
+      async encodeToString(bytes) { return Buffer.from(bytes).toString('base64'); }
+    } },
   '@ohos.security.asset': {},
   '@kit.BasicServicesKit': {},
   '@ohos.app.ability.common': {},
@@ -1821,6 +1824,559 @@ test('search quota is enforced before dispatch even when two tasks already await
   } finally { await session.stop(); }
 });
 
+// Knowledge UX integration: actual Runtime, durable zero-cost grant verifier, local retrieval and PERSONAL answer.
+const knowledgeSupport = load(path.join(services, 'KnowledgeTaskSupport.ets'));
+const knowledgeAnswerSupport = load(path.join(services, 'KnowledgeAnswerTaskSupport.ets'));
+const { KnowledgeAnswerExecutionStore, KnowledgeAnswerExecutionResource } = load(path.join(services, 'KnowledgeAnswerExecutionStore.ets'));
+const { RuntimeKnowledgeSession } = load(path.join(services, 'RuntimeKnowledgeSession.ets'));
+function knowledgeJournalBackend() {
+  const h = { value: undefined, fail: false };
+  h.port = { async initialize() {}, async load() { return h.value; }, async compareAndSet(rev, next) {
+    if (h.fail || rev !== (h.value?.revision || 0)) return false;
+    h.value = structuredClone(next); return true;
+  } }; return h;
+}
+function knowledgeModelResponse(text, status = 200) {
+  if (status !== 200) return { statusCode: status, body: JSON.stringify({ error: { message: 'private provider body' } }) };
+  return { statusCode: 200, body: JSON.stringify({ object: 'chat.completion', model: 'deepseek-flash',
+    choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }) };
+}
+function knowledgeCitation(id = 1, excerpt = '本机知识库片段说明 Runtime 采用持久化执行记录。') {
+  return { citationId: id, evidenceId: 'internal-evidence-' + id, documentId: 'upd-internal-document',
+    generation: 'generation-internal-' + id, title: '本机笔记 ' + id, excerpt, kind: 'Text', evidence: 'BodyDirect' };
+}
+function knowledgeCitations(options = {}) {
+  if (options.empty) return [];
+  if (options.tagOnly) { const item = knowledgeCitation(); item.evidence = 'Tag'; return [item]; }
+  if (options.badEvidence) { const item = knowledgeCitation(); item.excerpt = ''; return [item]; }
+  if (options.twoCitations) return [knowledgeCitation(1), knowledgeCitation(2, '第二条本机片段用于引用编号校验。')];
+  return [knowledgeCitation()];
+}
+function liveKnowledgeHarness(options = {}) {
+  const toolDb = writableRdb(); const answerBackend = knowledgeJournalBackend();
+  const trace = { searches: 0, models: 0, acquired: 0, released: 0, answerOpened: 0, answerClosed: 0,
+    modelCancelled: 0, bodies: [] };
+  let journal;
+  const assemblyPort = {
+    async acquire() { trace.acquired++; }, async release() { trace.released++; },
+    runtimeSearch: { async search(request) {
+      trace.searches++;
+      if (options.searchFail) throw Error('private local failure');
+      if (options.searchGate) await options.searchGate.promise;
+      if (options.failToolOutcome) { toolDb.failWrites = true; }
+      return { schemaVersion: '1.0', provider: 'shuvi-local-knowledge', query: request.query, route: 'local-direct',
+        citations: knowledgeCitations(options) };
+    } }
+  };
+  class FakeKnowledgeAssembly { static forContext() { return assemblyPort; } }
+  class AnswerResource {
+    closed = false;
+    async open() {
+      trace.answerOpened++; journal = new KnowledgeAnswerExecutionStore(answerBackend.port, new AgentHostDigest());
+      await journal.open();
+    }
+    async close() { if (!this.closed) trace.answerClosed++; this.closed = true; }
+    saveCheckpoint(...args) { return journal.saveCheckpoint(...args); }
+    loadCheckpoint(...args) { return journal.loadCheckpoint(...args); }
+    beforeDispatch(...args) { return journal.beforeDispatch(...args); }
+    async recordOutcome(...args) {
+      try {
+        const result = await journal.recordOutcome(...args);
+        if (!result.accepted && !result.duplicate) this.onOutcomeRejected(args[0]);
+        return result;
+      } catch (error) { this.onOutcomeRejected(args[0]); throw error; }
+    }
+    recordDispatchRejected(...args) { return journal.recordDispatchRejected(...args); }
+    normalizeRecoveredOperation(...args) { return journal.normalizeRecoveredOperation(...args); }
+    recordReconciliation(...args) { return journal.recordReconciliation(...args); }
+  }
+  class ModelClient {
+    start(request) {
+      trace.models++; assert.equal(request.authorization, 'Bearer test-only-key');
+      trace.bodies.push(JSON.parse(request.body));
+      if (options.failAnswerWriteAfterModel) answerBackend.fail = true;
+      if (options.modelGate) return { result: options.modelGate.promise, cancel() { trace.modelCancelled++; } };
+      const firstFailure = options.failFirst && trace.models === 1;
+      const status = firstFailure ? 401 : (options.modelStatus || 200);
+      return { result: Promise.resolve(knowledgeModelResponse(options.modelText || '{"answer":"依据本机片段回答 [1]","citations":[1]}', status)),
+        cancel() { trace.modelCancelled++; } };
+    }
+  }
+  const toolAssembly = load(path.join(services, 'KnowledgeRuntimeAssembly.ets'), {
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly: FakeKnowledgeAssembly }
+  });
+  const answerAssembly = load(path.join(services, 'KnowledgeAnswerRuntimeAssembly.ets'), {
+    './KnowledgeAnswerExecutionStore': { KnowledgeAnswerExecutionResource: AnswerResource },
+    './DeepSeekHttpClient': { ArkTsDeepSeekHttpClient: ModelClient }
+  });
+  const ui = new RuntimeKnowledgeSession(); ui.onForeground();
+  const toolFactory = new toolAssembly.KnowledgeRuntimeFactory({ open(config) { return toolDb.opener.open(config); } }, assemblyPort, true,
+    (taskId) => ui.toolOutcomeRejected(taskId));
+  const answerFactory = new answerAssembly.KnowledgeAnswerRuntimeFactory({}, true, ui.answerContext,
+    (taskId) => ui.answerOutcomeRejected(taskId));
+  return { ui, toolFactory, answerFactory, trace, toolDb, answerBackend, assemblyPort, async start(consent = true) {
+    const key = new TextEncoder().encode('test-only-key');
+    await ui.start(toolFactory, answerFactory, key, consent);
+    if (consent) assert.equal(ui.snapshot().lifecycle, ShuviRuntimeState.READY, ui.snapshot().message);
+    assert(key.every(value => value === 0), 'knowledge session must consume the key');
+  } };
+}
+async function waitKnowledge(ui, predicate = view => !view.busy) {
+  for (let i = 0; i < 200; i++) { if (predicate(ui.snapshot())) return; await new Promise(resolve => setTimeout(resolve, 2)); }
+  assert.fail('Knowledge state did not arrive: ' + JSON.stringify(ui.snapshot()));
+}
+async function waitKnowledgeModel(ui) {
+  for (let i = 0; i < 200 && ui.snapshot().stage !== 'answering'; i++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert.equal(ui.snapshot().stage, 'answering', JSON.stringify(ui.snapshot()));
+}
+test('knowledge UX auto-authorizes one zero-cost local read, then persists one PERSONAL answer', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  try {
+    assert.equal(h.trace.searches, 0); assert.equal(h.trace.models, 0);
+    assert.equal(await h.ui.send('same query'), true);
+    await waitKnowledge(h.ui);
+    assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 1);
+    assert.equal(h.ui.snapshot().stage, 'complete');
+    assert.equal(h.ui.snapshot().citations[0].evidenceId, 'internal-evidence-1');
+    assert.match(h.ui.snapshot().answer, /\[1\]/); assert.match(h.ui.snapshot().message, /本机检索与 DeepSeek 回答均已完成/);
+    assert.equal(h.toolDb.opens[0].name, 'shuvi_knowledge_runtime_v1.db'); assert.equal(h.toolDb.opens[0].encrypt, true);
+    const toolPayload = JSON.parse(h.toolDb.envelope.payloadJson); assert.equal(toolPayload.operations.length, 1);
+    assert.equal(toolPayload.operations[0].state, invoiceCore.OperationJournalState.COMMITTED);
+    assert.equal(toolPayload.operations[0].invoice, undefined); assert.equal(toolPayload.operations[0].pendingInvoice, undefined);
+    const answerPayload = JSON.parse(h.answerBackend.value.payloadJson); assert.equal(answerPayload.records.length, 1);
+    assert.equal(answerPayload.records[0].checkpoint.envelope.privacyClass, contracts.PrivacyClass.PERSONAL);
+    assert.equal(answerPayload.records[0].checkpoint.workflow.steps[0].stepId, 'knowledge-answer');
+    assert.equal(answerPayload.records[0].outcome.status, contracts.ToolOutcomeStatus.SUCCEEDED);
+    assert(!JSON.stringify(answerPayload).includes('test-only-key'));
+  } finally { await h.ui.stop(); }
+  assert.equal(h.trace.acquired, 1); assert.equal(h.trace.released, 1);
+  assert.equal(h.trace.answerOpened, 1); assert.equal(h.trace.answerClosed, 1);
+});
+test('knowledge empty and failed reads never fabricate citations or an answer', async () => {
+  for (const options of [{empty:true},{searchFail:true}]) {
+    const h = liveKnowledgeHarness(options); await h.start();
+    try {
+      await h.ui.send('same query'); await waitKnowledge(h.ui);
+      assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 0);
+      assert.equal(h.ui.snapshot().citations.length, 0);
+      assert.equal(h.ui.snapshot().answer, '');
+      assert.equal(h.ui.snapshot().stage, options.empty ? 'empty' : 'retrievalFailed');
+    } finally { await h.ui.stop(); }
+  }
+});
+test('knowledge result parser rejects tag-only, duplicate or unstable evidence and mismatched questions', () => {
+  const base = { schemaVersion:'1.0', provider:'shuvi-local-knowledge', query:'q', route:'local-direct', citations:[
+    {citationId:1,evidenceId:'e1',documentId:'d1',generation:'g1',title:'t',excerpt:'body',kind:'Text',evidence:'BodyDirect'}] };
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify(base),'q').citations.length,1);
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify(base),'other'),undefined);
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify({...base,citations:[{...base.citations[0],evidence:'Tag'}]}),'q'),undefined);
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify({...base,citations:[base.citations[0],
+    {...base.citations[0],citationId:2}]}),'q'),undefined);
+  const four={...base,citations:[1,2,3,4].map(i=>({...base.citations[0],citationId:i,evidenceId:'e'+i,excerpt:'x'.repeat(800)}))};
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify(four),'q').citations.length,4);
+  const five={...base,citations:[1,2,3,4,5].map(i=>({...base.citations[0],citationId:i,evidenceId:'e5-'+i,excerpt:'x'.repeat(800)}))};
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify(five),'q'),undefined);
+});
+test('knowledge local-only mode keeps the citations-only page path and never calls the model', async () => {
+  const h = liveKnowledgeHarness(); await h.ui.startLocal(h.toolFactory);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY);
+  assert.equal(h.trace.answerOpened, 0);
+  await h.ui.send('same query'); await waitKnowledge(h.ui);
+  assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 0);
+  assert.equal(h.ui.snapshot().stage, 'complete');
+  assert.equal(h.ui.snapshot().citations.length, 1);
+  assert.match(h.ui.snapshot().answer, /1 条/);
+  await h.ui.stop();
+});
+test('knowledge local-only stop leaves the idle prompt and never claims a model request', async () => {
+  const idle = liveKnowledgeHarness();
+  await idle.ui.stop();
+  assert.equal(idle.ui.snapshot().lifecycle, ShuviRuntimeState.IDLE);
+  assert.match(idle.ui.snapshot().message, /尚未启用/);
+  const h = liveKnowledgeHarness(); await h.ui.startLocal(h.toolFactory);
+  await h.ui.send('same query'); await waitKnowledge(h.ui);
+  await h.ui.stop();
+  assert.match(h.ui.snapshot().message, /未发送模型请求/);
+  assert.doesNotMatch(h.ui.snapshot().message, /模型请求仍可能计费/);
+});
+test('knowledge answer startup failure rolls back the tool session and keeps prior citations', async () => {
+  const h = liveKnowledgeHarness(); await h.ui.startLocal(h.toolFactory);
+  await h.ui.send('same query'); await waitKnowledge(h.ui);
+  const previous = h.ui.snapshot().citations.length;
+  await h.ui.stop();
+  const failing = { create() { throw Error('injected answer start failure'); } };
+  const key = new TextEncoder().encode('test-only-key');
+  await h.ui.start(h.toolFactory, failing, key, true);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.FAILED, h.ui.snapshot().message);
+  assert.match(h.ui.snapshot().message, /启动失败/);
+  assert.equal(h.ui.snapshot().consent, false);
+  assert.equal(h.ui.snapshot().citations.length, previous);
+  assert(key.every(value => value === 0));
+  assert.equal(h.trace.answerOpened, 0);
+  assert.equal(h.trace.released, 2);
+});
+test('knowledge answer startup close failure keeps the BLOCKED recovery message', async () => {
+  const h = liveKnowledgeHarness();
+  h.assemblyPort.release = async () => { throw Error('injected close failure'); };
+  const failing = { create() { throw Error('injected answer start failure'); } };
+  await h.ui.start(h.toolFactory, failing, new TextEncoder().encode('test-only-key'), true);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.BLOCKED);
+  assert.match(h.ui.snapshot().message, /资源关闭未确认/);
+  assert.doesNotMatch(h.ui.snapshot().message, /启动失败/);
+});
+test('knowledge cancel during retrieval never calls the model and ignores late evidence', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ searchGate: gate }); await h.start();
+  try {
+    await h.ui.send('same query');
+    for (let i = 0; i < 200 && h.trace.searches === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(h.trace.searches, 1);
+    await h.ui.cancelCurrent();
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    assert.equal(h.ui.snapshot().citations.length, 0);
+    gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.trace.models, 0);
+    assert.equal(h.ui.snapshot().citations.length, 0);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge cancel during retrieval suppresses a completion that arrives while cancel is pending', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ searchGate: gate }); await h.start();
+  const originalCancel = h.ui.knowledge.cancel.bind(h.ui.knowledge);
+  let releaseCancel; let cancelStarted = false;
+  h.ui.knowledge.cancel = async (taskId) => {
+    cancelStarted = true; gate.resolve();
+    await new Promise(resolve => { releaseCancel = resolve; });
+    return originalCancel(taskId);
+  };
+  try {
+    await h.ui.send('same query');
+    for (let i = 0; i < 200 && h.trace.searches === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    const pending = h.ui.cancelCurrent();
+    for (let i = 0; i < 200 && !cancelStarted; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    assert.equal(h.trace.models, 0);
+    if (releaseCancel) releaseCancel();
+    await pending;
+    assert.equal(h.trace.models, 0);
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+  } finally { if (releaseCancel) releaseCancel(); await h.ui.stop(); }
+});
+test('knowledge submit failure after acceptance cancels the orphan task', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  const originalCancel = h.ui.knowledge.cancel.bind(h.ui.knowledge);
+  let cancelled = ''; h.ui.knowledge.cancel = async (taskId) => { cancelled = taskId; return originalCancel(taskId); };
+  h.ui.knowledge.subscribe = async () => { throw Error('injected subscribe failure'); };
+  try {
+    await h.ui.send('same query'); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    assert(cancelled.length > 0);
+    assert.equal(h.trace.models, 0);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge answer stops after ten model calls and never reports success', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  try {
+    for (let i = 0; i < 11; i++) { await h.ui.send('same query'); await waitKnowledge(h.ui); }
+    assert.equal(h.trace.searches, 11);
+    assert.equal(h.trace.models, 10);
+    assert.equal(h.ui.snapshot().stage, 'answerFailed');
+    assert.equal(h.ui.snapshot().citations.length, 1);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge answer blocks unconsented use and enable never calls the model', async () => {
+  const denied = liveKnowledgeHarness(); await denied.start(false);
+  assert.notEqual(denied.ui.snapshot().lifecycle, ShuviRuntimeState.READY);
+  assert.equal(denied.ui.snapshot().consent, false);
+  assert.equal(denied.trace.searches, 0); assert.equal(denied.trace.models, 0);
+  assert.equal(await denied.ui.send('same query'), false);
+  const h = liveKnowledgeHarness(); await h.start();
+  try {
+    assert.equal(h.ui.snapshot().consent, true);
+    assert.equal(h.trace.searches, 0); assert.equal(h.trace.models, 0);
+    assert.equal(h.trace.answerOpened, 1);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge retrieval precedes the model and empty results never call it', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ searchGate: gate }); await h.start();
+  try {
+    const first = h.ui.send('same query');
+    assert.equal(await h.ui.send('duplicate query'), false);
+    await first;
+    for (let i = 0; i < 200 && h.trace.searches === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 0);
+    gate.resolve(); await waitKnowledge(h.ui);
+    assert.equal(h.trace.models, 1); assert.equal(h.ui.snapshot().stage, 'complete');
+  } finally { await h.ui.stop(); }
+  const empty = liveKnowledgeHarness({ empty: true }); await empty.start();
+  try {
+    await empty.ui.send('same query'); await waitKnowledge(empty.ui);
+    assert.equal(empty.trace.searches, 1); assert.equal(empty.trace.models, 0);
+    assert.equal(empty.ui.snapshot().stage, 'empty'); assert.equal(empty.ui.snapshot().citations.length, 0);
+  } finally { await empty.ui.stop(); }
+});
+test('knowledge tag-only, invalid evidence and retrieval failure never call the model', async () => {
+  for (const options of [{tagOnly:true},{badEvidence:true},{searchFail:true}]) {
+    const h = liveKnowledgeHarness(options); await h.start();
+    try {
+      await h.ui.send('same query'); await waitKnowledge(h.ui);
+      assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 0);
+      assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+      assert.equal(h.ui.snapshot().answer, '');
+    } finally { await h.ui.stop(); }
+  }
+});
+test('knowledge answer sends only the question, short titles and excerpts under PERSONAL', async () => {
+  const h = liveKnowledgeHarness({ twoCitations: true }); await h.start();
+  try {
+    await h.ui.send('本机问题'); await waitKnowledge(h.ui);
+    assert.equal(h.trace.models, 1);
+    const body = h.trace.bodies[0]; assert.equal(body.messages.length, 2);
+    const user = body.messages[1].content;
+    assert.match(user, /本机问题/); assert.match(user, /\[1\]/); assert.match(user, /\[2\]/);
+    assert.match(user, /本机笔记/); assert.match(user, /第二条本机片段/);
+    for (const forbidden of ['internal-evidence-1','internal-evidence-2','upd-internal-document',
+      'generation-internal','sourceHash','documentId','evidenceId','/data/','shuvi_','native://']) {
+      assert(!user.includes(forbidden), 'prompt leaked ' + forbidden);
+    }
+    assert.equal(body.response_format.type, 'json_object');
+    const payload = JSON.parse(h.answerBackend.value.payloadJson);
+    assert.equal(payload.records[0].checkpoint.envelope.privacyClass, contracts.PrivacyClass.PERSONAL);
+  } finally { await h.ui.stop(); }
+});
+test('ordinary chat remains PUBLIC while knowledge answer planning requires PERSONAL', async () => {
+  assert.equal(chatAssembly.chatFrontendConfig().privacyClass, contracts.PrivacyClass.PUBLIC);
+  const chatPlanner = new chatAssembly.ChatPlanner();
+  const personal = new runtime.PlanningRequest();
+  personal.envelope.taskId = 'task-personal'; personal.envelope.userIntent = 'question';
+  personal.envelope.privacyClass = contracts.PrivacyClass.PERSONAL;
+  assert.equal((await chatPlanner.plan(personal)).status, runtime.PlanningStatus.REJECTED);
+  const publicRequest = new runtime.PlanningRequest();
+  publicRequest.envelope.taskId = 'task-public'; publicRequest.envelope.userIntent = 'question';
+  publicRequest.envelope.privacyClass = contracts.PrivacyClass.PUBLIC;
+  assert.equal((await chatPlanner.plan(publicRequest)).status, runtime.PlanningStatus.READY);
+  const answerPlanner = new knowledgeAnswerSupport.KnowledgeAnswerPlanner();
+  assert.equal((await answerPlanner.plan(personal)).status, runtime.PlanningStatus.READY);
+  assert.equal((await answerPlanner.plan(publicRequest)).status, runtime.PlanningStatus.REJECTED);
+});
+test('knowledge answer rejects missing, out-of-range or duplicate citations', async () => {
+  const cases = [
+    '{"answer":"回答 [2]","citations":[2]}',
+    '{"answer":"回答 [0] [1]","citations":[1]}',
+    '{"answer":"回答 [-1] [1]","citations":[1]}',
+    '{"answer":"回答 [1.5] [1]","citations":[1]}',
+    '{"answer":"回答 [1]","citations":[]}',
+    '{"answer":"没有引用","citations":[1]}',
+    '{"answer":"回答 [1]","citations":[1,1]}',
+    '{"answer":"回答 [1]","citations":[1,2]}'
+  ];
+  for (const modelText of cases) {
+    const h = liveKnowledgeHarness({ modelText }); await h.start();
+    try {
+      await h.ui.send('same query'); await waitKnowledge(h.ui);
+      assert.equal(h.trace.models, 1); assert.equal(h.ui.snapshot().stage, 'answerFailed');
+      assert.equal(h.ui.snapshot().answer, ''); assert.equal(h.ui.snapshot().citations.length, 1);
+    } finally { await h.ui.stop(); }
+  }
+  const valid = liveKnowledgeHarness(); await valid.start();
+  try {
+    await valid.ui.send('same query'); await waitKnowledge(valid.ui);
+    assert.equal(valid.ui.snapshot().stage, 'complete');
+  } finally { await valid.ui.stop(); }
+});
+test('knowledge answer treats a no-citation insufficiency as a non-success state', async () => {
+  const h = liveKnowledgeHarness({ modelText: '{"answer":"资料中没有足够依据","citations":[]}' }); await h.start();
+  try {
+    await h.ui.send('same query'); await waitKnowledge(h.ui);
+    assert.equal(h.trace.models, 1);
+    assert.equal(h.ui.snapshot().stage, 'insufficient');
+    assert.equal(h.ui.snapshot().answer, '');
+    assert.equal(h.ui.snapshot().citations.length, 1);
+    assert.match(h.ui.snapshot().message, /资料中没有足够依据/);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge model failure keeps citations and retry answers without another retrieval', async () => {
+  const h = liveKnowledgeHarness({ failFirst: true }); await h.start();
+  try {
+    await h.ui.send('same query'); await waitKnowledge(h.ui);
+    assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 1);
+    assert.equal(h.ui.snapshot().stage, 'answerFailed');
+    assert.equal(h.ui.snapshot().answer, ''); assert.equal(h.ui.snapshot().citations.length, 1);
+    await h.ui.retryAnswer(); await waitKnowledge(h.ui);
+    assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 2);
+    assert.equal(h.ui.snapshot().stage, 'complete'); assert.match(h.ui.snapshot().answer, /\[1\]/);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge background stops the model, clears consent and ignores late results', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ modelGate: gate }); await h.start();
+  try {
+    await h.ui.send('same query'); await waitKnowledgeModel(h.ui);
+    assert.equal(h.trace.models, 1);
+    await h.ui.onBackground();
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.STOPPED);
+    assert.equal(h.ui.snapshot().consent, false); assert.equal(h.ui.snapshot().answer, '');
+    assert.equal(h.ui.snapshot().citations.length, 1);
+    assert(h.trace.modelCancelled >= 1);
+    gate.resolve(knowledgeModelResponse('{"answer":"迟到 [1]","citations":[1]}'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.ui.snapshot().answer, ''); assert.equal(h.trace.models, 1);
+    assert.equal(h.trace.answerClosed, 1); assert.equal(h.trace.released, 1);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge cancel during the model keeps citations and never re-searches', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ modelGate: gate }); await h.start();
+  try {
+    await h.ui.send('same query'); await waitKnowledgeModel(h.ui);
+    await h.ui.cancelCurrent();
+    assert.equal(h.ui.snapshot().stage, 'answerFailed');
+    assert.equal(h.ui.snapshot().citations.length, 1); assert.equal(h.ui.snapshot().answer, '');
+    assert.equal(h.trace.searches, 1);
+    gate.resolve(knowledgeModelResponse('{"answer":"迟到 [1]","citations":[1]}'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.ui.snapshot().answer, '');
+  } finally { await h.ui.stop(); }
+});
+test('knowledge answer persistence failure never displays success', async () => {
+  const before = liveKnowledgeHarness(); await before.start();
+  try {
+    before.answerBackend.fail = true;
+    await before.ui.send('same query');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(before.ui.snapshot().answer, '');
+    assert.notEqual(before.ui.snapshot().stage, 'complete');
+    assert.equal(before.trace.models, 0);
+  } finally { await before.ui.stop(); }
+  const after = liveKnowledgeHarness({ failAnswerWriteAfterModel: true }); await after.start();
+  try {
+    await after.ui.send('same query');
+    for (let i = 0; i < 200 && after.ui.snapshot().busy; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(after.ui.snapshot().busy, false);
+    assert.equal(after.ui.snapshot().stage, 'answerFailed');
+    assert.match(after.ui.snapshot().message, /未能可靠保存/);
+    assert.equal(after.ui.snapshot().answer, '');
+    assert.equal(after.ui.snapshot().citations.length, 1);
+    assert.equal(after.trace.models, 1);
+  } finally { await after.ui.stop(); }
+});
+test('knowledge tool outcome persistence rejection ends retrieval immediately without a model call', async () => {
+  const h = liveKnowledgeHarness({ failToolOutcome: true }); await h.start();
+  try {
+    await h.ui.send('same query');
+    for (let i = 0; i < 200 && h.ui.snapshot().busy; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(h.ui.snapshot().busy, false);
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    assert.match(h.ui.snapshot().message, /未能可靠保存/);
+    assert.equal(h.trace.models, 0);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge stop failure enters BLOCKED and cannot restart', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  h.assemblyPort.release = async () => { throw Error('private close failure'); };
+  await h.ui.stop();
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.BLOCKED);
+  const key = new TextEncoder().encode('test-only-key');
+  await h.ui.start(h.toolFactory, h.answerFactory, key, true);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.BLOCKED);
+  assert(key.every(value => value === 0));
+});
+test('knowledge session consumes the key, clears consent on stop and cannot be reused', async () => {
+  const h = liveKnowledgeHarness(); const key = new TextEncoder().encode('test-only-key');
+  await h.ui.start(h.toolFactory, h.answerFactory, key, true);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY, h.ui.snapshot().message);
+  assert(key.every(value => value === 0));
+  assert.equal(h.ui.snapshot().consent, true);
+  assert(!JSON.stringify(h.ui.snapshot()).includes('test-only-key'));
+  await h.ui.send('same query'); await waitKnowledge(h.ui);
+  await h.ui.stop();
+  assert.equal(h.ui.snapshot().consent, false);
+  assert.equal(h.trace.answerClosed, 1); assert.equal(h.trace.released, 1);
+  const before = h.trace.models;
+  assert.equal(await h.ui.send('another query'), false); assert.equal(h.trace.models, before);
+});
+test('knowledge stop after retrieval but before model submission prevents the model call', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  let submitStarted = false; let release;
+  const original = h.ui.answer.submit.bind(h.ui.answer);
+  h.ui.answer.submit = async (request) => {
+    submitStarted = true;
+    await new Promise(resolve => { release = resolve; });
+    return original(request);
+  };
+  try {
+    await h.ui.send('same query');
+    for (let i = 0; i < 200 && !submitStarted; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(submitStarted, true);
+    await h.ui.stop();
+    if (release) release();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(h.trace.models, 0);
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.STOPPED);
+  } finally { if (release) release(); await h.ui.stop(); }
+});
+test('knowledge answer resource uses its own encrypted database and reopens retained evidence', async () => {
+  nativeModules['@ohos.data.relationalStore'].RdbPredicates = class {
+    equalTo(key, value) { this[key] = value; return this; } and() { return this; }
+  };
+  nativeModules['@ohos.data.relationalStore'].ConflictResolution = { ON_CONFLICT_IGNORE: 1 };
+  const h = rdbHarness();
+  h.handle.update = async (values, predicate) => {
+    if (!h.envelope || h.envelope.revision !== predicate.revision) return 0;
+    h.envelope = { revision: values.revision, schemaVersion: values.schema_version,
+      payloadJson: values.payload_json, payloadDigest: values.payload_digest }; return 1;
+  };
+  h.handle.insert = async (_table, values) => {
+    if (h.envelope) return -1;
+    h.envelope = { revision: values.revision, schemaVersion: values.schema_version,
+      payloadJson: values.payload_json, payloadDigest: values.payload_digest }; return 1;
+  };
+  const resource = new KnowledgeAnswerExecutionResource(h.opener, new AgentHostDigest()); await resource.open();
+  assert.equal(h.opens[0].name, 'shuvi_knowledge_answer_v1.db'); assert.equal(h.opens[0].encrypt, true);
+  const source = liveKnowledgeHarness(); await source.start();
+  try {
+    await source.ui.send('same query'); await waitKnowledge(source.ui);
+    h.envelope = structuredClone(source.answerBackend.value);
+    await resource.close(); await resource.open();
+    const row = JSON.parse(h.envelope.payloadJson).records[0];
+    const reopened = await resource.loadCheckpoint(row.checkpoint.snapshot.taskId);
+    assert.equal(reopened.snapshot.status, contracts.AgentTaskStatus.COMPLETED);
+    assert.equal(reopened.envelope.privacyClass, contracts.PrivacyClass.PERSONAL);
+  } finally { await source.ui.stop(); await resource.close(); }
+});
+test('knowledge prompt excludes internal identifiers and fails closed on invalid evidence', () => {
+  const base = knowledgeCitation();
+  const prompt = knowledgeAnswerSupport.buildKnowledgePrompt('问题', [base]);
+  assert(prompt); assert.match(prompt, /问题/); assert.match(prompt, /\[1\]/); assert.match(prompt, /个人知识库片段/);
+  for (const forbidden of ['internal-evidence-1','upd-internal-document','generation-internal','sourceHash',
+    'documentId','evidenceId']) { assert(!prompt.includes(forbidden)); }
+  assert.equal(knowledgeAnswerSupport.buildKnowledgePrompt('问题', [{...base, excerpt:'x'.repeat(801)}]), undefined);
+  assert.equal(knowledgeAnswerSupport.buildKnowledgePrompt('问题', [{...base, evidence:'Tag'}]), undefined);
+  const five = [1,2,3,4,5].map(id => ({...base, citationId:id, evidenceId:'e'+id, excerpt:'x'.repeat(800)}));
+  assert.equal(knowledgeAnswerSupport.buildKnowledgePrompt('问题', five), undefined);
+  const bounded = [1,2,3,4,5].map(id => ({...base, citationId:id, evidenceId:'e'+id, excerpt:'x'.repeat(640)}));
+  assert(knowledgeAnswerSupport.buildKnowledgePrompt('问题', bounded));
+});
+test('knowledge answer parser enforces schema, citation bounds and markers', () => {
+  const valid = { schemaVersion:'1.0', kind:'knowledgeAnswer', text:'回答 [1]', citationIds:[1], inputTokens:100, outputTokens:20 };
+  assert(knowledgeAnswerSupport.parseKnowledgeAnswer(JSON.stringify(valid),1));
+  for (const bad of [
+    {...valid, schemaVersion:'2.0'}, {...valid, kind:'other'}, {...valid, text:''}, {...valid, text:'没有引用'},
+    {...valid, citationIds:[]}, {...valid, citationIds:[2]}, {...valid, citationIds:[1,1]},
+    {...valid, inputTokens:8193}, {...valid, outputTokens:1025}, {...valid, text:'回答 [2]'},
+    {...valid, text:'回答 [0] [1]'}, {...valid, text:'回答 [-1] [1]'}, {...valid, text:'回答 [1.5] [1]'}
+  ]) assert.equal(knowledgeAnswerSupport.parseKnowledgeAnswer(JSON.stringify(bad),1), undefined);
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeAnswer(JSON.stringify(valid),0), undefined);
+  assert(knowledgeAnswerSupport.parseKnowledgeModelOutput('{"answer":"回答 [1]","citations":[1]}',1));
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeModelOutput('```json\n{"answer":"回答 [1]","citations":[1]}\n```',1), undefined);
+  const context = new knowledgeAnswerSupport.KnowledgeAnswerContext();
+  assert.match(context.systemPrompt(), /不要用方括号/);
+  const insufficient = { schemaVersion:'1.0', kind:'knowledgeInsufficient', text:'资料中没有足够依据', citationIds:[], inputTokens:10, outputTokens:5 };
+  assert(knowledgeAnswerSupport.parseKnowledgeInsufficient(JSON.stringify(insufficient)));
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeInsufficient(JSON.stringify({...insufficient, citationIds:[1]})), undefined);
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeInsufficient(JSON.stringify({...insufficient, text:'其他'})), undefined);
+  assert(knowledgeAnswerSupport.parseKnowledgeModelInsufficient('{"answer":"资料中没有足够依据","citations":[]}'));
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeModelInsufficient('{"answer":"资料中没有足够依据","citations":[1]}'), undefined);
+});
+
 
 for (const kind of ['execution', 'memory']) {
   test(`RDB ${kind} insert is awaited and its rejection is propagated`, async () => {
@@ -1847,3 +2403,342 @@ for (const kind of ['execution', 'memory']) {
     }
   });
 }
+
+// Route 2: session-key direct vision answer. Real protocol/validation; network and image decode are injected.
+const visionProtocol = load(path.join(services, 'VisionChatProtocol.ets'));
+const visionSupport = load(path.join(services, 'VisionAnswerTaskSupport.ets'));
+const visionPorts = load(path.join(services, 'VisionImagePorts.ets'));
+const visionStore = load(path.join(services, 'KnowledgeAnswerExecutionStore.ets'));
+const visionAssembly = load(path.join(services, 'VisionAnswerRuntimeAssembly.ets'));
+const { RuntimeVisionSession } = load(path.join(services, 'RuntimeVisionSession.ets'));
+
+function visionImage(overrides = {}) {
+  return Object.assign(new visionProtocol.VisionChatImage(), {
+    mime: 'image/jpeg', width: 1024, height: 768, sha256: 'a'.repeat(64), bytes: new Uint8Array([1, 2, 3, 4])
+  }, overrides);
+}
+function visionRequest(overrides = {}) {
+  return Object.assign(new visionProtocol.VisionChatRequest(), {
+    modelId: 'test-model', systemPrompt: '只依据图片回答并输出 JSON。', question: '图里是什么？', image: visionImage()
+  }, overrides);
+}
+function visionResponse(text, overrides = {}) {
+  return { statusCode: 200, body: JSON.stringify({ object: 'chat.completion', model: 'test-model',
+    choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 }, ...overrides }) };
+}
+function visionResult(text, overrides = {}) {
+  return Object.assign(new visionProtocol.VisionChatResult(), {
+    outputText: text, inputTokens: 100, outputTokens: 20, finishReason: 'stop', modelId: 'test-model'
+  }, overrides);
+}
+function visionPolicy() {
+  const policy = new visionStore.AnswerExecutionPolicy();
+  policy.schema = 'shuvi-vision-answer-1.0'; policy.storeName = 'shuvi_vision_answer_v1.db';
+  policy.memoryStoreName = 'shuvi_vision_answer_unused_memory_v1.db'; policy.stepId = visionSupport.VISION_ANSWER_STEP_ID;
+  return policy;
+}
+
+test('vision payload sends only the question and sanitized image with strict JSON mode', () => {
+  const body = visionProtocol.buildVisionChatBody(visionRequest({
+    systemPrompt: new visionSupport.VisionAnswerContext().systemPrompt()
+  }), 'AQID');
+  assert(body); const parsed = JSON.parse(body);
+  assert.equal(parsed.model, 'test-model'); assert.deepEqual(parsed.thinking, { type: 'disabled' });
+  assert.equal(parsed.stream, false); assert.deepEqual(parsed.response_format, { type: 'json_object' });
+  assert.equal(parsed.max_tokens, visionProtocol.VISION_CHAT_MAX_OUTPUT_TOKENS);
+  assert.equal(parsed.messages[0].role, 'system'); assert.match(parsed.messages[0].content, /不可信数据/);
+  const parts = parsed.messages[1].content;
+  assert.equal(parts.length, 2); assert.equal(parts[0].type, 'text'); assert.match(parts[0].text, /图里是什么/);
+  assert.equal(parts[1].type, 'image_url'); assert.equal(parts[1].image_url.url, 'data:image/jpeg;base64,AQID');
+  assert(!body.includes('screen.jpg')); assert(!body.includes('file://')); assert(!body.includes('evidenceId'));
+  for (const bad of [
+    visionRequest({ modelId: 'https://other' }), visionRequest({ question: '' }), visionRequest({ question: 'x'.repeat(501) }),
+    visionRequest({ image: visionImage({ mime: 'image/gif' }) }), visionRequest({ image: visionImage({ bytes: new Uint8Array(0) }) }),
+    visionRequest({ maxOutputTokens: 0 }), visionRequest({ timeoutMs: 0 })
+  ]) assert.equal(visionProtocol.buildVisionChatBody(bad, 'AQID'), undefined);
+  assert.equal(visionProtocol.buildVisionChatBody(visionRequest(), 'not base64!'), undefined);
+});
+
+test('vision response parser enforces model, finish, usage and no tools', () => {
+  const ok = visionProtocol.parseVisionChatResponse(200, visionResponse('{"answer":"图中有文字 [1]","citations":[1]}').body, 'test-model');
+  assert.equal(ok.outputText, '{"answer":"图中有文字 [1]","citations":[1]}');
+  assert.equal(ok.inputTokens, 100); assert.equal(ok.outputTokens, 20);
+  const normal = JSON.parse(visionResponse('{}').body);
+  for (const body of ['{', 'null', '[]',
+    JSON.stringify({ ...normal, model: 'other' }), JSON.stringify({ ...normal, object: 'chat.completion.chunk' }),
+    JSON.stringify({ ...normal, choices: [] }), JSON.stringify({ ...normal, choices: [{ index: 0, message: { role: 'assistant', content: '' }, finish_reason: 'stop' }] }),
+    JSON.stringify({ ...normal, choices: [{ index: 0, message: { role: 'assistant', content: '{}' }, finish_reason: 'length' }] }),
+    JSON.stringify({ ...normal, choices: [{ index: 0, message: { role: 'assistant', content: '{}', tool_calls: [] }, finish_reason: 'stop' }] }),
+    JSON.stringify({ ...normal, usage: null }), JSON.stringify({ ...normal, usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 99 } })
+  ]) assert.throws(() => visionProtocol.parseVisionChatResponse(200, body, 'test-model'));
+  assert.throws(() => visionProtocol.parseVisionChatResponse(401, 'private body', 'test-model'),
+    error => error.code === 'AUTHENTICATION' && !error.message.includes('private'));
+});
+
+test('vision context freezes only bounded sanitized image evidence and fails closed', () => {
+  const context = new visionSupport.VisionAnswerContext();
+  assert(context.freeze('图里有什么？', visionImage()));
+  const snapshot = context.snapshotFor('图里有什么？');
+  assert(snapshot); assert.equal(snapshot.image.mime, 'image/jpeg'); assert.equal(snapshot.image.bytes.length, 4);
+  assert.equal(context.snapshotFor('另一个问题'), undefined);
+  context.clear(); assert.equal(context.snapshotFor('图里有什么？'), undefined);
+  const bad = new visionSupport.VisionAnswerContext();
+  for (const image of [visionImage({ mime: 'image/gif' }), visionImage({ bytes: new Uint8Array(0) }),
+    visionImage({ sha256: 'bad' }), visionImage({ width: 0 }), visionImage({ width: 8193 })]) {
+    assert.equal(bad.freeze('问题', image), false);
+  }
+  assert.match(context.systemPrompt(), /不可信数据/); assert.match(context.systemPrompt(), /资料中没有足够依据/);
+});
+
+function visionJournalBackend() {
+  const h = { value: undefined, fail: false };
+  h.port = { async initialize() {}, async load() { return h.value; }, async compareAndSet(rev, next) {
+    if (h.fail || rev !== (h.value?.revision || 0)) return false;
+    h.value = structuredClone(next); return true;
+  } }; return h;
+}
+function liveVisionHarness(options = {}) {
+  const backend = visionJournalBackend(); const trace = { requests: [], prepares: 0, cancels: 0,
+    opened: 0, closed: 0, rejected: 0 };
+  let journal;
+  const prepared = new visionPorts.VisionPreparedImage();
+  prepared.displayName = 'screen.jpg'; prepared.image = visionImage();
+  const preparer = { async prepare(uri, displayName) {
+    trace.prepares++;
+    if (options.prepareFail) throw new visionPorts.VisionImageFailure('IMAGE_HEADER_INVALID');
+    assert.equal(uri, 'file:///user/screen.jpg'); assert.equal(displayName, 'screen.jpg');
+    return prepared;
+  } };
+  class Resource {
+    closed = false;
+    async open() {
+      trace.opened++; journal = new visionStore.KnowledgeAnswerExecutionStore(backend.port, new AgentHostDigest(), visionPolicy());
+      await journal.open();
+    }
+    async close() { if (!this.closed) trace.closed++; this.closed = true; }
+    saveCheckpoint(...args) { return journal.saveCheckpoint(...args); }
+    loadCheckpoint(...args) { return journal.loadCheckpoint(...args); }
+    beforeDispatch(...args) { return journal.beforeDispatch(...args); }
+    async recordOutcome(...args) {
+      try {
+        if (options.failOutcome) { backend.fail = true; }
+        const result = await journal.recordOutcome(...args);
+        if (!result.accepted && !result.duplicate) { trace.rejected++; this.onOutcomeRejected(args[0]); }
+        return result;
+      } catch (error) { this.onOutcomeRejected(args[0]); throw error; }
+    }
+    recordDispatchRejected(...args) { return journal.recordDispatchRejected(...args); }
+    normalizeRecoveredOperation(...args) { return journal.normalizeRecoveredOperation(...args); }
+    recordReconciliation(...args) { return journal.recordReconciliation(...args); }
+  }
+  const transport = {
+    start(request, cancellation) {
+      trace.requests.push(request);
+      if (options.gate) return { result: options.gate.promise, cancel() { trace.cancels++; } };
+      const text = options.texts ? options.texts[Math.min(trace.requests.length - 1, options.texts.length - 1)] :
+        (options.text || '{"answer":"图中写着 Runtime [1]","citations":[1]}');
+      const result = options.fail ? Promise.reject(new Error('private provider failure')) : Promise.resolve(visionResult(text));
+      return { result, cancel() { trace.cancels++; } };
+    }
+  };
+  const assembly = load(path.join(services, 'VisionAnswerRuntimeAssembly.ets'), {
+    './KnowledgeAnswerExecutionStore': { ...visionStore, KnowledgeAnswerExecutionResource: Resource }
+  });
+  const ui = new RuntimeVisionSession(preparer); ui.onForeground();
+  const factory = new assembly.VisionAnswerRuntimeFactory({}, true, ui.answerContext, 'test-model',
+    (taskId) => ui.answerOutcomeRejected(taskId), transport);
+  return { ui, factory, trace, prepared, backend, gate: options.gate, async start(consent = true) {
+    const key = new TextEncoder().encode('test-only-key');
+    await ui.start(factory, key, consent);
+    if (consent) assert.equal(ui.snapshot().lifecycle, ShuviRuntimeState.READY, ui.snapshot().message);
+    assert(key.every(value => value === 0), 'vision session must consume the key');
+  }, async attach() {
+    assert.equal(await ui.attachImage('file:///user/screen.jpg', 'screen.jpg'), true);
+    assert.equal(ui.snapshot().imageReady, true);
+  } };
+}
+async function waitVision(ui, predicate = view => !view.busy) {
+  for (let i = 0; i < 300; i++) { if (predicate(ui.snapshot())) return; await new Promise(resolve => setTimeout(resolve, 2)); }
+  assert.fail('Vision state did not arrive: ' + JSON.stringify(ui.snapshot()));
+}
+test('vision session sends one image question only after consent and attachment', async () => {
+  const h = liveVisionHarness(); assert.equal(await h.ui.start(h.factory, new TextEncoder().encode('key'), false), undefined);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.IDLE); assert.equal(h.trace.requests.length, 0);
+  await h.start(); await h.attach();
+  assert.equal(h.ui.snapshot().imageName, 'screen.jpg'); assert.equal(h.ui.snapshot().imageBytes, 4);
+  assert.equal(h.ui.snapshot().pricingState, 'unverified'); assert.equal(h.ui.snapshot().maxRequests, 10);
+  assert.equal(await h.ui.send('图里写着什么？'), true); await waitVision(h.ui);
+  const view = h.ui.snapshot();
+  assert.equal(view.stage, 'complete', JSON.stringify(view)); assert.equal(view.answer, '图中写着 Runtime [1]');
+  assert.equal(h.trace.requests.length, 1); assert.equal(h.trace.requests[0].image.bytes.length, 4);
+  assert.equal(h.trace.requests[0].question, '图里写着什么？');
+  assert(!JSON.stringify(h.trace.requests[0]).includes('screen.jpg'));
+  await h.ui.stop();
+  assert.equal(h.ui.snapshot().imageReady, false); assert.equal(h.ui.snapshot().answer, '图中写着 Runtime [1]');
+  assert.equal(h.prepared.image.bytes.every(value => value === 0), true);
+});
+
+test('vision session keeps the image for retry and maps insufficient/invalid output to non-success', async () => {
+  const invalid = liveVisionHarness({ text: '{"answer":"没有引用","citations":[1]}' }); await invalid.start(); await invalid.attach();
+  await invalid.ui.send('问题'); await waitVision(invalid.ui);
+  assert.equal(invalid.ui.snapshot().stage, 'answerFailed'); assert.equal(invalid.ui.snapshot().imageReady, true);
+  assert.equal(invalid.trace.prepares, 1);
+  await invalid.ui.stop();
+
+  const insufficient = liveVisionHarness({ text: '{"answer":"资料中没有足够依据","citations":[]}' });
+  await insufficient.start(); await insufficient.attach();
+  await insufficient.ui.send('问题'); await waitVision(insufficient.ui);
+  assert.equal(insufficient.ui.snapshot().stage, 'insufficient'); assert.equal(insufficient.ui.snapshot().answer, '');
+  assert.equal(insufficient.ui.snapshot().imageReady, true);
+  await insufficient.ui.stop();
+
+  const retry = liveVisionHarness({ texts: ['{"answer":"没有引用","citations":[1]}',
+    '{"answer":"重试后依据图片回答 [1]","citations":[1]}'] });
+  await retry.start(); await retry.attach();
+  await retry.ui.send('问题'); await waitVision(retry.ui);
+  assert.equal(retry.ui.snapshot().stage, 'answerFailed');
+  await retry.ui.retryAnswer(); await waitVision(retry.ui);
+  assert.equal(retry.ui.snapshot().stage, 'complete'); assert.match(retry.ui.snapshot().answer, /重试后/);
+  assert.equal(retry.trace.prepares, 1); assert.equal(retry.trace.requests.length, 2);
+  await retry.ui.stop();
+});
+
+test('vision session failure, persistence rejection and image failure never become success', async () => {
+  const failed = liveVisionHarness({ fail: true }); await failed.start(); await failed.attach();
+  await failed.ui.send('问题'); await waitVision(failed.ui);
+  assert.equal(failed.ui.snapshot().stage, 'answerFailed'); assert.equal(failed.ui.snapshot().answer, '');
+  await failed.ui.stop();
+
+  const rejected = liveVisionHarness({ failOutcome: true }); await rejected.start(); await rejected.attach();
+  await rejected.ui.send('问题'); await waitVision(rejected.ui);
+  assert.equal(rejected.ui.snapshot().stage, 'answerFailed'); assert.equal(rejected.trace.rejected, 1);
+  await rejected.ui.stop();
+
+  const badImage = liveVisionHarness({ prepareFail: true }); await badImage.start();
+  assert.equal(await badImage.ui.attachImage('file:///user/bad.png', 'bad.png'), false);
+  assert.equal(badImage.ui.snapshot().stage, 'imageFailed'); assert.equal(badImage.trace.requests.length, 0);
+  await badImage.ui.stop();
+});
+
+test('vision answer execution resource uses its own encrypted database and step', async () => {
+  const h = rdbHarness();
+  const resource = new visionStore.KnowledgeAnswerExecutionResource(h.opener, new AgentHostDigest(), visionPolicy());
+  await resource.open();
+  assert.equal(h.opens[0].name, 'shuvi_vision_answer_v1.db'); assert.equal(h.opens[0].encrypt, true);
+  await resource.close();
+});
+
+const { ArkTsVisionChatTransport } = load(path.join(services, 'VisionChatTransport.ets'));
+function visionTransportHarness(options = {}) {
+  const sent = []; let cancelled = 0; let resolves = 0;
+  const http = { start(request) {
+    sent.push(request);
+    if (options.gate) return { result: options.gate.promise, cancel() { cancelled++; } };
+    return { result: Promise.resolve(options.response || visionResponse('{"answer":"图中有文字 [1]","citations":[1]}')),
+      cancel() { cancelled++; } };
+  } };
+  const credentials = { async resolve(provider, scope) {
+    resolves++; assert.equal(provider, 'deepseek-direct'); assert.equal(scope, 'deepseek.invoke');
+    if (options.credentialError) throw new Error('private credential detail');
+    if (options.headers) return { headers: options.headers };
+    return { headers: { Authorization: 'Bearer test-only-key' } };
+  } };
+  return { sent, http, credentials, get cancelled() { return cancelled; }, get resolves() { return resolves; },
+    transport: new ArkTsVisionChatTransport(http, credentials) };
+}
+test('vision transport sends sanitized image bytes through the session HTTP boundary', async () => {
+  const h = visionTransportHarness(); const cancellation = new connectors.ProviderCancellationSource();
+  const result = await h.transport.start(visionRequest(), cancellation).result;
+  assert.equal(result.outputText, '{"answer":"图中有文字 [1]","citations":[1]}');
+  assert.equal(h.sent.length, 1); assert.equal(h.sent[0].authorization, 'Bearer test-only-key');
+  assert(h.sent[0].body.includes('data:image/jpeg;base64,AQID'));
+  assert(!h.sent[0].body.includes('screen.jpg'));
+  assert.equal(h.sent[0].maxResponseBytes, visionProtocol.VISION_CHAT_MAX_RESPONSE_BYTES);
+});
+test('vision transport rejects bad credentials and malformed responses before success', async () => {
+  for (const headers of [{}, { authorization: 'Bearer test' }, { Authorization: 'Bearer a b' },
+    { Authorization: 'Bearer test', Other: 'x' }]) {
+    const h = visionTransportHarness({ headers });
+    await assert.rejects(h.transport.start(visionRequest(), new connectors.ProviderCancellationSource()).result,
+      error => error.code === 'AUTHENTICATION');
+    assert.equal(h.sent.length, 0);
+  }
+  const bad = visionTransportHarness({ response: { statusCode: 200, body: '{"object":"other"}' } });
+  await assert.rejects(bad.transport.start(visionRequest(), new connectors.ProviderCancellationSource()).result,
+    error => error.code === 'PROVIDER');
+});
+test('vision transport cancellation is idempotent and discards a late result', async () => {
+  const gate = deferred(); const h = visionTransportHarness({ gate });
+  const cancellation = new connectors.ProviderCancellationSource();
+  const operation = h.transport.start(visionRequest(), cancellation);
+  for (let i = 0; i < 50 && h.sent.length === 0; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.sent.length, 1);
+  operation.cancel(); operation.cancel();
+  gate.resolve(visionResponse('{"answer":"late [1]","citations":[1]}'));
+  await assert.rejects(operation.result, error => error.code === 'CANCELLED');
+  assert.equal(h.cancelled, 1);
+});
+
+test('vision answer config is PERSONAL with no tools, retries or replans', () => {
+  const config = visionAssembly.visionAnswerFrontendConfig();
+  assert.equal(config.privacyClass, contracts.PrivacyClass.PERSONAL);
+  assert.equal(config.requestedBudget.maxToolCalls, 0);
+  assert.equal(config.requestedBudget.maxRetries, 0);
+  assert.equal(config.requestedBudget.maxReplans, 0);
+  assert.equal(config.requestedBudget.maxMonetaryCostMicros, 10000);
+});
+
+test('vision cancel while the transport is pending discards the late result', async () => {
+  const gate = deferred(); const h = liveVisionHarness({ gate }); await h.start(); await h.attach();
+  const sending = h.ui.send('问题');
+  for (let i = 0; i < 100 && h.trace.requests.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert.equal(h.trace.requests.length, 1);
+  await h.ui.cancelCurrent();
+  gate.resolve(visionResult('{"answer":"迟到回答 [1]","citations":[1]}'));
+  await sending; await waitVision(h.ui);
+  assert.equal(h.ui.snapshot().stage, 'answerFailed'); assert.equal(h.ui.snapshot().answer, '');
+  assert(h.trace.cancels >= 1); await h.ui.stop();
+});
+
+test('vision stop while the transport is pending clears the image and ignores the late result', async () => {
+  const gate = deferred(); const h = liveVisionHarness({ gate }); await h.start(); await h.attach();
+  const sending = h.ui.send('问题');
+  for (let i = 0; i < 100 && h.trace.requests.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert.equal(h.trace.requests.length, 1);
+  await h.ui.stop();
+  gate.resolve(visionResult('{"answer":"迟到回答 [1]","citations":[1]}'));
+  await sending;
+  const view = h.ui.snapshot();
+  assert.equal(view.lifecycle, ShuviRuntimeState.STOPPED); assert.equal(view.imageReady, false);
+  assert.equal(view.answer, '');
+});
+
+test('vision session stops after ten model requests without reporting an eleventh success', async () => {
+  const h = liveVisionHarness(); await h.start(); await h.attach();
+  for (let i = 0; i < 10; i++) {
+    assert.equal(await h.ui.send('问题 ' + i), true); await waitVision(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'complete', JSON.stringify(h.ui.snapshot()));
+  }
+  assert.equal(h.trace.requests.length, 10);
+  assert.equal(await h.ui.send('第十一次'), false);
+  assert.match(h.ui.snapshot().message, /请求上限/);
+  assert.equal(h.ui.snapshot().requestCount, 10); assert.equal(h.ui.snapshot().maxRequests, 10);
+  assert.equal(h.trace.requests.length, 10);
+  await h.ui.stop();
+});
+
+test('vision start failure clears consent but preserves the selected image', async () => {
+  const prepared = new visionPorts.VisionPreparedImage();
+  prepared.displayName = 'screen.jpg'; prepared.image = visionImage();
+  const preparer = { async prepare() { return prepared; } };
+  const ui = new RuntimeVisionSession(preparer); ui.onForeground();
+  assert.equal(await ui.attachImage('file:///user/screen.jpg', 'screen.jpg'), true);
+  const key = new TextEncoder().encode('test-only-key');
+  await ui.start({ create() { throw new Error('injected-configuration-failure'); } }, key, true);
+  const view = ui.snapshot();
+  assert.equal(view.lifecycle, ShuviRuntimeState.FAILED);
+  assert.equal(view.consent, false); assert.equal(view.imageReady, true);
+  assert.equal(view.imageName, 'screen.jpg'); assert(key.every(value => value === 0));
+  await ui.stop(); assert.equal(ui.snapshot().imageReady, false);
+});

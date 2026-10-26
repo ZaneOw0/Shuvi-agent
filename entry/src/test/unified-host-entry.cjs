@@ -9,7 +9,7 @@ const { toPosix, relativePosix, readTextLf } = require('./lib/portable.cjs');
 const project = path.resolve(__dirname, '../../..');
 const root = path.join(project, 'entry/src/main/ets/knowledge');
 const allowed = [
-  'domain/ParsedDocumentModels', 'domain/ParsedDocumentPorts', 'domain/UnifiedKnowledgeModels', 'domain/VisionModels',
+  'domain/ParsedDocumentModels', 'domain/ParsedDocumentPorts', 'domain/KnowledgeDatabasePorts', 'domain/KnowledgeRuntimePorts', 'domain/UnifiedKnowledgeModels', 'domain/VisionModels',
   'domain/KnowledgeStorageScope', 'domain/PdfKnowledgeModels', 'domain/TextKnowledgeModels',
   'domain/TextKnowledgePorts', 'domain/DocumentParseModels', 'domain/KnowledgePorts',
   'domain/EmbeddingModels', 'domain/EmbeddingBasisModels', 'domain/KnowledgeSearchModels', 'domain/PdfLocalModels',
@@ -24,7 +24,7 @@ const allowed = [
   'infra/KnowledgeStoreHost', 'infra/KnowledgeIdentity', 'infra/KnowledgeDerivedBudget', 'application/TextKnowledgeService',
   'application/KnowledgeLifecycleService'
   ,'pipeline/ParsedOutputDecoder','pipeline/ParsedDocumentChunker','pipeline/PdfTableDecoder',
-  'infra/ParsedDocumentAdapters','application/ParsedDocumentIngestionService','infra/PdfImagePayload',
+  'infra/ParsedDocumentAdapters','application/ParsedDocumentIngestionService','application/KnowledgeDatabaseAdapter','application/KnowledgeRuntimeSearchAdapter','infra/PdfImagePayload',
   'infra/ParsedDocumentImportAdapter','infra/DocxResultReader','infra/DocxProcessingAdapter','infra/DocxArchiveAdapter',
   'infra/PdfNativeReader','infra/DocumentFileOperations','infra/DocxXmlReader','infra/DocxXmlAdapter',
   'domain/DocxXmlModels','pipeline/DocxNativeReader','pipeline/DocxCorrespondence',
@@ -47,7 +47,7 @@ const allowed = [
 ];
 exports.allowed = allowed;
 exports.changedEts = [
-  'domain/ParsedDocumentModels', 'domain/ParsedDocumentPorts', 'domain/UnifiedKnowledgeModels', 'domain/VisionModels',
+  'domain/ParsedDocumentModels', 'domain/ParsedDocumentPorts', 'domain/KnowledgeDatabasePorts', 'domain/KnowledgeRuntimePorts', 'domain/UnifiedKnowledgeModels', 'domain/VisionModels',
   'pipeline/ParsedDocumentCodec', 'infra/ParsedDocumentStoreLayout', 'infra/ParsedDocumentRepository', 'infra/ParsedDocumentAssets',
   'infra/KnowledgeStoreHost', 'infra/KnowledgeDerivedBudget', 'infra/KnowledgeAssembly',
   'application/TextKnowledgeService', 'application/KnowledgeLifecycleService',
@@ -56,7 +56,7 @@ exports.changedEts = [
   'infra/DocxSnapshotAssets', 'infra/DocxKnowledgeRepository',
   'pipeline/ParsedOutputDecoder','pipeline/ParsedDocumentChunker','infra/ParsedDocumentAdapters','infra/ParsedDocumentImportAdapter',
   'infra/PdfImagePayload','infra/DocxProcessingAdapter','infra/DocxResultReader','pipeline/DocxNativeReader',
-  'application/ParsedDocumentIngestionService','application/PdfIngestionService','application/ImageIngestionService','domain/KnowledgePorts',
+  'application/ParsedDocumentIngestionService','application/KnowledgeDatabaseAdapter','application/KnowledgeRuntimeSearchAdapter','application/PdfIngestionService','application/ImageIngestionService','domain/KnowledgePorts',
   'application/DocumentParseService','ui/ParsedDocumentView','infra/ParsedPublicationBudget','infra/KnowledgePublicationBudget','infra/ImageStoreLayout','infra/DocxStoreLayout'
   ,'domain/UnifiedProcessingPorts','domain/UnifiedEmbeddingPorts','pipeline/VisionPolicy','pipeline/UnifiedTextPolicy','pipeline/UnifiedProcessingCodec',
   'application/ImageKnowledgeService','application/UnifiedProcessingQueue','application/UnifiedEmbeddingService','application/UnifiedSettingsService',
@@ -149,14 +149,14 @@ exports.run = async () => {
   if (process.env.CAPTURE_SAFE_HOST !== '1' || process.env.CAPTURE_HOST_ONLY !== '1') throw Error('CaptureHostBoundaryRequired');
   const h=exports.harness(); let passed=0, failed=0;
   if (new Set(allowed).size!==allowed.length || new Set(exports.changedEts).size!==exports.changedEts.length) throw Error('DuplicateCanonicalInput');
-  for (const [id,run] of require('./unified-store-host-cases.cjs').cases(h).concat(require('./unified-parsing-host-cases.cjs').cases(h),require('./unified-automation-host-cases.cjs').cases(h),require('./unified-migration-host-cases.cjs').cases(h),require('./unified-search-host-cases.cjs').cases(h),require('./unified-lifecycle-host-cases.cjs').cases(h),require('./unified-interruption-host-cases.cjs').cases(h))) {
+  for (const [id,run] of require('./unified-store-host-cases.cjs').cases(h).concat(require('./knowledge-database-adapter-host-cases.cjs').cases(h),require('./unified-parsing-host-cases.cjs').cases(h),require('./unified-automation-host-cases.cjs').cases(h),require('./unified-migration-host-cases.cjs').cases(h),require('./unified-search-host-cases.cjs').cases(h),require('./unified-lifecycle-host-cases.cjs').cases(h),require('./unified-interruption-host-cases.cjs').cases(h))) {
     let watchdog;
     try { await Promise.race([run(),new Promise((resolve,reject)=>{watchdog=setTimeout(()=>reject(Error('HostCaseTimeout')),15000);})]); passed++; console.log(`UPD_HOST PASS case=${id}`); }
     catch (error) { failed++; console.log(`UPD_HOST FAIL case=${id} category=${error?.constructor?.name || 'Error'}`); }
     finally { clearTimeout(watchdog); }
   }
   for (const [ordinal,name] of allowed.entries()) { const file=path.join(root,name+'.ets'); if (fs.existsSync(file)) console.log(`UPD_SOURCE_HASH ordinal=${ordinal} sha256=${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`); }
-  for (const name of ['unified-host-entry.cjs','unified-store-host-cases.cjs','unified-parsing-host-cases.cjs','unified-automation-host-cases.cjs','unified-migration-host-cases.cjs','unified-search-host-cases.cjs','unified-lifecycle-host-cases.cjs','unified-interruption-host-cases.cjs','unified-fixtures.cjs']) console.log(`UPD_TEST_HASH file=${name} sha256=${crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname,name))).digest('hex')}`);
+  for (const name of ['unified-host-entry.cjs','unified-store-host-cases.cjs','knowledge-database-adapter-host-cases.cjs','unified-parsing-host-cases.cjs','unified-automation-host-cases.cjs','unified-migration-host-cases.cjs','unified-search-host-cases.cjs','unified-lifecycle-host-cases.cjs','unified-interruption-host-cases.cjs','unified-fixtures.cjs']) console.log(`UPD_TEST_HASH file=${name} sha256=${crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname,name))).digest('hex')}`);
   for (const [ordinal,name] of exports.changedEts.entries()) console.log(`UPD_CHANGED_ETS_HASH ordinal=${ordinal} sha256=${crypto.createHash('sha256').update(fs.readFileSync(path.join(project,name))).digest('hex')}`);
   console.log(`UPD_CHECKER_LIST_HASH sha256=${crypto.createHash('sha256').update(exports.changedEts.join('\n')+'\n').digest('hex')}`);
   console.log(`UPD_CHANGED_SOURCE_SET_HASH sha256=${crypto.createHash('sha256').update(exports.changedEts.map(name=>name+'\t'+crypto.createHash('sha256').update(fs.readFileSync(path.join(project,name))).digest('hex')).join('\n')+'\n').digest('hex')}`);
