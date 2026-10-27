@@ -341,7 +341,9 @@ test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => 
     if (/@kit\.|\b(any|unknown|as)\b|JSON\.parse|TextNormalizer|TextKnowledgeService/.test(text)) throw new Error('Pure M2 boundary violated');
   }
   const permissions = fs.readFileSync(path.join(project, 'entry/src/main/module.json5'), 'utf8').match(/ohos\.permission\.[A-Z_]+/g) || [];
-  if (JSON.stringify(permissions) !== JSON.stringify(['ohos.permission.INTERNET'])) throw new Error('Permission scope changed');
+  // Knowledge adds no permission. READ/WRITE_CALENDAR belong to the calendar feature and were explicitly
+  // approved for it (spec 01 §7, "权限"); any other change still fails this exact-list check.
+  if (JSON.stringify(permissions) !== JSON.stringify(['ohos.permission.INTERNET', 'ohos.permission.READ_CALENDAR', 'ohos.permission.WRITE_CALENDAR'])) throw new Error('Permission scope changed');
   const backup = JSON.parse(fs.readFileSync(path.join(project, 'entry/src/main/resources/base/profile/backup_config.json'), 'utf8'));
   const oldBackup = JSON.parse(baseline('entry/src/main/resources/base/profile/backup_config.json'));
   if (backup.allowToBackupRestore !== true || !oldBackup.excludes.every(p=>backup.excludes.includes(p)) || backup.excludes.some(p => !p.includes('knowledge_parse_v1') && !p.includes('shuvi_parse_stage_v1.db') && !p.includes('knowledge_pdf_v1') && !p.includes('shuvi_kb_vector_v1.db') && !p.includes('knowledge_unified_v1'))) throw new Error('M1 backup isolation changed');
