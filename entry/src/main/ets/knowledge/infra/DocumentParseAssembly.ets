@@ -6,7 +6,7 @@ import { DocumentParseClockPort } from '../domain/DocumentParsePorts';
 import { MineruCredentialStore } from './MineruCredentialStore';
 import { DocumentFileAdapter } from './DocumentFileAdapter';
 import { documentDigestHex } from './DocumentFileOperations';
-import { DocumentPdfPreflight } from './DocumentPdfPreflight';
+import { PdfJsPreflight } from './PdfJsPreflight';
 import { DocumentParseRepository } from './DocumentParseRepository';
 import { MineruTransportAdapter } from './MineruTransportAdapter';
 import { KnowledgeAssembly } from './KnowledgeAssembly';
@@ -35,7 +35,7 @@ export class DocumentParseAssembly implements DocumentParseStateListener {
     const budget: KnowledgeDerivedBudget = new KnowledgeDerivedBudget(context);
     this.service.attachLocalCapacity(async (bytes: number): Promise<void> => { const usage = await budget.usage(); if (usage.total()+bytes*2+1048576 > 524288000) { throw new DocumentParseFailure('共享资料预算不足','复制前'); } });
     this.service.state.resultDirectory = `${context.filesDir}/knowledge_parse_v1`;
-    this.service.attachLocal(assets, assets, new DocumentPdfPreflight(context.filesDir));
+    this.service.attachLocal(assets, assets, new PdfJsPreflight(context.filesDir));
     this.service.attachRemote(new MineruTransportAdapter(credential, assets, context.filesDir), new DocumentPlatformClock());
     this.onChanged = changed; this.service.subscribe(this); DocumentParseAssembly.sessions.push(this);
   }

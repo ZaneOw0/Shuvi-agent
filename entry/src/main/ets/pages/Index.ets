@@ -25,6 +25,8 @@ import { DocumentParseViewState } from '../knowledge/domain/DocumentParseModels'
 import { DocumentParseView } from '../knowledge/ui/DocumentParseView';
 import { KnowledgeAssembly } from '../knowledge/infra/KnowledgeAssembly';
 import { EmbeddingSettingsView } from '../knowledge/ui/EmbeddingSettingsView';
+import { PdfJsSurface } from '../knowledge/ui/PdfJsSurface';
+import { PdfJsRuntime } from '../knowledge/infra/PdfJsRuntime';
 import { EmbeddingService } from '../knowledge/application/EmbeddingService';
 import { PdfIngestionService } from '../knowledge/application/PdfIngestionService';
 import { PdfIngestionView } from '../knowledge/ui/PdfIngestionView';
@@ -215,6 +217,7 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (PdfJsRuntime.shared.expanded) { PdfJsRuntime.shared.closePreview(); return true; }
     if (this.drawerOpen) {
       this.drawerOpen = false;
       return true;
@@ -1375,6 +1378,7 @@ struct Index {
           }.width('100%').height('100%').backgroundColor(Theme.overlay).borderRadius(0)
             .accessibilityText('关闭导航菜单').onClick(() => this.drawerOpen = false)
         }
+        PdfJsSurface()
       }.width('100%').height('100%')
         .onAreaChange((_oldArea: Area, area: Area) => this.resizeFloatingHost(Number(area.width), Number(area.height)))
     }.width('100%').height('100%').showSideBar(this.drawerOpen).showControlButton(false)

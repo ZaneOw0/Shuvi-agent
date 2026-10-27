@@ -44,10 +44,11 @@ const allowed = [
   ,'pipeline/UnifiedProcessingPresentation','ui/DocumentParseView','application/DocumentParseService','domain/DocumentParsePorts','pipeline/ParseFailurePolicy'
   ,'ui/UnifiedKnowledgeView'
   ,'domain/ParsedLifecyclePorts'
-  ,'infra/DocumentPdfWorker','infra/DocumentPdfPreflight'
+  ,'infra/DocumentPdfWorker','infra/DocumentPdfPreflight','infra/PdfJsRuntime','infra/PdfJsPreflight'
 ];
 exports.allowed = allowed;
 exports.changedEts = [
+  'infra/PdfJsRuntime','infra/PdfJsPreflight','ui/PdfJsSurface','platformtests/PdfJsLocalCase',
   'infra/DocumentPdfWorker','infra/DocumentPdfPreflight','platformtests/DocumentPdfPreflightCase','ui/KnowledgePlatformDiagnostics',
   'domain/ParsedDocumentModels', 'domain/ParsedDocumentPorts', 'domain/UnifiedKnowledgeModels', 'domain/VisionModels',
   'pipeline/ParsedDocumentCodec', 'infra/ParsedDocumentStoreLayout', 'infra/ParsedDocumentRepository', 'infra/ParsedDocumentAssets',
@@ -151,7 +152,7 @@ exports.run = async () => {
   if (process.env.CAPTURE_SAFE_HOST !== '1' || process.env.CAPTURE_HOST_ONLY !== '1') throw Error('CaptureHostBoundaryRequired');
   const h=exports.harness(); let passed=0, failed=0;
   if (new Set(allowed).size!==allowed.length || new Set(exports.changedEts).size!==exports.changedEts.length) throw Error('DuplicateCanonicalInput');
-  for (const [id,run] of require('./unified-store-host-cases.cjs').cases(h).concat(require('./unified-parsing-host-cases.cjs').cases(h),require('./unified-automation-host-cases.cjs').cases(h),require('./unified-migration-host-cases.cjs').cases(h),require('./unified-search-host-cases.cjs').cases(h),require('./unified-lifecycle-host-cases.cjs').cases(h),require('./unified-interruption-host-cases.cjs').cases(h),require('./pdf-preflight-host-cases.cjs').cases(h))) {
+  for (const [id,run] of require('./unified-store-host-cases.cjs').cases(h).concat(require('./unified-parsing-host-cases.cjs').cases(h),require('./unified-automation-host-cases.cjs').cases(h),require('./unified-migration-host-cases.cjs').cases(h),require('./unified-search-host-cases.cjs').cases(h),require('./unified-lifecycle-host-cases.cjs').cases(h),require('./unified-interruption-host-cases.cjs').cases(h),require('./pdf-preflight-host-cases.cjs').cases(h),require('./pdfjs-host-cases.cjs').cases(h))) {
     let watchdog;
     try { await Promise.race([run(),new Promise((resolve,reject)=>{watchdog=setTimeout(()=>reject(Error('HostCaseTimeout')),15000);})]); passed++; console.log(`UPD_HOST PASS case=${id}`); }
     catch (error) { failed++; console.log(`UPD_HOST FAIL case=${id} category=${error?.constructor?.name || 'Error'}`); }

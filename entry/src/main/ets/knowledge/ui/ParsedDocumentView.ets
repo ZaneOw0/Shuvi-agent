@@ -11,6 +11,9 @@ import { processingStageName, processingJobStateName, processingCanRetry, proces
 import { Theme } from '../../components/Theme';
 import { ParsedDocumentLifecycle } from '../application/KnowledgeLifecycleService';
 import { UnifiedProcessingQueue } from '../application/UnifiedProcessingQueue';
+import { PdfJsRuntime } from '../infra/PdfJsRuntime';
+import { documentAssetPath } from '../infra/DocumentFileOperations';
+import { DocumentParseCancellation } from '../domain/DocumentParseModels';
 
 class ParsedLibraryItem {
   id: string = ''; documentId: string = ''; originalId: string = ''; title: string = '';
@@ -480,6 +483,13 @@ export struct ParsedDocumentView {
     if (action === 'retire') { this.retire(this.retireId).catch((): void => { this.message = '旧版本清理未完成'; }); return; }
     if (action === 'release') { this.releaseUnknown().catch((): void => { this.message = '释放未完成，可重试'; }); return; }
   }
+  private async previewPdfOriginal(): Promise<void> {
+    if (this.localBusy || this.parse===undefined) { return; } const context=this.getUIContext().getHostContext(); if (context===undefined) { return; }
+    this.localBusy=true;
+    try { await this.parse.withPdfOriginal<void>(this.selectedOriginal,async (original: DocumentOriginal): Promise<void>=> { await PdfJsRuntime.shared.preview(documentAssetPath(context.filesDir+'/knowledge_parse_v1',original.assetId),original,new DocumentParseCancellation()); }); }
+    catch (error) { this.message=error instanceof Error?error.message:'PDF原件预览未完成'; }
+    finally { this.localBusy=false; }
+  }
   private async retryPdfPreflight(): Promise<void> {
     if (this.localBusy || this.parse===undefined) { return; }
     this.localBusy=true; this.message='正在本机复核PDF页数；未发送请求';
@@ -663,6 +673,9 @@ export struct ParsedDocumentView {
       if (this.selectedOriginal.length > 0) {
         Column({ space: 10 }) {
           Text(this.selectedStatus()).fontColor(Theme.ink).id('upd-file-status').fontSize(14).width('100%')
+          if (this.originals.some((o: DocumentOriginal): boolean=>o.id===this.selectedOriginal && o.format===DocumentParseFormat.Pdf)) {
+            Button('查看PDF原件').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({minHeight:44}).width('100%').id('upd-preview-pdf-original').enabled(!this.localBusy).onClick((): void=> { this.previewPdfOriginal(); })
+          }
           if (this.originals.some((o: DocumentOriginal): boolean=>o.id===this.selectedOriginal && o.format===DocumentParseFormat.Pdf) && !this.tasks.some((t: DocumentParseTask): boolean=>t.originalId===this.selectedOriginal)) {
             Button('仅重试本机PDF预检（不发送）').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('upd-retry-pdf-preflight').enabled(!this.localBusy).onClick((): void=> { this.retryPdfPreflight(); })
           }

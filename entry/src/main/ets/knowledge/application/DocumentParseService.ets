@@ -51,6 +51,15 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
       return action();
     });
   }
+  async withPdfOriginal<T>(originalId: string, action: (original: DocumentOriginal) => Promise<T>): Promise<T> {
+    const protection=this.sourceProtection;
+    if (protection===undefined) { throw new DocumentParseFailure('原件保护不可用','PDF预览'); }
+    return protection.withSource<T>(originalId,async (): Promise<T>=> {
+      const original=this.state.snapshot.originals.find((o: DocumentOriginal): boolean=>o.id===originalId && o.format===DocumentParseFormat.Pdf);
+      if (original===undefined || this.state.snapshot.cleanup.some((c: DocumentParseCleanup): boolean=>c.assets.indexOf(original.assetId)>=0)) { throw new DocumentParseFailure('PDF原件不存在或待清理','PDF预览'); }
+      return action(original);
+    });
+  }
   async withDocxOriginal<T>(originalId: string, action: () => Promise<T>): Promise<T> {
     const protection: KnowledgeSourceProtectionPort | undefined = this.sourceProtection;
     if (protection === undefined) { throw new DocumentParseFailure('原件保护不可用','DOCX本机动作'); }
