@@ -2401,10 +2401,11 @@ test('prepared RAG enables only after readiness, retrieves before one PERSONAL a
   const key = new TextEncoder().encode('test-only-key');
   await h.ui.prepareRag(rag, h.answerFactory, key);
   try {
-    assert(key.every(value => value === 0)); assert.equal(rag.trace.opened, 1);
+    assert(key.every(value => value === 0)); assert.equal(rag.trace.opened, 0);
     assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(h.ui.snapshot().consent, false);
     assert.equal(await h.ui.send('same query'), false); assert.equal(rag.trace.searched, 0); assert.equal(h.trace.models, 0);
     const readiness = await h.ui.activateRag(); assert.equal(readiness.ready, true); assert.equal(h.ui.snapshot().consent, true);
+    assert.equal(rag.trace.opened, 1);
     assert.equal(await h.ui.send('same query'), true); await waitKnowledge(h.ui);
     assert.equal(rag.trace.searched, 1); assert.equal(h.trace.models, 1); assert.equal(h.ui.snapshot().stage, 'complete');
     const prompt = h.trace.bodies[0].messages[1].content;
@@ -2493,7 +2494,7 @@ function realRagVectorCard() {
   return card;
 }
 function realRagStack(options = {}) {
-  const trace = { acquired:0, released:0, reviews:0, embeddings:0 };
+  const trace = { acquireCalls:0, acquired:0, released:0, reviews:0, embeddings:0 }; let acquireFailures = options.acquireFailures ?? 0;
   function createRagQuerySession() {
     const scope = new realRagModels.UnifiedQueryScope(); scope.complete = true;
     if (options.directText) {
@@ -2519,7 +2520,10 @@ function realRagStack(options = {}) {
     const identity = { id() { return crypto.randomUUID(); }, async hash() { return 'host-hash'; } };
     return new realRagQueryModule.KnowledgeQuerySession(scopePort, engine, { currentConfig() { return {}; } }, history, identity);
   }
-  const assembly = { async acquire() { trace.acquired++; }, async release() { trace.released++; },
+  const assembly = { async acquire() {
+      trace.acquireCalls++; if (options.acquireGate) await options.acquireGate.promise;
+      if (acquireFailures > 0) { acquireFailures--; throw Error('knowledge initialisation failed'); } trace.acquired++;
+    }, async release() { trace.released++; },
     async ragReadiness() { return { ready:true, code:'Ready', message:'知识库 RAG 已就绪。' }; }, createRagQuerySession,
     createQuerySession() { throw Error('chat RAG must not open the knowledge page history session'); } };
   return { trace, port: new realRagAdapterModule.KnowledgeRagSessionAdapter(assembly) };
@@ -2528,6 +2532,7 @@ test('real RAG composition keeps a successful retrieval and dispatches one groun
   const h = liveKnowledgeHarness(); const stack = realRagStack({ directText:'休比 Runtime 设计 采用持久化执行记录。', vector:true });
   await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
   try {
+    assert.equal(stack.trace.acquireCalls, 0);
     assert.equal((await h.ui.activateRag()).ready, true);
     assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
     const view = h.ui.snapshot();
@@ -2559,6 +2564,45 @@ test('real RAG composition still discards retrieval cancelled during the query e
     gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(h.trace.models, 0); assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
   } finally { gate.resolve(); await h.ui.stop(); }
+});
+test('preparing chat RAG leaves the knowledge store closed until the first activation', async () => {
+  const idle = liveKnowledgeHarness(); const untouched = realRagStack({ vector:true });
+  await idle.ui.prepareRag(untouched.port, idle.answerFactory, new TextEncoder().encode('test-only-key'));
+  assert.equal(idle.ui.snapshot().lifecycle, ShuviRuntimeState.READY, idle.ui.snapshot().message);
+  await idle.ui.stop(); assert.equal(untouched.trace.acquireCalls, 0); assert.equal(untouched.trace.released, 0);
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    assert.equal(stack.trace.acquireCalls, 0); assert.equal(await h.ui.send('Runtime 设计'), false);
+    assert.equal((await h.ui.activateRag()).ready, true); assert.equal(stack.trace.acquired, 1);
+    await h.ui.deactivateRag(); assert.equal(stack.trace.released, 0);
+    assert.equal((await h.ui.activateRag()).ready, true); assert.equal(stack.trace.acquireCalls, 1);
+  } finally { await h.ui.stop(); }
+  assert.equal(stack.trace.released, 1);
+});
+test('a knowledge store open failure keeps the session ready and the next activation retries the open', async () => {
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true, acquireFailures:1 });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    const first = await h.ui.activateRag();
+    assert.equal(first.ready, false); assert.equal(first.code, 'RagOpenFailed');
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(h.ui.snapshot().consent, false);
+    assert.equal(await h.ui.send('Runtime 设计'), false); assert.equal(stack.trace.embeddings, 0);
+    assert.equal((await h.ui.activateRag()).ready, true); assert.equal(stack.trace.acquireCalls, 2);
+  } finally { await h.ui.stop(); }
+  assert.equal(stack.trace.acquired, 1); assert.equal(stack.trace.released, 1);
+});
+test('stopping while the knowledge store is still opening releases the late lease and never grants consent', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true, acquireGate:gate });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  const activating = h.ui.activateRag();
+  for (let i = 0; i < 200 && stack.trace.acquireCalls === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert.equal(stack.trace.acquireCalls, 1); assert.equal((await h.ui.activateRag()).code, 'RagOpening');
+  await h.ui.stop(); assert.equal(stack.trace.released, 0);
+  gate.resolve(); const readiness = await activating;
+  assert.equal(readiness.ready, false); assert.equal(readiness.code, 'RagSessionChanged');
+  assert.equal(stack.trace.acquired, 1); assert.equal(stack.trace.released, 1);
+  assert.equal(h.ui.snapshot().consent, false); assert.notEqual(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY);
 });
 test('chat RAG uses the history-free query session and leaves the knowledge page history untouched', async () => {
   const pages = []; const recording = { async append(page) { pages.push(page); }, async list() { return pages; } };

@@ -52,6 +52,8 @@ export class RuntimeKnowledgeSession {
   private rag: KnowledgeRagSearchPort | undefined = undefined;
   private ragCancel: ParsedCancellation | undefined = undefined;
   private ragPrepared: boolean = false;
+  /** The knowledge store lease is taken on first activation, not when ordinary chat starts. */
+  private ragOpened: boolean = false; private ragOpening: boolean = false;
 
   attach(listener: (view: RuntimeKnowledgeView) => void): void { this.listener = listener; this.publish(); }
   detach(): void { this.listener = undefined; void this.stop(); }
@@ -72,34 +74,35 @@ export class RuntimeKnowledgeSession {
   }
   async onDestroy(): Promise<void> { await this.onBackground(); }
 
-  /** Prepares the PERSONAL answer session without sending a question or granting RAG query egress. */
+  /**
+   * Prepares only the PERSONAL answer session (it must consume the key now). The knowledge store is not opened
+   * here, so starting ordinary chat never initialises the knowledge base; activateRag opens it on first use.
+   */
   async prepareRag(search: KnowledgeRagSearchPort, answerFactory: ShuviRuntimeSessionFactory,
     key: Uint8Array): Promise<void> {
     if (this.view.lifecycle === ShuviRuntimeState.STARTING || this.view.lifecycle === ShuviRuntimeState.READY ||
       this.view.lifecycle === ShuviRuntimeState.BLOCKED || this.stopping || this.rag !== undefined) {
       key.fill(0); return;
     }
-    const generation: number = ++this.generation; this.rag = search; this.ragPrepared = false;
+    const generation: number = ++this.generation; this.rag = search; this.ragPrepared = false; this.ragOpened = false;
     this.consentGranted = false; this.localOnly = false; this.answering = false;
     this.modelTaskDispatched = false; this.cancelRequested = false;
     this.view.consent = false; this.view.stage = 'starting'; this.view.lifecycle = ShuviRuntimeState.STARTING;
     this.view.clearEpoch++; this.view.message = '正在准备知识库 RAG 会话…'; this.publish();
     try {
-      await search.open();
-      if (generation !== this.generation) { return; }
       await this.answer.start(answerFactory, key);
       if (generation !== this.generation) { return; }
       this.ragPrepared = true; this.answerContext.clear();
       this.view.query = ''; this.view.answer = ''; this.view.answerSource = ''; this.view.citations = [];
       this.view.lifecycle = ShuviRuntimeState.READY;
-      this.view.message = '知识库 RAG 后端已准备；开启知识库后才允许问题向量化和资料整理。';
+      this.view.message = '知识库 RAG 回答会话已准备；开启知识库时才打开本机资料并检查 Embedding。';
       this.publish();
     } catch {
       if (generation === this.generation) {
         let closeFailed: boolean = false;
         try { await search.close(); } catch { closeFailed = true; }
         try { await this.answer.stop(); } catch { closeFailed = true; }
-        this.rag = undefined; this.ragPrepared = false; this.view.consent = false;
+        this.rag = undefined; this.ragPrepared = false; this.ragOpened = false; this.view.consent = false;
         this.view.lifecycle = closeFailed || this.answer.lifecycleState() === ShuviRuntimeState.BLOCKED ?
           ShuviRuntimeState.BLOCKED : ShuviRuntimeState.FAILED;
         this.view.message = closeFailed ? 'RAG 准备失败且资源关闭未确认，请重启应用排查。' :
@@ -111,12 +114,37 @@ export class RuntimeKnowledgeSession {
 
   async activateRag(): Promise<KnowledgeRagReadiness> {
     const unavailable: KnowledgeRagReadiness = new KnowledgeRagReadiness();
-    if (!this.ragPrepared || this.rag === undefined || this.view.lifecycle !== ShuviRuntimeState.READY) {
-      unavailable.code = 'RagSessionUnavailable'; unavailable.message = '知识库 RAG 会话尚未准备好。';
+    if (!this.ragPrepared || this.rag === undefined || this.view.lifecycle !== ShuviRuntimeState.READY || this.ragOpening) {
+      unavailable.code = this.ragOpening ? 'RagOpening' : 'RagSessionUnavailable';
+      unavailable.message = this.ragOpening ? '本机知识库正在打开，请稍候。' : '知识库 RAG 会话尚未准备好。';
       this.consentGranted = false; this.view.consent = false; this.view.message = unavailable.message; this.publish();
       return unavailable;
     }
     const generation: number = this.generation; const rag: KnowledgeRagSearchPort = this.rag;
+    if (!this.ragOpened) {
+      this.ragOpening = true; this.view.message = '正在打开本机知识库…'; this.publish();
+      let opened: boolean = false;
+      try { await rag.open(); opened = true; } catch { opened = false; } finally { this.ragOpening = false; }
+      if (this.rag !== rag) {
+        // stop() (or a new session) replaced this port while it was opening; its close() could not release a
+        // lease that did not exist yet, so release the one this call obtained.
+        if (opened) {
+          try { await rag.close(); } catch {
+            if (this.rag === undefined) {
+              this.view.lifecycle = ShuviRuntimeState.BLOCKED;
+              this.view.message = '本机知识库关闭未确认，请重启应用排查；资料未删除。'; this.publish();
+            }
+          }
+        }
+        unavailable.code = 'RagSessionChanged'; unavailable.message = '知识库 RAG 会话状态已变化，请重新开启。';
+        return unavailable;
+      }
+      if (!opened) {
+        unavailable.code = 'RagOpenFailed'; unavailable.message = '本机知识库打开失败；普通对话仍可继续，可稍后重新开启知识库。';
+        this.view.message = unavailable.message; this.publish(); return unavailable;
+      }
+      this.ragOpened = true;
+    }
     const readiness: KnowledgeRagReadiness = await rag.readiness();
     if (generation !== this.generation || this.rag !== rag || !this.ragPrepared || this.stopping ||
       this.view.lifecycle !== ShuviRuntimeState.READY) {
@@ -218,7 +246,7 @@ export class RuntimeKnowledgeSession {
       this.answer.lifecycleState() === ShuviRuntimeState.IDLE) {
       this.clearWatch();
       this.consentGranted = false; this.answering = false; this.localOnly = false; this.modelTaskDispatched = false; this.cancelRequested = false;
-      this.answerContext.clear(); this.ragCancel = undefined; this.ragPrepared = false;
+      this.answerContext.clear(); this.ragCancel = undefined; this.ragPrepared = false; this.ragOpened = false;
       const idleRag: KnowledgeRagSearchPort | undefined = this.rag; this.rag = undefined;
       if (idleRag !== undefined) { try { await idleRag.close(); } catch { this.view.lifecycle = ShuviRuntimeState.BLOCKED; } }
       this.view.consent = false; this.view.clearEpoch++; this.publish(); return;
@@ -232,7 +260,7 @@ export class RuntimeKnowledgeSession {
     let failed: boolean = false;
     try { await this.knowledge.stop(); } catch { failed = true; }
     try { await this.answer.stop(); } catch { failed = true; }
-    const rag: KnowledgeRagSearchPort | undefined = this.rag; this.rag = undefined; this.ragPrepared = false;
+    const rag: KnowledgeRagSearchPort | undefined = this.rag; this.rag = undefined; this.ragPrepared = false; this.ragOpened = false;
     if (rag !== undefined) { try { await rag.close(); } catch { failed = true; } }
     this.stopping = false; this.view.lifecycle = failed ? ShuviRuntimeState.BLOCKED : ShuviRuntimeState.STOPPED;
     this.view.stage = 'stopped';

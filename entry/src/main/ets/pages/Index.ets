@@ -169,6 +169,7 @@ struct Index {
   @State contentHeight: number = 0;
   @State searchEnabled: boolean = false;
   @State knowledgeEnabled: boolean = false;
+  @State ragPreparing: boolean = false;
   @State searchBusy: boolean = false;
   @State searchScenario: SearchScenario = SearchScenario.Normal;
   @State searchTurns: SearchTurn[] = [];
@@ -535,11 +536,12 @@ struct Index {
       if (this.searchEnabled || this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
         this.notice('请先启用普通对话', '请先使用同一份 DeepSeek Key 启用普通对话，再开启知识库 RAG。'); return;
       }
+      this.ragPreparing = true;
       const readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge();
       if (!readiness.ready) { this.notice('知识库 RAG 尚不可用', readiness.message); return; }
       if (this.alive && this.tab === 0) { this.knowledgeEnabled = true; this.searchEnabled = false; }
     } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
-    finally { this.runtimeSwitching = false; }
+    finally { this.runtimeSwitching = false; this.ragPreparing = false; }
   }
 
   @Builder
@@ -1147,11 +1149,11 @@ struct Index {
             Button({ type: ButtonType.Normal }) {
               Row({ space: 4 }) {
                 AppIcon({ source: $r('app.media.chat_book'), size: 16})
-                Text('知识库').fontSize(12).fontColor(this.knowledgeEnabled ? Theme.accent : Theme.muted)
+                Text(this.ragPreparing ? '准备中…' : '知识库').fontSize(12).fontColor(this.knowledgeEnabled ? Theme.accent : Theme.muted)
               }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
             }.borderRadius(22).backgroundColor(this.knowledgeEnabled ? Theme.soft : Color.Transparent)
               .border({ width: 1, color: this.knowledgeEnabled ? Theme.accent : Theme.line })
-              .margin({ left: 4, bottom: 4 }).accessibilityText(`本机知识库问答，${this.knowledgeEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`)
+              .margin({ left: 4, bottom: 4 }).accessibilityText(`本机知识库问答，${this.ragPreparing ? '正在打开本机知识库' : (this.knowledgeEnabled ? '已开启，点击关闭' : '已关闭，点击开启')}`)
               .id('chat-knowledge-toggle').enabled(!this.blocked()).onClick((): void => { void this.toggleKnowledge(); })
           }
           Row() {

@@ -8,7 +8,10 @@ import { RuntimeChatService } from './RuntimeChatService';
 import { RuntimeKnowledgeService } from './RuntimeKnowledgeService';
 import { ShuviRuntimeState } from './ShuviRuntimeController';
 
-/** Coordinates one user-entered DeepSeek key across independent PUBLIC chat and PERSONAL RAG sessions. */
+/**
+ * Coordinates one user-entered DeepSeek key across independent PUBLIC chat and PERSONAL RAG sessions.
+ * start() only prepares the RAG answer session; the knowledge store is opened by enableKnowledge().
+ */
 export class RuntimeAssistantCoordinator {
   static async start(context: common.Context, debug: boolean, key: Uint8Array): Promise<void> {
     const chatKey: Uint8Array = key.slice(); const ragKey: Uint8Array = key.slice(); key.fill(0);
