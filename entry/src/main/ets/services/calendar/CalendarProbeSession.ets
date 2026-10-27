@@ -316,7 +316,7 @@ export class CalendarProbeSession {
       record.reminderConfigured = false;
       await this.store.save(record);
       await this.port.authorize();
-      if (!this.stopped) await this.readback(record);
+      if (!this.stopped) await this.readback(record, false);
     } catch (error) {
       this.publish('unknown', `暂时无法核查，保留原操作。${error.message}`);
     } finally {
@@ -326,7 +326,8 @@ export class CalendarProbeSession {
     }
   }
 
-  private async readback(record: CalendarProbeRecord): Promise<void> {
+  /** `created` only changes the wording: a re-check of an old record must not announce a new creation. */
+  private async readback(record: CalendarProbeRecord, created: boolean = true): Promise<void> {
     const read = await this.port.read(record);
     if (!read.matches || !Number.isInteger(read.eventId) || read.eventId <= 0) {
       this.publish('unknown', '未找到唯一且字段一致的原日程，请保留记录核查；不会重新创建。');
@@ -340,6 +341,11 @@ export class CalendarProbeSession {
     record.eventId = verified.eventId;
     record.verified = true;
     record.reminderConfigured = verified.reminderConfigured;
+    if (!created) {
+      this.publish(read.reminderConfigured ? 'verified' : 'partial', read.reminderConfigured ?
+        '已核查：系统日历中的日程与记录一致，提醒配置也一致。' : '已核查：日程与记录一致，但提醒配置未核对通过。不会重新创建日程。');
+      return;
+    }
     this.publish(read.reminderConfigured ? 'verified' : 'partial', read.reminderConfigured ?
       '日程已创建并读回一致；提醒配置已核对。提醒是否实际送达仍需观察。' :
       '日程已创建并读回一致，但提醒配置未核对通过。不会重新创建日程。');

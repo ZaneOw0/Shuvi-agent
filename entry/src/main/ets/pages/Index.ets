@@ -935,7 +935,8 @@ struct Index {
           }.padding({ left: 10, right: 12, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
             .id('chat-header-status')
         } else {
-          Text(this.tab === 2 || this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen ? '本机资料 · 未同步' : '演示模式').fontSize(11).fontColor(Theme.muted)
+          Text(this.tab === 2 || this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen ? '本机资料 · 未同步' :
+            (this.tab === 1 && this.realCalendarOpen ? '系统日历' : '演示模式')).fontSize(11).fontColor(Theme.muted)
             .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
         }
       }.width('34%')
@@ -1293,7 +1294,7 @@ struct Index {
       Button('演示场景设置  ›', { type: ButtonType.Normal }).width('100%').constraintSize({ minHeight: 44 })
         .fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
         .enabled(!this.generating && !this.executing && !this.searchBusy).onClick(() => this.openScenarios())
-      Text('助手日程与联网搜索为演示功能\n知识库资料保存在本机').fontSize(11).fontColor(Theme.muted)
+      Text('演示模式不联网、不写日历；真实对话、搜索和日程在助手页开启\n知识库资料保存在本机').fontSize(11).fontColor(Theme.muted)
         .width('100%').padding({ top: 16 })
     }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
       .backgroundColor(Theme.inputSurface).borderRadius({ topRight: 26, bottomRight: 26 })
@@ -1421,8 +1422,12 @@ struct Index {
             }
           } else if (this.tab === 1) {
             if (this.realCalendarOpen) {
-              Button('返回工作台').backgroundColor(Theme.soft).fontColor(Theme.accent)
-                .onClick((): void => { this.realCalendarOpen = false; })
+              Row() {
+                Button('‹ 工作台').fontSize(14).fontColor(Theme.accent).backgroundColor(Color.Transparent)
+                  .constraintSize({ minHeight: Theme.controlHeight }).padding({ left: 4, right: 12 })
+                  .accessibilityText('返回工作台').id('calendar-back')
+                  .onClick((): void => { this.realCalendarOpen = false; })
+              }.width('100%')
               CalendarCapabilityCheck()
             } else if (this.calendarOpen) {
               this.calendar()

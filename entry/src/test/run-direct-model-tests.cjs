@@ -3648,6 +3648,54 @@ test('calendar card helpers format Beijing wall-clock dates, reminders and edite
   assert.equal(summary.title, '评审会'); assert.equal(summary.reminder, '提前 30 分钟提醒');
   assert.equal(summary.eventId, 105); assert.equal(summary.reminderConfigured, false);
 });
+test('workbench calendar list groups by Beijing day: pending first, upcoming ascending with a limit, finished folded', () => {
+  const p = calendarPresentation;
+  const rec = (id, title, startAt, endAt, verified = true, reminderConfigured = true) => ({ schemaVersion:1,
+    operationId:'shuvi-calendar-' + id, draft:{ title, startAt, endAt, timeZone:'Asia/Shanghai', reminderMinutes:10 },
+    eventId: verified ? 100 : -1, verified, reminderConfigured });
+  const now = Date.parse('2026-10-27T20:50:00+08:00');
+  const records = [
+    rec('a', '讨论', '2026-10-26T15:00:00+08:00', '2026-10-26T16:00:00+08:00'),
+    rec('b', '项目评审会', '2026-10-28T16:00:00+08:00', '2026-10-28T17:00:00+08:00'),
+    rec('c', '项目评审会', '2026-10-28T15:00:00+08:00', '2026-10-28T16:00:00+08:00', true, false),
+    rec('d', '进行中', '2026-10-27T20:00:00+08:00', '2026-10-27T21:00:00+08:00'),
+    rec('e', '跨天', '2026-10-30T23:00:00+08:00', '2026-10-31T01:00:00+08:00'),
+    rec('f', '待核查', '2026-10-25T09:00:00+08:00', '2026-10-25T10:00:00+08:00', false, false),
+    rec('g', '昨天上午', '2026-10-26T09:00:00+08:00', '2026-10-26T10:00:00+08:00')
+  ];
+  const ids = groups => groups.map(g => g.rows.map(r => r.operationId.slice(-1)));
+  const s = p.calendarRecordSections(records, now, 3);
+  assert.deepEqual(s.groups.map(g => g.label), ['待核查', '今天 · 10月27日 周二', '明天 · 10月28日 周三']);
+  assert.deepEqual(ids(s.groups), [['f'], ['d'], ['c', 'b']], 'an ongoing event stays upcoming; a pending one is never folded');
+  assert.equal(s.groups[0].rows[0].time, '10月25日 周日 09:00–10:00'); assert.equal(s.groups[0].rows[0].status, 'pending');
+  assert.equal(s.groups[2].rows[0].time, '15:00–16:00'); assert.equal(s.groups[2].rows[0].status, 'reminder');
+  assert.equal(s.groups[2].rows[1].status, 'ok'); assert.equal(s.groups[2].rows[1].when, '10月28日 周三 16:00–17:00');
+  assert.equal(s.hiddenUpcoming, 1); assert.equal(s.pastCount, 2);
+  assert.deepEqual(s.past.map(g => g.label), ['10月26日 周一']); assert.deepEqual(ids(s.past), [['a', 'g']]);
+  const all = p.calendarRecordSections(records, now, 64);
+  assert.equal(all.hiddenUpcoming, 0); assert.equal(all.groups.at(-1).label, '10月30日 周五');
+  assert.equal(all.groups.at(-1).rows[0].time, '23:00–次日 01:00');
+  assert.equal(p.calendarRecordSections([], now, 5).groups.length, 0);
+  assert.match(p.calendarRecordStatusText('pending'), /核清前不能新建/);
+});
+test('workbench new-schedule form defaults to the next Beijing hour and keeps the duration when the start moves', () => {
+  const p = calendarPresentation;
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-10-27T20:50:00+08:00')), ['2026-10-27', '21:00', '2026-10-27', '22:00']);
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-10-27T22:10:00+08:00')), ['2026-10-28', '09:00', '2026-10-28', '10:00']);
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-12-31T23:59:00+08:00')), ['2027-01-01', '09:00', '2027-01-01', '10:00']);
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-10-27T00:30:00+08:00')), ['2026-10-27', '01:00', '2026-10-27', '02:00']);
+  assert.deepEqual(p.calendarShiftedEnd('2026-10-28', '15:00', '2026-10-28', '16:30', '2026-10-28', '23:00'), ['2026-10-29', '00:30']);
+  assert.deepEqual(p.calendarShiftedEnd('2026-10-28', '15:00', '2026-10-28', '15:00', '2026-10-30', '09:00'), ['2026-10-30', '10:00'],
+    'an empty or inverted range falls back to one hour');
+  assert.deepEqual(p.calendarShiftedEnd('2026-12-31', '23:00', '2027-01-01', '01:00', '2027-01-01', '08:00'), ['2027-01-01', '10:00']);
+  const draft = p.calendarFormDraft(' 跨天 ', '2026-10-30', '23:00', '2026-10-31', '01:00', 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(draft)), { title:'跨天', startAt:'2026-10-30T23:00:00+08:00',
+    endAt:'2026-10-31T01:00:00+08:00', timeZone:'Asia/Shanghai', reminderMinutes:0 });
+  assert.equal(p.calendarTimeRange(draft), '23:00–次日 01:00');
+  assert.equal(p.calendarTimeRange({ startAt:'2026-10-30T23:00:00+08:00', endAt:'2026-11-02T01:00:00+08:00' }), '23:00–11月2日 周一 01:00');
+  const { calendarProbeDraftError } = load(path.join(services, '../calendar/CalendarProbeSession.ets'));
+  assert.equal(calendarProbeDraftError(draft, Date.parse('2026-10-27T20:50:00+08:00')), '', 'cross-day form drafts stay valid');
+});
 test('card edit resubmits a validated draft as a new confirmation without another model call and writes the edited event', async () => {
   const texts = [calendarModelReply(), JSON.stringify({ schemaVersion:'1.0', kind:'answer', message:'普通回答' })];
   const h = assistantHarness({ texts }); await h.start();
