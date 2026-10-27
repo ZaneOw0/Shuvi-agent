@@ -28,11 +28,11 @@ export class KnowledgeQuerySession {
     this.state.direct.busy=false; this.state.related.busy=false; if (this.state.semanticState==='Loading') { this.state.semanticState='Canceled'; } this.emit();
   }
   edit(question: string, archived: boolean=this.state.includeArchived): void { this.invalidate(); const epoch=this.state.epoch; this.state=new UnifiedSearchState(); this.state.epoch=epoch; this.state.question=question; this.state.includeArchived=archived; this.emit(); }
-  async start(question: string, archived: boolean=false): Promise<void> {
+  async start(question: string, archived: boolean=false, upstream: ParsedCancellation | undefined=undefined): Promise<void> {
     this.invalidate(); const epoch=this.state.epoch; this.state=new UnifiedSearchState(); this.state.epoch=epoch; this.state.session=this.identity.id(); this.state.historyId=this.identity.id(); this.state.question=prepareTextQuery(question).actualInput; this.state.includeArchived=archived; this.state.direct.id='Direct'; this.state.related.id='Related'; this.state.direct.busy=true; this.state.related.busy=true;
     this.directCandidates=[]; this.relatedCandidates=[]; this.directImages.clear(); this.registry.clear(); this.positions=[0,0]; this.pages.clear(); this.semanticPromise=undefined; this.scope=undefined; this.historyRevision=0;
     this.configBinding=embeddingConfigBinding(this.config.currentConfig());
-    const cancel: ParsedCancellation=new ParsedCancellation(); this.cancel=cancel; this.emit(); const local: Promise<void>=this.follow<void>(this.loadLocal(epoch,cancel)); this.local=local; await local;
+    const cancel: ParsedCancellation=upstream ?? new ParsedCancellation(); this.cancel=cancel; this.emit(); const local: Promise<void>=this.follow<void>(this.loadLocal(epoch,cancel)); this.local=local; await local;
   }
   private current(epoch: number, cancel: ParsedCancellation): boolean { if (this.configBinding!==embeddingConfigBinding(this.config.currentConfig())) { cancel.invalid=true; if (this.state.epoch===epoch) { this.state.semanticState='ConfigChanged'; this.state.direct.busy=false; this.state.related.busy=false; this.emit(); } } return this.state.epoch===epoch && !cancel.invalid; }
   private async loadLocal(epoch: number, cancel: ParsedCancellation): Promise<void> {
