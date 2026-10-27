@@ -2,7 +2,7 @@ import { AgentErrorClass } from '@harmony_agent/agent-contracts';
 import {
   ConnectorDigestPort, GenericModelProvider, ProviderCatalog, ProviderCredentialPort,
   ProviderErrorCode, ProviderOperationRunner, ProviderPriceSnapshot, ProviderTimerPort,
-  ProviderTransportError, RegisteredModelProvider, SystemProviderTimer
+  ProviderTransportError, RegisteredModelProvider, SystemProviderTimer, ModelTransportPort
 } from '@harmony_agent/agent-connectors';
 import { DeepSeekHttpClientPort, DeepSeekModelTransport, DeepSeekProfile, createDeepSeekModelProfile } from './DeepSeekProtocol';
 import { ArkTsDeepSeekHttpClient } from './DeepSeekHttpClient';
@@ -20,7 +20,7 @@ export class DeepSeekProviderBundle {
 export function createDeepSeekProvider(profile: DeepSeekProfile, price: ProviderPriceSnapshot,
   digest: ConnectorDigestPort, credentials: ProviderCredentialPort,
   client: DeepSeekHttpClientPort = new ArkTsDeepSeekHttpClient(),
-  timer: ProviderTimerPort = new SystemProviderTimer()): DeepSeekProviderBundle {
+  timer: ProviderTimerPort = new SystemProviderTimer(), transport?: ModelTransportPort): DeepSeekProviderBundle {
   if (!profile.available || price.inputMicrosPerMillionTokens <= 0 || price.outputMicrosPerMillionTokens <= 0) {
     throw new ProviderTransportError(ProviderErrorCode.CONFIGURATION, AgentErrorClass.CONFIGURATION,
       'DeepSeek requires an enabled profile and a reviewed nonzero price snapshot');
@@ -37,5 +37,5 @@ export function createDeepSeekProvider(profile: DeepSeekProfile, price: Provider
       'DeepSeek registered model is unavailable');
   }
   return new DeepSeekProviderBundle(registered, new GenericModelProvider(registered,
-    new DeepSeekModelTransport(profile, client), new ProviderOperationRunner(credentials, timer)));
+    transport === undefined ? new DeepSeekModelTransport(profile, client) : transport, new ProviderOperationRunner(credentials, timer)));
 }

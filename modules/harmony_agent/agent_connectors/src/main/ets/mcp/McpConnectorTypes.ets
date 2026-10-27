@@ -1,6 +1,8 @@
 import {
   DataBoundary,
+  IdempotencyMode,
   RiskLevel,
+  SideEffect,
   ToolInvocation,
   ToolOutcome
 } from '@harmony_agent/agent-contracts';
@@ -44,7 +46,7 @@ export class McpProviderRegistration {
   profileDigest: string = '';
 }
 
-export class McpReadOnlyToolPolicy {
+export class McpToolPolicy {
   serverId: string = '';
   toolName: string = '';
   capabilityTags: string[] = [];
@@ -54,7 +56,17 @@ export class McpReadOnlyToolPolicy {
   latencyClass: string = 'network';
   costClass: string = 'provider';
   estimatedCostMicros: number = 0;
+  sideEffect: SideEffect = SideEffect.NONE;
+  idempotencyMode: IdempotencyMode = IdempotencyMode.NONE;
+  /** Controlled top-level argument names. Values must already be covered by argumentsDigest. */
+  idempotencyKeyArgument?: string;
+  operationIdArgument?: string;
+  /** Top-level structuredContent field containing the provider's durable operation receipt. */
+  receiptField?: string;
 }
+
+/** Compatibility policy; McpReadOnlyToolPolicyRegistry still rejects all side effects. */
+export class McpReadOnlyToolPolicy extends McpToolPolicy {}
 
 export class McpCatalogRefreshResult {
   entries: ToolRegistryEntry[] = [];

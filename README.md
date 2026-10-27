@@ -1,5 +1,7 @@
 # Shuvi（休比）
 
+2026-10-27 本地开发增量：普通真实对话可自主调用文档 create/read/update，创建和更新保存至系统文件管理器 Download/com.example.shuvi/，回执显示真实保存位置；MCP 增加受控写入与幂等、结果不确定保护。无新增工具页面、权限或外部依赖。本次仅提交产品工具、adapter、接线和文档，不提交或运行测试；完整 CI 与物理手机待验收。见 [后台本地文档工具](docs/integration/agent/后台本地文档工具.md)。
+
 > 当前阶段：真实能力整合与验收。状态截至 2026-10-27 `feat/agent-grounded-qa` 的检索优先 RAG 接线及验收修复。debug 首页已接入 Runtime 普通对话、授权搜索与知识库 RAG；日程仍为 Mock。direct host 187/187、完整知识库 host 309/309 与未签名 HAP 构建通过；知识库 RAG 已在模拟器上用真实 Provider 跑通（未完整落盘设备日志，不计正式验收）。签名安装、完整 CI 与 OpenHarmony 真机验收尚未完成。
 
 > 本轮新增：[应用内悬浮助手入口](specs/02-应用内悬浮助手入口.md) v0.3 已实现拖动与左右吸边，本轮模拟器验收范围见第 6.7 节；v0.2 的历史反馈见第 6.6 节。可从其他页面返回当前对话，在「我的」关闭入口。位置与开关仅本次运行有效，重启恢复开启并回到右下角；未覆盖窗口场景、无障碍朗读与真机待验证。
@@ -12,7 +14,7 @@
 
 日程和搜索 Mock 继续作为独立演示模式保留，不调用真实供应商。真实模式不会失败后自动回退成 Mock；普通对话、真实搜索与演示的范围分别记录，不能混用验收证据。
 
-Agent 八模块已迁至 `modules/harmony_agent/`，来源固定为 `f177176`，后续适配登记在 `LOCAL_CHANGES.json`；六个 HAR 供产品引用，另两个用于独立测试宿主。应用服务已装配生产 Runtime，但当前开放的是 debug 单轮对话和显式关键词搜索，不是自主多 Agent 协作。连接检查仍只做 MCP 握手与工具发现。统一进度与证据见 [08 项目进度与验收](docs/08-项目进度与验收.md)。
+Agent 八模块已迁至 `modules/harmony_agent/`，来源固定为 `f177176`，后续适配登记在 `LOCAL_CHANGES.json`；产品引用原六个 HAR 及本轮新增的 `native_tools`，`agent_testkit` 仅用于独立测试宿主。应用服务已装配生产 Runtime，但当前开放的是 debug 单轮对话和显式关键词搜索，不是自主多 Agent 协作。连接检查仍只做 MCP 握手与工具发现。统一进度与证据见 [08 项目进度与验收](docs/08-项目进度与验收.md)。
 
 休比（Shuvi）是面向开源鸿蒙社区竞赛开发的智能个人助理，使用 ArkTS / ArkUI 开发。产品目标、需求层级与架构建议见 [00 项目总览](docs/00-项目总览.md)。
 
@@ -28,7 +30,7 @@ Agent 八模块已迁至 `modules/harmony_agent/`，来源固定为 `f177176`，
 | `AppScope/` | 应用级配置（`app.json5`：bundleName、版本、图标与名称） |
 | `services/search-mcp/` | 独立 Node.js 搜索 MCP Server，不进入 HAP；单独安装、构建与测试 |
 | `services/local-ai-gateway/` | 独立 Windows/.NET 模型网关，固定源码已导入，自包含自动测试 588/588 通过；不进入 HAP，远端 CI 与完整运行包验收待完成 |
-| `modules/harmony_agent/` | 八个 Agent HAR 源码模块及测试；原六模块供产品依赖，另外两个仅接入测试工程 |
+| `modules/harmony_agent/` | 八个 Agent HAR 源码模块及测试；原六模块和 native_tools 供产品依赖，agent_testkit 仅接入测试工程 |
 | `tests/agent-host/` | 独立 Agent 测试工程，复用八模块；本机 Hypium 380/380 通过，设备测试待执行 |
 | `tools/agent/fixture/` | 固定样例 MCP 测试服务，不是生产搜索服务 |
 | `scripts/` | 本地一键启动脚本：设备/模拟器 → 签名 → 构建 → 安装运行 |

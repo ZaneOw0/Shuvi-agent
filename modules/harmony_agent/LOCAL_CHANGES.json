@@ -3,12 +3,76 @@
   "upstreamCommit": "f1771764f129193725a8bccb5da2be6c3604e998",
   "files": [
     {
+      "path": "agent_connectors/Index.ets",
+      "originalSha256": "a60ee9879dcebf1dc0194068d0a1f875f2b632217a32d907eb947281b47127ee",
+      "sha256": "bdebf8a58d5fa179dc89f8f8370612736ecacafa1a2a1cffbd96b761c41e6deb",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "agent_connectors/src/main/ets/mcp/McpAgentAdapter.ets",
+      "originalSha256": "b9a72e698e413db9388a2a4846dd88231523282021b931f4a077cc5e5ff8f1cb",
+      "sha256": "aaa4e7be72125abceeebbcde8c824d1da0d1eb857bc23a90fd3e8e12085544ca",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "agent_connectors/src/main/ets/mcp/McpConnectorTypes.ets",
+      "originalSha256": "69f75b5dba108ddcf0f74786f8a9a47a6d2a82c75c4c7a587879f5238a5fb7c5",
+      "sha256": "a70f10200c223e7fb9200aa715f9d51c6306e3946ec0953ac6a09f5db31ece16",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "agent_connectors/src/main/ets/mcp/McpPolicyBridge.ets",
+      "originalSha256": "70ba01accab8c296653a47cb31b2001929bdd5b7246e606b6ad2b6c4e972949d",
+      "sha256": "13421b3f9f49e228cc3bc0b30634db956b47137f1843c234669e68cec819d6ff",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "agent_connectors/src/main/ets/mcp/McpProductionRuntime.ets",
+      "originalSha256": "6300a17b6444967798de292cb398a8408a0991373ca428c0e9e3e0c24f047c3d",
+      "sha256": "04ee695f327e48bcee2d2cf1056d856c416a9176ebccca0e91f4b32232780742",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "agent_connectors/src/main/ets/mcp/McpToolPolicyRegistry.ets",
+      "originalSha256": "eb05f7818a1fd7c7b62689e8a165f363f04284021d3b33c037182a2e73388731",
+      "sha256": "649f4b2270ea83c14db5d34438f19a8cb7856724f2f3f64970431195544a82cc",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "agent_connectors/src/main/ets/provider/LocalAIGatewayProductionRuntime.ets",
+      "originalSha256": "ad4f594fca692978cf0e341aa41be8d0651f8bff025b915d2e6392d238b707a6",
+      "sha256": "5de5ebfe491a64f83185892d117734ed3395d2e1b36082c264b04e9f8e0f0f56",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
       "path": "agent_core/src/main/ets/core/CoreEnums.ets",
       "originalSha256": "301825c4a87979bc369c02c799af3a4f21d53250f799fe82527562af6acdd7f1",
       "sha256": "d2acbbf4481defead849a349e856cb359755d7dbb0cef14326277a27409e6f5c",
       "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。",
       "contractImpact": "增加 RESULT_RECORDED、待核账记录、独立幂等结算；执行存储 1.2 → 1.3；成功结果的断电恢复禁止重发。",
       "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
+    },
+    {
+      "path": "agent_runtime/src/main/ets/host/AgentApplicationBackend.ets",
+      "originalSha256": "6dff6d9a6f2a3646b86abf35f00c5cc022dc7926bc4bcb5bdfa3b349597113b5",
+      "sha256": "ccd53aea5dfb99c3d3a48aa7572ea2f08c683d58cd2ec6bb4c597a92147c7ae1",
+      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
+      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
+      "validation": "docs/verification/agent/整合CI门禁复核.md"
     },
     {
       "path": "agent_runtime/src/main/ets/orchestration/RuntimeCoordinator.ets",
@@ -35,6 +99,14 @@
       "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
     },
     {
+      "path": "agent_runtime/src/main/ets/routing/ArtifactCollaborationPolicy.ets",
+      "originalSha256": "d8b7e948aef852c8939b2895cd7d8766f4b220108dd2f9d8516c6e06b337bed6",
+      "sha256": "c37107cff411fe5ac998792d5c9fca7f830603ad28f2591d27f75f4b5bede866",
+      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
+      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
+      "validation": "docs/verification/agent/整合CI门禁复核.md"
+    },
+    {
       "path": "agent_storage/Index.ets",
       "originalSha256": "6d6aead474fe2cb96407fb3ca984f2b701e7a895302f8397857fb3e06372fbd3",
       "sha256": "850c1b96ac2bc4d0e0c6bf344f182930582b8f090963a09a595682509d1ebe01",
@@ -49,6 +121,14 @@
       "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。 2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
       "contractImpact": "增加 RESULT_RECORDED、待核账记录、独立幂等结算；执行存储 1.2 → 1.3；成功结果的断电恢复禁止重发。",
       "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
+    },
+    {
+      "path": "agent_storage/src/main/ets/memory/RdbMemorySnapshotBackend.ets",
+      "originalSha256": "99409f3e4ad0da52a09a4ec3791ef9b27648561d46fe40dd19c88e58c795ed6e",
+      "sha256": "cccfb55e0df22f91f3f19a8112f3f5c712c947392724c456d94cde9cfeab50fe",
+      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
+      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
+      "validation": "docs/verification/agent/整合CI门禁复核.md"
     },
     {
       "path": "agent_storage/src/main/ets/storage/DurableExecutionRecoveryStore.ets",
@@ -67,18 +147,26 @@
       "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
     },
     {
-      "path": "agent_storage/src/main/ets/storage/StorageTypes.ets",
-      "originalSha256": "41b2c51058f82a792424613d2b516c59ed467ddff0f57e74cbc6b22dac39ad88",
-      "sha256": "cee80c40b90c8a0e1a6db5cadbb2e176b883298de96640d10d95cc4999d11a58",
-      "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。",
-      "contractImpact": "增加 RESULT_RECORDED、待核账记录、独立幂等结算；执行存储 1.2 → 1.3；成功结果的断电恢复禁止重发。",
-      "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
-    },
-    {
       "path": "agent_storage/src/main/ets/storage/InvoiceTypes.ets",
       "originalSha256": null,
       "sha256": "53c58e2fe4de4e1f18b8291b6f0e2185e2afccecde66451e35c3e641ea8a8069",
       "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。 2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
+      "contractImpact": "增加 RESULT_RECORDED、待核账记录、独立幂等结算；执行存储 1.2 → 1.3；成功结果的断电恢复禁止重发。",
+      "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
+    },
+    {
+      "path": "agent_storage/src/main/ets/storage/RdbSnapshotBackend.ets",
+      "originalSha256": "54135a994b9236a9eda8e58b3d47321e5aebe5195d5f2e39a3ebedd92296aeeb",
+      "sha256": "8a83573819bc80828654d13e03df6494c9c9b7558c1c3ec83b17dabacdd73050",
+      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
+      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
+      "validation": "docs/verification/agent/整合CI门禁复核.md"
+    },
+    {
+      "path": "agent_storage/src/main/ets/storage/StorageTypes.ets",
+      "originalSha256": "41b2c51058f82a792424613d2b516c59ed467ddff0f57e74cbc6b22dac39ad88",
+      "sha256": "cee80c40b90c8a0e1a6db5cadbb2e176b883298de96640d10d95cc4999d11a58",
+      "reason": "用户于 2026-10-24 批准：成功搜索结果先持久化，实际费用等待供应商账单核对。",
       "contractImpact": "增加 RESULT_RECORDED、待核账记录、独立幂等结算；执行存储 1.2 → 1.3；成功结果的断电恢复禁止重发。",
       "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
     },
@@ -91,36 +179,87 @@
       "validation": "specs/03-联网搜索.md §6.10；docs/integration/agent/搜索账单与结果持久化.md"
     },
     {
-      "path": "agent_runtime/src/main/ets/routing/ArtifactCollaborationPolicy.ets",
-      "originalSha256": "d8b7e948aef852c8939b2895cd7d8766f4b220108dd2f9d8516c6e06b337bed6",
-      "sha256": "c37107cff411fe5ac998792d5c9fca7f830603ad28f2591d27f75f4b5bede866",
-      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
-      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
-      "validation": "docs/verification/agent/整合CI门禁复核.md"
+      "path": "mcp_client/src/main/ets/mcp/Errors.ets",
+      "originalSha256": "de16e124f6a0989885de9041d71bb53449e207bbf3c9a8a3564308b51c7d749c",
+      "sha256": "e34d9d67093c9811596cd70835fc5f5d0d0fc43b6b52cb05f7823b9097af5ef8",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
     },
     {
-      "path": "agent_runtime/src/main/ets/host/AgentApplicationBackend.ets",
-      "originalSha256": "6dff6d9a6f2a3646b86abf35f00c5cc022dc7926bc4bcb5bdfa3b349597113b5",
-      "sha256": "ccd53aea5dfb99c3d3a48aa7572ea2f08c683d58cd2ec6bb4c597a92147c7ae1",
-      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
-      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
-      "validation": "docs/verification/agent/整合CI门禁复核.md"
+      "path": "mcp_client/src/main/ets/mcp/internal/ProtocolClient.ets",
+      "originalSha256": "a4e357c756f2ecd041d9444a5265dbc40d26b8f1866f3e6fdde42232431f0918",
+      "sha256": "436c1c73e373185c60395e53aec32e65be25713c383017724ecdceb1fc8e95f6",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
     },
     {
-      "path": "agent_storage/src/main/ets/storage/RdbSnapshotBackend.ets",
-      "originalSha256": "54135a994b9236a9eda8e58b3d47321e5aebe5195d5f2e39a3ebedd92296aeeb",
-      "sha256": "8a83573819bc80828654d13e03df6494c9c9b7558c1c3ec83b17dabacdd73050",
-      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
-      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
-      "validation": "docs/verification/agent/整合CI门禁复核.md"
+      "path": "mcp_client/src/main/ets/mcp/internal/Transport.ets",
+      "originalSha256": "cf3b871970971cf3b5ff6e9136c3307ac7621b9ed9deb91dbd99b502862a899f",
+      "sha256": "9a59fc0a803d0f1641eb56f5639903a86add7cd4bf0c5285074136957bdcfb0e",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
     },
     {
-      "path": "agent_storage/src/main/ets/memory/RdbMemorySnapshotBackend.ets",
-      "originalSha256": "99409f3e4ad0da52a09a4ec3791ef9b27648561d46fe40dd19c88e58c795ed6e",
-      "sha256": "cccfb55e0df22f91f3f19a8112f3f5c712c947392724c456d94cde9cfeab50fe",
-      "reason": "2026-10-24 CI 修复：显式复制 DTO 保留嵌套隔离；Promise 归一化保留异步等待和错误传播。",
-      "contractImpact": "不改变公共接口、授权、账单口径或持久化格式。",
-      "validation": "docs/verification/agent/整合CI门禁复核.md"
+      "path": "mcp_client/src/main/ets/mcp/McpClientManager.ets",
+      "originalSha256": "ba1c85adbb7bbe71955d41f82255fde4b03c305c28139af599d9edbfdbdf3726",
+      "sha256": "cb909af2e93796ee46e15ed9a9f3496cb1f6b493f961ae9980a72ff083e78edc",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "native_tools/Index.ets",
+      "originalSha256": "c6a1b87075085e6e53e885f2a39ff937868f7c46ca4da3b525e41ed7320086f3",
+      "sha256": "7fbd8f35a9a9fbb9f6a163ffb76b007086c9b5529d9cb43d4723fc384f0f6098",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "native_tools/src/main/ets/documents/DocumentContracts.ets",
+      "originalSha256": null,
+      "sha256": "d7b1b52ec1a631801d643919a38de038c455b7c8c06effcc2e5a72d1693e2e96",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "native_tools/src/main/ets/documents/LocalDocumentStore.ets",
+      "originalSha256": null,
+      "sha256": "2eb575b4335c7e2bf176e63ea03b1c7a416688d9a52f5bb635b440e2296bca83",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "native_tools/src/main/ets/documents/NativeDocumentTools.ets",
+      "originalSha256": null,
+      "sha256": "e90af914959d566208260c448a458873dd17d83d3aa11e7b6a825f3de5019d51",
+      "reason": "2026-10-27 用户要求文档保存到系统 Download；原有私有文档默认装配保留。",
+      "contractImpact": "NativeDocumentTools 和 adapter 追加可选 DEVICE_ONLY 数据边界，默认 APP_SANDBOX 保持不变；下载写入仍经过真实 grant 和 Runtime 派发。不新增系统权限。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "native_tools/src/main/ets/documents/OhosDocumentComposition.ets",
+      "originalSha256": null,
+      "sha256": "9519f9c5079269ac2f8725a5e6ba853f3dd5cb4d393b808e06a0c0b75bde6a4f",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
+    },
+    {
+      "path": "native_tools/src/main/ets/documents/OhosDocumentStorage.ets",
+      "originalSha256": null,
+      "sha256": "cb4b5af716a0c232107f400706d4518dd5da2e7f1fafb8b21ad355ba2e954b76",
+      "reason": "2026-10-27 用户授权：将后台本地文档工具及 MCP 写入能力适配到 Shuvi main 5aed870，保留现有取消、搜索与恢复约束。",
+      "contractImpact": "增加后台文档 create/read/update 和受控 MCP 写入；MCP 工厂保留 requiredToolIds 参数并追加原生工具扩展；不新增页面、权限、云服务或自动写入。",
+      "validation": "docs/integration/agent/后台本地文档工具.md"
     }
+  ],
+  "productModules": [
+    "native_tools"
   ]
 }

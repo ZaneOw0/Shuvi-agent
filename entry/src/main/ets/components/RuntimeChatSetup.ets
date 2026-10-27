@@ -11,9 +11,9 @@ export struct RuntimeChatSetup {
   build() {
     Column({ space: 10 }) {
       Text('真实对话 · deepseek-flash').fontSize(16).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
-      Text('启用后，每次发送仅将本次公开问题交给 DeepSeek，不携带历史消息或知识库。问题与结果保存在本机加密库；不执行搜索、日程或其他工具。')
+        Text('启用后，模型可按你的意图创建、读取和更新 txt/md 文档。创建和更新的文件保存在系统文件管理器的 Download/com.example.shuvi/，其他应用也可能访问，请勿保存敏感资料。本次会话的对话和模型选中的文档正文会发送到 DeepSeek（api.deepseek.com）；不读取知识库，不执行搜索或日程。版本和执行记录保存在应用内。')
         .fontSize(13).fontColor(Theme.muted).width('100%')
-      Text('单次最多 500 字符、1024 输出 tokens，30 秒请求超时；每次启用最多 10 次请求，无自动重试。按峰时价作 USD 0.01/次的本地估算检查，实际扣费以供应商账单为准。取消也可能计费。')
+      Text('每次输入最多 500 字符；模型可连续调用工具再回答，每轮累计最多 1024 输出 tokens、6 次工具调用，最长 120 秒。每次启用最多 10 次模型请求，无自动重试。按已登记价格作 USD 0.01/轮的本地估算检查，实际扣费以供应商账单为准。取消也可能计费，已提交的文件写入会保留。')
         .fontSize(12).fontColor(Theme.muted).width('100%')
       TextInput({ text: this.apiKey, placeholder: 'DeepSeek API Key，仅本次会话' })
         .type(InputType.Password).showPasswordIcon(false).copyOption(CopyOptions.None).selectionMenuHidden(false)

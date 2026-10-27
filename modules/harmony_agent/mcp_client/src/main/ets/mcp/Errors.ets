@@ -21,6 +21,8 @@ export class McpClientError extends Error {
   readonly statusCode?: number;
   readonly rpcCode?: number;
   readonly details?: Object;
+  /** false: rejected before transport.send; true: request may have reached the server. */
+  requestDispatched?: boolean;
 
   constructor(code: McpErrorCode, message: string, serverId?: string,
     statusCode?: number, rpcCode?: number, details?: Object) {

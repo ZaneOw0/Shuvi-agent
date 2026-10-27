@@ -31,6 +31,7 @@ export class RuntimeChatSession {
   private sequence: number = 0;
   private subscription?: AgentFrontendSubscription;
   private timer?: number;
+  private documentTools: boolean = false;
   constructor(controller: ShuviRuntimeController) {
     this.controller = controller;
     controller.attach((state: ShuviRuntimeState): void => {
@@ -55,6 +56,7 @@ export class RuntimeChatSession {
     }
   }
   async start(factory: ShuviRuntimeSessionFactory, key: Uint8Array): Promise<void> {
+    this.documentTools = factory.documentToolsEnabled === true;
     try { await this.controller.start(factory, key); }
     catch { this.view.message = this.describe(this.controller.lifecycleState()); this.publish(); }
     finally { key.fill(0); }
@@ -76,7 +78,7 @@ export class RuntimeChatSession {
         this.finish('等待超时，会话将关闭。请重新启用后手动重试；无法确认供应商是否已计费。');
         void this.controller.stop().catch((): void => {});
       }
-    }, 45000);
+    }, this.documentTools ? 120000 : 45000);
     const request = new AgentFrontendTaskRequest(); request.intent = text;
     try {
       const handle = await this.controller.submit(request);
@@ -113,8 +115,10 @@ export class RuntimeChatSession {
     if (status === AgentTaskStatus.COMPLETED) {
       const answer = parseChatAnswer(json);
       this.finish(answer === undefined ? '回答格式无效，未显示为成功。' : answer.text);
-    } else if (status === AgentTaskStatus.FAILED) this.finish('回答失败。请检查 Key、余额、网络或本次会话的调用上限，再手动重试。');
-    else if (status === AgentTaskStatus.CANCELLED) this.finish('已取消本次回答；已发送的请求仍可能计费。');
+    } else if (status === AgentTaskStatus.FAILED) this.finish(this.documentTools ?
+      '本轮回答未完成；工具可能已执行，请先让模型核查文件结果，避免重复写入。也请检查 Key、余额、网络或会话调用上限。' :
+      '回答失败。请检查 Key、余额、网络或本次会话的调用上限，再手动重试。');
+    else if (status === AgentTaskStatus.CANCELLED) this.finish(this.cancelText());
     else if (status !== AgentTaskStatus.RECEIVED && status !== AgentTaskStatus.RUNNING) this.unexpected(this.generation);
   }
   private finish(text: string): void {
@@ -124,6 +128,10 @@ export class RuntimeChatSession {
     this.subscription?.close(); this.subscription = undefined;
     this.view.reply = text; this.view.replyId++; this.view.message = this.describe(this.view.lifecycle); this.publish();
   }
+  private cancelText(): string {
+    return this.documentTools ? '已取消后续回答；已提交的本地文件会保留，请核查文件结果。模型请求仍可能计费。' :
+      '已取消本次回答；已发送的请求仍可能计费。';
+  }
   async cancel(): Promise<void> {
     if (!this.view.busy) return;
     const generation = this.generation;
@@ -132,7 +140,7 @@ export class RuntimeChatSession {
     try {
       const receipt = await this.controller.cancel(this.taskId);
       if (!this.active(generation)) return;
-      if (receipt.accepted) this.finish('已取消本次回答；已发送的请求仍可能计费。');
+      if (receipt.accepted) this.finish(this.cancelText());
       else {
         const state = await this.controller.getTask(this.taskId);
         if (this.active(generation)) { this.apply(state.status, state.resultJson); if (this.active(generation)) await this.stop(); }

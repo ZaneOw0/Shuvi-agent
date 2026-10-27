@@ -1,5 +1,13 @@
 export const NATIVE_TOOLS_VERSION: string = '0.1.1';
 export {
+  LOCAL_DOCUMENT_MAX_BYTES, LocalDocumentError, DocumentRecord, DocumentReceipt, DocumentCatalogSnapshot,
+  DocumentCatalogPort, DocumentBlobPort, DocumentWriteRequest, LocalDocumentResult, LocalDocumentOperationStatus
+} from './src/main/ets/documents/DocumentContracts';
+export { LocalDocumentStore, documentTextBytes } from './src/main/ets/documents/LocalDocumentStore';
+export { OhosDocumentBlobStore, RdbDocumentCatalog, SystemNativeDocumentDigest } from './src/main/ets/documents/OhosDocumentStorage';
+export { NativeDocumentToolAdapter, NativeDocumentTools, NATIVE_DOCUMENT_CAPABILITY } from './src/main/ets/documents/NativeDocumentTools';
+export { createOhosNativeDocumentTools, OhosNativeDocumentToolSet } from './src/main/ets/documents/OhosDocumentComposition';
+export {
   NativePermissionState,
   NativeToolErrorCode,
   NativeToolError,
