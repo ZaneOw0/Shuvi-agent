@@ -1,6 +1,6 @@
 # Shuvi（休比）
 
-> 当前阶段：真实能力整合与验收。状态截至 2026-10-27 `feat/agent-grounded-qa` 的检索优先 RAG 接线及验收修复。debug 首页已接入 Runtime 普通对话、授权搜索与知识库 RAG；日程仍为 Mock。direct host 187/187、完整知识库 host 309/309 与未签名 HAP 构建通过，真实 Provider、签名安装、完整 CI 与 OpenHarmony 真机验收尚未完成。
+> 当前阶段：真实能力整合与验收。状态截至 2026-10-27 `feat/agent-grounded-qa` 的检索优先 RAG 接线及验收修复。debug 首页已接入 Runtime 普通对话、授权搜索与知识库 RAG；日程仍为 Mock。direct host 187/187、完整知识库 host 309/309 与未签名 HAP 构建通过；知识库 RAG 已在模拟器上用真实 Provider 跑通（未完整落盘设备日志，不计正式验收）。签名安装、完整 CI 与 OpenHarmony 真机验收尚未完成。
 
 > 本轮新增：[应用内悬浮助手入口](specs/02-应用内悬浮助手入口.md) v0.3 已实现拖动与左右吸边，本轮模拟器验收范围见第 6.7 节；v0.2 的历史反馈见第 6.6 节。可从其他页面返回当前对话，在「我的」关闭入口。位置与开关仅本次运行有效，重启恢复开启并回到右下角；未覆盖窗口场景、无障碍朗读与真机待验证。
 
@@ -63,7 +63,7 @@ scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
 
 ## RAG 知识库
 
-已实现 TXT/MD、PDF、独立图片、DOCX 的统一处理及本机正文/OCR、标签与语义检索，包含来源预览和中断恢复；已有部分真实服务的模拟器验收记录。云解析、图片理解与嵌入按各自授权配置运行，不能称所有处理均离线。debug 首页已接入检索优先 RAG：点击知识库后检查当前 Embedding Provider 和向量空间，发送时执行问题向量化与本机 KNN，再由独立 PERSONAL DeepSeek 会话整理引用；普通 PUBLIC 对话不承载知识库片段。PPTX/XLSX、跨设备同步和本轮 RAG 设备验收未完成。详见 [02 个人知识库问答](specs/02-个人知识库问答.md) 与 [09 Runtime 普通对话接入](specs/09-Runtime普通对话接入.md)。
+已实现 TXT/MD、PDF、独立图片、DOCX 的统一处理及本机正文/OCR、标签与语义检索，包含来源预览和中断恢复；已有部分真实服务的模拟器验收记录。云解析、图片理解与嵌入按各自授权配置运行，不能称所有处理均离线。debug 首页已接入检索优先 RAG：点击知识库后检查当前 Embedding Provider 和向量空间，发送时执行问题向量化与本机 KNN，再由独立 PERSONAL DeepSeek 会话整理引用；普通 PUBLIC 对话不承载知识库片段。2026-10-27 已在模拟器上用真实 SiliconFlow / DeepSeek 跑通 RAG（spec 09 §8.4，日志未完整落盘、部分项仅用户确认）；PPTX/XLSX、跨设备同步、断网重试的设备验证与真机验收未完成。详见 [02 个人知识库问答](specs/02-个人知识库问答.md) 与 [09 Runtime 普通对话接入](specs/09-Runtime普通对话接入.md)。
 
 ## 文档索引
 
