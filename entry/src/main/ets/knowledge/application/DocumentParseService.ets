@@ -176,13 +176,37 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
         }
         // Preserve original before PDFKit. Expired/blocked preflight cannot remove this durable copy.
         try { await this.preflight.inspect(original, cancel); }
-        catch { original.preflight = DocumentPreflightStatus.Blocked; original.preflightReason = '页数预检中断，原件保留但不外发'; }
+        catch (error) { original.preflight = DocumentPreflightStatus.Blocked; original.pages=0; original.preflightReason = error instanceof DocumentParseFailure?error.message:'页数预检中断，原件保留但不外发'; }
         await this.repository.save(this.state.snapshot);
         if (cancel.invalid || Date.now() >= cancel.deadline) { this.state.message = '原件保留；预检取消或时间耗尽，不外发'; break; }
         this.state.message = '原件已保存，未授权外发；预检状态不等于完整支持'; this.emit();
       }
     } catch (error) { this.state.message = error instanceof DocumentParseFailure ? error.message : '原件准备失败，已有资料保留'; await this.retryCleanup(); }
     finally { this.localCancel = undefined; this.state.busy = false; this.emit(); }
+  }
+  async retryPdfPreflight(originalId: string): Promise<void> {
+    if (this.state.busy) { throw new DocumentParseFailure('解析服务正忙，请稍后重试','PDF预检'); }
+    const original: DocumentOriginal | undefined=this.state.snapshot.originals.find((o: DocumentOriginal): boolean=>o.id===originalId);
+    const protection: KnowledgeSourceProtectionPort | undefined=this.sourceProtection;
+    if (original===undefined || original.format!==DocumentParseFormat.Pdf || this.assets===undefined || this.preflight===undefined || protection===undefined) { throw new DocumentParseFailure('PDF本机预检能力或原件不可用','PDF预检'); }
+    const assets: DocumentAssetPort=this.assets; const preflight: DocumentPreflightPort=this.preflight;
+    if (this.state.snapshot.tasks.some((t: DocumentParseTask): boolean=>t.originalId===originalId)) { throw new DocumentParseFailure('已有云端任务，请继续原任务','PDF预检'); }
+    const cancel: DocumentParseCancellation=new DocumentParseCancellation(); this.localCancel=cancel; this.state.busy=true;
+    this.state.message='正在本机复核PDF页数；未发送请求'; this.emit();
+    try {
+      await protection.withSource<void>(originalId,async (): Promise<void>=> {
+        await assets.verify(original,cancel); cancel.check();
+        await preflight.inspect(original,cancel); cancel.check();
+        if (original.preflight!==DocumentPreflightStatus.Passed || original.pages<1 || original.pages>50 || original.preflightReason.length>0) { throw new DocumentParseFailure(original.preflightReason || 'PDF页数尚未核定','PDF预检'); }
+        await this.repository.save(this.state.snapshot); cancel.check();
+      });
+      this.state.message=`PDF本机预检通过，共${original.pages}页；未发送请求`;
+    } catch (error) {
+      original.preflight=DocumentPreflightStatus.Blocked; original.pages=0;
+      original.preflightReason=error instanceof DocumentParseFailure?error.message:'PDF本机预检失败，原件保留'; this.state.message=original.preflightReason;
+      try { await this.repository.save(this.state.snapshot); } catch { this.state.message+='；预检结果保存失败，外发仍阻止'; }
+      throw new DocumentParseFailure(this.state.message,'PDF预检');
+    } finally { this.localCancel=undefined; this.state.busy=false; this.emit(); }
   }
   async confirm(originalId: string, acknowledgement: DocumentTestAcknowledgement): Promise<void> {
     if (this.state.busy) { return; }
@@ -372,7 +396,8 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     const original: DocumentOriginal | undefined = this.state.snapshot.originals.find((o: DocumentOriginal): boolean => o.id === originalId);
     const grant: DocumentParseGrant | undefined = this.state.snapshot.grants.find((g: DocumentParseGrant): boolean => g.originalId === originalId && !g.revoked);
     if (original === undefined || grant === undefined || this.submitReason(original).length > 0 || this.network === undefined || this.clock === undefined) {
-      this.state.message = original === undefined ? '原件不存在' : this.submitReason(original) || '未完成逐文件确认或能力不可用'; this.emit(); return;
+      this.state.message = original === undefined ? '原件不存在' : this.submitReason(original) || '未完成逐文件确认或能力不可用'; this.emit();
+      if (original?.format===DocumentParseFormat.Pdf) { throw new DocumentParseFailure(this.state.message,'解析提交前'); } return;
     }
     if (this.state.snapshot.tasks.some((t: DocumentParseTask): boolean => t.originalId === originalId)) { this.state.message = '已有任务，请查询该身份，不重复申请'; this.emit(); return; }
     this.state.busy = true; this.state.message = '正在复核本件测试原件'; this.emit();

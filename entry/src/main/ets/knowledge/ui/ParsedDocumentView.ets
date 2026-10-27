@@ -178,7 +178,9 @@ export struct ParsedDocumentView {
     this.occurrences = matches?state.document.occurrences.slice(this.occurrencePage*12,this.occurrencePage*12+12):[]; this.images = matches?state.document.images.slice(this.imagePage*9,this.imagePage*9+9):[];
     this.identityText = `${state.document.engine} · ${state.document.parser_signature}\n${state.document.source_hash}`;
     this.coverageText = `产物 ${state.document.coverage.selectedOutput.state} · 原生定位 ${state.document.coverage.nativeLocation.state} · 图片 ${state.document.coverage.imageRecovery.recovered}/${state.document.coverage.imageRecovery.expected} · 增强 ${state.enhancement}`;
-    const parse = this.parse?.viewState().snapshot; this.originals = parse?.originals.filter((o: DocumentOriginal): boolean => [DocumentParseFormat.Pdf,DocumentParseFormat.Docx,DocumentParseFormat.Jpeg,DocumentParseFormat.Png,DocumentParseFormat.Webp].indexOf(o.format) >= 0) ?? [];
+    const parseState=this.parse?.viewState();
+    if (this.localBusy && parseState!==undefined && parseState.message.length>0) { this.message=parseState.message; }
+    const parse = parseState?.snapshot; this.originals = parse?.originals.filter((o: DocumentOriginal): boolean => [DocumentParseFormat.Pdf,DocumentParseFormat.Docx,DocumentParseFormat.Jpeg,DocumentParseFormat.Png,DocumentParseFormat.Webp].indexOf(o.format) >= 0) ?? [];
     this.results = parse?.results.slice() ?? []; this.tasks = parse?.tasks.slice() ?? [];
     this.refreshLibrary();
   }
@@ -214,7 +216,7 @@ export struct ParsedDocumentView {
       const item: ParsedLibraryItem = new ParsedLibraryItem(); item.id = o.id; item.originalId = o.id; item.title = o.title; item.namespace = '';
       item.category = this.categoryOf(o.title, ''); item.savedAt = o.savedAt;
       const task = tasks.find((t: DocumentParseTask): boolean => t.originalId === o.id);
-      item.status = task?.stage === DocumentParseStage.Received ? '待入库' : task?.stage ?? '待解析'; rows.push(item);
+      item.status = task?.stage === DocumentParseStage.Received ? '待入库' : task?.stage ?? (o.format===DocumentParseFormat.Pdf && o.preflightReason.length>0?'PDF预检未通过':'待解析'); rows.push(item);
     }
     const matched: ParsedLibraryItem[] = rows.filter((item: ParsedLibraryItem): boolean => item.title.toLowerCase().includes(this.filterText.trim().toLowerCase()));
     if (this.sortMode === 'name') {
@@ -324,6 +326,8 @@ export struct ParsedDocumentView {
     if (this.selectedDocument.length > 0 && this.parsedEngine === 'MinerU') { return '内容已整理，可阅读与搜索'; }
     if (this.selectedDocument.length > 0) { return '内容已保存在本机'; }
     const task = this.tasks.find((t: DocumentParseTask): boolean => t.originalId === this.selectedOriginal);
+    const original: DocumentOriginal | undefined=this.originals.find((o: DocumentOriginal): boolean=>o.id===this.selectedOriginal);
+    if (task===undefined && original?.format===DocumentParseFormat.Pdf && original.preflightReason.length>0) { return original.preflightReason; }
     if (task?.failure !== undefined && task.failure.length > 0) { return '上次处理没有完成，可查看处理状态后重试'; }
     if (task?.stage === DocumentParseStage.Received) { return '结果已接收，等待整理入库'; }
     if (task?.stage === DocumentParseStage.RemoteFailed) { return '云端处理没有完成，可以稍后重试'; }
@@ -476,6 +480,13 @@ export struct ParsedDocumentView {
     if (action === 'retire') { this.retire(this.retireId).catch((): void => { this.message = '旧版本清理未完成'; }); return; }
     if (action === 'release') { this.releaseUnknown().catch((): void => { this.message = '释放未完成，可重试'; }); return; }
   }
+  private async retryPdfPreflight(): Promise<void> {
+    if (this.localBusy || this.parse===undefined) { return; }
+    this.localBusy=true; this.message='正在本机复核PDF页数；未发送请求';
+    try { await this.parse.retryPdfPreflight(this.selectedOriginal); this.message=this.parse.viewState().message; }
+    catch (error) { this.message=error instanceof Error?error.message:'PDF本机预检未完成，未发送请求'; }
+    finally { this.localBusy=false; this.refreshView(); }
+  }
   private async requestParse(): Promise<void> {
     if (this.localBusy) { return; }
     const parse = this.parse; const o: DocumentOriginal | undefined = this.originals.find((row: DocumentOriginal): boolean => row.id === this.parseConsent);
@@ -484,6 +495,7 @@ export struct ParsedDocumentView {
     const current = parse.viewState().snapshot.tasks.find((t: DocumentParseTask): boolean => t.originalId === o.id && t.hash === o.hash && t.version === o.version);
     let failure: string = '';
     try {
+      if (o.format===DocumentParseFormat.Pdf && current===undefined) { await parse.retryPdfPreflight(o.id); }
       if (o.format === DocumentParseFormat.Docx) { await parse.confirmDocx(o.id,true,true); }
       else if (o.format !== DocumentParseFormat.Pdf) { await this.imports?.preserveImage(parse,o); await parse.confirmImage(o.id,true,true); }
       else { const a: DocumentTestAcknowledgement = new DocumentTestAcknowledgement(); a.fullFile = true; a.embeddedImages = true; a.nonSensitive = true; a.privacyUnknown = true; a.freeEligible = true; await parse.confirm(o.id,a); }
@@ -491,6 +503,7 @@ export struct ParsedDocumentView {
       const snapshot = parse.viewState().snapshot; const completed: DocumentParseTask | undefined = snapshot.tasks.find((t: DocumentParseTask): boolean => t.originalId === o.id && t.hash === o.hash && t.version === o.version);
       const result: DocumentParseResultEnvelope | undefined = snapshot.results.find((r: DocumentParseResultEnvelope): boolean => r.taskId === completed?.id && r.originalHash === o.hash && r.version === o.version);
       if (result !== undefined) { await this.imports?.consume(parse,result.assetId); this.selectedDocument = this.service?.state.document.documentKey ?? ''; }
+      this.message=parse.viewState().message;
     } catch (error) { failure = error instanceof Error ? error.message : '解析请求未完成'; }
     finally { this.localBusy = false; this.parseConsent = ''; this.fullFile = false; this.freeEligible = false; this.refreshView(); if (failure.length > 0) { this.message = failure; } }
   }
@@ -650,6 +663,9 @@ export struct ParsedDocumentView {
       if (this.selectedOriginal.length > 0) {
         Column({ space: 10 }) {
           Text(this.selectedStatus()).fontColor(Theme.ink).id('upd-file-status').fontSize(14).width('100%')
+          if (this.originals.some((o: DocumentOriginal): boolean=>o.id===this.selectedOriginal && o.format===DocumentParseFormat.Pdf) && !this.tasks.some((t: DocumentParseTask): boolean=>t.originalId===this.selectedOriginal)) {
+            Button('仅重试本机PDF预检（不发送）').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('upd-retry-pdf-preflight').enabled(!this.localBusy).onClick((): void=> { this.retryPdfPreflight(); })
+          }
           if (this.selectedResult() !== undefined && (this.selectedDocument.length === 0 || this.parsedEngine !== 'MinerU')) {
             Button('保存到知识库').fontSize(14).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(12).constraintSize({ minHeight: 46 }).width('100%').id('upd-save-result').enabled(!this.localBusy).onClick((): void => { this.saveSelected(); })
           } else if (this.selectedResult() === undefined && !this.parseInterrupted()) {
