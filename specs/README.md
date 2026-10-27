@@ -32,7 +32,7 @@
 
 | 序号 | 功能 | 负责人 | 状态 |
 |---|---|---|---|
-| 09 | [Runtime 普通对话接入](09-Runtime普通对话接入.md) | UX / Agent / 平台 | v0.1 已实现待验收；现有知识库开关已接入检索优先 RAG，无额外 Key/逐题确认页；本轮 Runtime host 175/175、完整知识库 host 309/309、未签名 `entry:assembleHap` 81 任务通过；真实 Provider、签名安装、页面交互和真机待验证 |
+| 09 | [Runtime 普通对话接入](09-Runtime普通对话接入.md) | UX / Agent / 平台 | v0.1 已实现待验收；现有知识库开关已接入检索优先 RAG，无额外 Key/逐题确认页；2026-10-27 验收修复后 direct host 187/187、完整知识库 host 309/309、未签名 `assembleHap` 通过；真实 Provider、签名安装、页面交互和真机待验证 |
 | 10 | [原图视觉问答](10-原图视觉问答.md) | Agent / 应用服务（前端按契约接入） | v0.1 后端已实现待验收；会话 Key、重编码图片、PERSONAL 单图请求、严格 JSON/引用、独立加密库、10 次上限与 `unverified` 费用状态；宿主 165/165、构建 207 任务；纯测试入口 `VisionDeviceTest` 设备 11/11 通过；host 真实 DeepSeek 请求 1 次通过（452/25 tokens，`[1]`）；设备真实 transport、完整 UI 与账单待完成；见 [费用边界](../docs/architecture/decisions/ADR-017-原图视觉问答费用边界.md)、[设备清单](../docs/verification/原图视觉问答设备验收清单.md)、[真实 API 测试](../docs/verification/原图视觉问答真实API测试.md) |
 | 08 | [设备直连模型与连接验证](08-设备直连模型与连接验证.md) | UX / Agent / 平台 | v0.1 已实现待验收；用户反馈模拟器真实调用成功；设备日志、异常路径及 OpenHarmony 真机待验证 |
 | 01 | [创建日程并提醒（前端 Mock）](01-创建日程并提醒.md) | UX 线；跨模块契约由 Agent、平台负责人共同确认 | v0.4 配色与 Logo 本轮模拟器范围已验收；历史记录保留；真机未验收，公共契约待确认 |
