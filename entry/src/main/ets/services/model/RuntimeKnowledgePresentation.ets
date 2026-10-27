@@ -39,7 +39,12 @@ export function knowledgeAnswerStage(view: RuntimeKnowledgeView): string {
 /** Mirrors the guards of RuntimeKnowledgeSession.retryAnswer so the button never appears when retry would be a no-op. */
 export function knowledgeRetryAvailable(view: RuntimeKnowledgeView): boolean {
   return !view.busy && view.lifecycle === ShuviRuntimeState.READY && view.stage === 'answerFailed' &&
-    view.consent && view.citations.length > 0;
+    view.consent && view.citations.length > 0 && view.requestCount < view.maxRequests;
+}
+
+/** Session-level DeepSeek usage, retries included. */
+export function knowledgeRequestUsage(view: RuntimeKnowledgeView): string {
+  return '本次会话 DeepSeek 回答 ' + view.requestCount.toString() + '/' + view.maxRequests.toString() + ' 次（含重试）';
 }
 
 /** Only a DeepSeek-written answer carries the "not original material" label. */

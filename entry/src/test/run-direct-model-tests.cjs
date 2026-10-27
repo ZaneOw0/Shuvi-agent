@@ -2074,13 +2074,14 @@ test('knowledge submit failure after acceptance cancels the orphan task', async 
     assert.equal(h.trace.models, 0);
   } finally { await h.ui.stop(); }
 });
-test('knowledge answer stops after ten model calls and never reports success', async () => {
+test('knowledge answer stops after ten model calls and refuses the eleventh question before retrieval', async () => {
   const h = liveKnowledgeHarness(); await h.start();
   try {
-    for (let i = 0; i < 11; i++) { await h.ui.send('same query'); await waitKnowledge(h.ui); }
-    assert.equal(h.trace.searches, 11);
-    assert.equal(h.trace.models, 10);
-    assert.equal(h.ui.snapshot().stage, 'answerFailed');
+    for (let i = 0; i < 10; i++) { assert.equal(await h.ui.send('same query'), true); await waitKnowledge(h.ui); }
+    assert.equal(h.trace.searches, 10); assert.equal(h.trace.models, 10); assert.equal(h.ui.snapshot().requestCount, 10);
+    assert.equal(await h.ui.send('same query'), false);
+    assert.equal(h.trace.searches, 10); assert.equal(h.trace.models, 10);
+    assert.match(h.ui.snapshot().message, /已用完 10 次/); assert.equal(h.ui.snapshot().busy, false);
     assert.equal(h.ui.snapshot().citations.length, 1);
   } finally { await h.ui.stop(); }
 });
@@ -2604,6 +2605,37 @@ test('stopping while the knowledge store is still opening releases the late leas
   assert.equal(stack.trace.acquired, 1); assert.equal(stack.trace.released, 1);
   assert.equal(h.ui.snapshot().consent, false); assert.notEqual(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY);
 });
+test('chat RAG counts every DeepSeek attempt and refuses retries and new questions before retrieval at the limit', async () => {
+  const h = liveKnowledgeHarness({ modelStatus:401 }); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(h.ui.snapshot().requestCount, 0); assert.equal(h.ui.snapshot().maxRequests, 10);
+    assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'answerFailed', h.ui.snapshot().message); assert.equal(h.ui.snapshot().requestCount, 1);
+    for (let attempt = 2; attempt <= 10; attempt++) {
+      assert.equal(knowledgePresentation.knowledgeRetryAvailable(h.ui.snapshot()), true, 'attempt ' + attempt);
+      await h.ui.retryAnswer(); await waitKnowledge(h.ui);
+      assert.equal(h.ui.snapshot().stage, 'answerFailed'); assert.equal(h.ui.snapshot().requestCount, attempt);
+    }
+    assert.equal(h.trace.models, 10); assert.equal(knowledgePresentation.knowledgeRetryAvailable(h.ui.snapshot()), false);
+    await h.ui.retryAnswer(); assert.equal(h.trace.models, 10); assert.match(h.ui.snapshot().message, /已用完 10 次/);
+    assert.equal(await h.ui.send('Runtime 设计'), false);
+    assert.equal(stack.trace.embeddings, 1); assert.equal(h.trace.models, 10);
+    assert.match(h.ui.snapshot().message, /未调用 Embedding/); assert.match(h.ui.snapshot().message, /停止真实对话/);
+  } finally { await h.ui.stop(); }
+  const fresh = liveKnowledgeHarness(); const again = realRagStack({ vector:true });
+  await fresh.ui.prepareRag(again.port, fresh.answerFactory, new TextEncoder().encode('test-only-key'));
+  try { assert.equal(fresh.ui.snapshot().requestCount, 0); } finally { await fresh.ui.stop(); }
+});
+test('a stopped RAG session tells the user how to restart instead of a bare not-ready message', async () => {
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  await h.ui.stop();
+  const readiness = await h.ui.activateRag();
+  assert.equal(readiness.ready, false); assert.equal(readiness.code, 'RagSessionUnavailable');
+  assert.match(readiness.message, /停止真实对话/); assert.match(readiness.message, /重新输入 DeepSeek Key/);
+  assert.equal(await h.ui.send('Runtime 设计'), false); assert.equal(stack.trace.embeddings, 0);
+});
 test('chat RAG uses the history-free query session and leaves the knowledge page history untouched', async () => {
   const pages = []; const recording = { async append(page) { pages.push(page); }, async list() { return pages; } };
   const recordingStack = realRagStack({ vector:true, history:recording });
@@ -2649,12 +2681,14 @@ test('knowledge panel wording covers both RAG phases and only offers retry when 
   const retryable = { stage:'answerFailed', lifecycle:ShuviRuntimeState.READY, consent:true, citations:two };
   assert.equal(knowledgePresentation.knowledgeRetryAvailable(view(retryable)), true);
   for (const blocked of [{ busy:true }, { consent:false }, { citations:[] }, { stage:'insufficient' },
-    { lifecycle:ShuviRuntimeState.STOPPED }]) {
+    { lifecycle:ShuviRuntimeState.STOPPED }, { requestCount:10 }]) {
     assert.equal(knowledgePresentation.knowledgeRetryAvailable(view({ ...retryable, ...blocked })), false, JSON.stringify(blocked));
   }
   assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view({ answer:'回答 [1]', answerSource:'deepseek' })), true);
   assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view({ answer:'已找到 1 条', answerSource:'local' })), false);
   assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view({ answer:'', answerSource:'deepseek' })), false);
+  assert.equal(knowledgePresentation.knowledgeRetryAvailable(view({ ...retryable, requestCount:9 })), true);
+  assert.equal(knowledgePresentation.knowledgeRequestUsage(view({ requestCount:3 })), '本次会话 DeepSeek 回答 3/10 次（含重试）');
 });
 test('real RAG composition offers answer-only retry after a model failure and never re-runs retrieval', async () => {
   const h = liveKnowledgeHarness({ failFirst:true }); const stack = realRagStack({ vector:true });

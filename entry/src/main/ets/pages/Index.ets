@@ -600,7 +600,11 @@ struct Index {
         if (this.runtimeKnowledge.lifecycle !== ShuviRuntimeState.READY) {
           this.notice('知识库问答尚未就绪', this.runtimeKnowledge.message); return;
         }
-        const query: string = this.input.trim(); this.input = ''; void RuntimeKnowledgeService.session.send(query); return;
+        const query: string = this.input.trim(); this.input = '';
+        void RuntimeKnowledgeService.session.send(query).then((sent: boolean): void => {
+          if (!sent && this.alive && this.input.length === 0) { this.input = query; }
+        });
+        return;
       }
       if (this.searchEnabled) {
         if (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance) {

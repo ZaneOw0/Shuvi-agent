@@ -8,7 +8,9 @@ import {
   KnowledgeRuntimeSearchResult
 } from '../../knowledge/domain/KnowledgeRuntimePorts';
 import { ParsedCancellation } from '../../knowledge/domain/ParsedDocumentModels';
-import { KnowledgeAnswerContext, parseKnowledgeAnswer, parseKnowledgeInsufficient } from './KnowledgeAnswerTaskSupport';
+import {
+  KNOWLEDGE_ANSWER_MAX_REQUESTS, KnowledgeAnswerContext, parseKnowledgeAnswer, parseKnowledgeInsufficient
+} from './KnowledgeAnswerTaskSupport';
 import { KNOWLEDGE_RUNTIME_TOOL_ID, parseKnowledgeToolResult } from './KnowledgeTaskSupport';
 import { ShuviRuntimeController, ShuviRuntimeState } from './ShuviRuntimeController';
 import { ShuviRuntimeSessionFactory } from './ShuviRuntimeSession';
@@ -25,6 +27,15 @@ export class RuntimeKnowledgeView {
   citations: KnowledgeRuntimeCitation[] = [];
   consent: boolean = false;
   clearEpoch: number = 0;
+  /** DeepSeek answer attempts dispatched in this RAG session, retries included; reset only by a new session. */
+  requestCount: number = 0;
+  maxRequests: number = KNOWLEDGE_ANSWER_MAX_REQUESTS;
+}
+
+const KNOWLEDGE_RESTART_HINT: string = '请先停止真实对话，再重新输入 DeepSeek Key 启用。';
+function knowledgeLimitReached(max: number): string {
+  return '本次会话已用完 ' + max.toString() + ' 次 DeepSeek 回答（含重试），本次未检索也未调用 Embedding。' +
+    KNOWLEDGE_RESTART_HINT;
 }
 class KnowledgeListener implements AgentFrontendEventListener {
   private readonly owner: RuntimeKnowledgeSession; private readonly generation: number; private readonly answering: boolean;
@@ -85,6 +96,7 @@ export class RuntimeKnowledgeSession {
       key.fill(0); return;
     }
     const generation: number = ++this.generation; this.rag = search; this.ragPrepared = false; this.ragOpened = false;
+    this.view.requestCount = 0;
     this.consentGranted = false; this.localOnly = false; this.answering = false;
     this.modelTaskDispatched = false; this.cancelRequested = false;
     this.view.consent = false; this.view.stage = 'starting'; this.view.lifecycle = ShuviRuntimeState.STARTING;
@@ -116,7 +128,8 @@ export class RuntimeKnowledgeSession {
     const unavailable: KnowledgeRagReadiness = new KnowledgeRagReadiness();
     if (!this.ragPrepared || this.rag === undefined || this.view.lifecycle !== ShuviRuntimeState.READY || this.ragOpening) {
       unavailable.code = this.ragOpening ? 'RagOpening' : 'RagSessionUnavailable';
-      unavailable.message = this.ragOpening ? '本机知识库正在打开，请稍候。' : '知识库 RAG 会话尚未准备好。';
+      unavailable.message = this.ragOpening ? '本机知识库正在打开，请稍候。' :
+        '知识库 RAG 会话未就绪或已停止。' + KNOWLEDGE_RESTART_HINT;
       this.consentGranted = false; this.view.consent = false; this.view.message = unavailable.message; this.publish();
       return unavailable;
     }
@@ -181,7 +194,7 @@ export class RuntimeKnowledgeSession {
       this.view.lifecycle === ShuviRuntimeState.BLOCKED || this.stopping || this.rag !== undefined) {
       key.fill(0); return;
     }
-    const generation: number = ++this.generation; const answerKey: Uint8Array = key.slice();
+    const generation: number = ++this.generation; const answerKey: Uint8Array = key.slice(); this.view.requestCount = 0;
     this.consentGranted = true; this.answering = false; this.localOnly = false; this.modelTaskDispatched = false; this.cancelRequested = false;
     this.view.consent = true; this.view.stage = 'starting'; this.view.lifecycle = ShuviRuntimeState.STARTING;
     this.view.clearEpoch++; this.view.message = '正在打开本机检索与回答会话…'; this.publish();
@@ -274,6 +287,9 @@ export class RuntimeKnowledgeSession {
     const value: string = query.trim();
     if (this.view.busy || this.view.lifecycle !== ShuviRuntimeState.READY || (!this.consentGranted && !this.localOnly) ||
       value !== query || !value || value.length > 500) { return false; }
+    if (!this.localOnly && this.view.requestCount >= this.view.maxRequests) {
+      this.view.message = knowledgeLimitReached(this.view.maxRequests); this.publish(); return false;
+    }
     this.answerContext.clear(); this.view.query = value; this.view.answer = ''; this.view.answerSource = ''; this.view.citations = [];
     this.view.busy = true; this.view.stage = 'retrieving'; this.view.message = '正在检索本机知识库…';
     this.answering = false; this.cancelRequested = false; const generation: number = ++this.generation; this.watch(generation);
@@ -306,7 +322,7 @@ export class RuntimeKnowledgeSession {
       this.view.stage = 'answering'; this.view.message = '本机 RAG 检索完成；正在请求 DeepSeek 整理回答…';
       this.publish(); this.clearWatch(); const next: number = ++this.generation;
       if (!this.active(next)) { return; }
-      this.modelTaskDispatched = true; this.answering = true; this.watch(next); void this.submit(next, true);
+      this.modelTaskDispatched = true; this.answering = true; this.view.requestCount++; this.watch(next); void this.submit(next, true);
     } catch {
       if (this.active(generation)) {
         this.ragCancel = undefined;
@@ -426,7 +442,7 @@ export class RuntimeKnowledgeSession {
         this.publish();
         this.clearWatch(); const next: number = ++this.generation;
         if (!this.active(next)) { return; }
-        this.modelTaskDispatched = true; this.answering = true; this.watch(next); void this.submit(next, true);
+        this.modelTaskDispatched = true; this.answering = true; this.view.requestCount++; this.watch(next); void this.submit(next, true);
       }
     } else if (status === AgentTaskStatus.FAILED || status === AgentTaskStatus.CANCELLED) {
       this.finish(answering ? 'answerFailed' : 'retrievalFailed', answering ?
@@ -446,9 +462,12 @@ export class RuntimeKnowledgeSession {
     if (this.view.busy || this.view.lifecycle !== ShuviRuntimeState.READY || this.view.stage !== 'answerFailed' ||
       !this.consentGranted || this.view.citations.length === 0 ||
       this.answerContext.snapshotFor(this.view.query) === undefined) { return; }
+    if (this.view.requestCount >= this.view.maxRequests) {
+      this.view.message = knowledgeLimitReached(this.view.maxRequests); this.publish(); return;
+    }
     this.view.busy = true; this.view.stage = 'answering';
     this.view.message = '仅重试 DeepSeek 回答，不重新检索本机资料。';
-    this.modelTaskDispatched = true; this.answering = true; this.cancelRequested = false;
+    this.modelTaskDispatched = true; this.answering = true; this.cancelRequested = false; this.view.requestCount++;
     const generation: number = ++this.generation; this.watch(generation);
     this.publish(); await this.submit(generation, true);
   }
@@ -493,5 +512,6 @@ function copyRuntimeKnowledgeView(value: RuntimeKnowledgeView): RuntimeKnowledge
     citation.excerpt = source.excerpt; citation.kind = source.kind; citation.evidence = source.evidence;
     return citation;
   });
-  copy.clearEpoch = value.clearEpoch; return copy;
+  copy.clearEpoch = value.clearEpoch; copy.requestCount = value.requestCount; copy.maxRequests = value.maxRequests;
+  return copy;
 }

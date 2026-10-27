@@ -2,7 +2,7 @@ import { KnowledgeRuntimeCitation } from '../knowledge/domain/KnowledgeRuntimePo
 import { RuntimeKnowledgeService } from '../services/model/RuntimeKnowledgeService';
 import { RuntimeKnowledgeView } from '../services/model/RuntimeKnowledgeSession';
 import {
-  knowledgeAnswerIsModel, knowledgeAnswerStage, knowledgeRetrievalStage, knowledgeRetryAvailable
+  knowledgeAnswerIsModel, knowledgeAnswerStage, knowledgeRequestUsage, knowledgeRetrievalStage, knowledgeRetryAvailable
 } from '../services/model/RuntimeKnowledgePresentation';
 import { ShuviRuntimeState } from '../services/model/ShuviRuntimeController';
 import { Theme } from './Theme';
@@ -18,8 +18,8 @@ export struct RuntimeKnowledgePanel {
       Text(this.view.message).fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-knowledge-status')
       if (this.view.lifecycle === ShuviRuntimeState.IDLE || this.view.lifecycle === ShuviRuntimeState.STOPPED ||
         this.view.lifecycle === ShuviRuntimeState.FAILED) {
-        Text('RAG 会话不可用。返回普通对话后可检查 Embedding Provider、向量数据或重新启用 DeepSeek 会话。')
-          .fontSize(13).fontColor(Theme.muted).width('100%')
+        Text('RAG 会话已停止或未就绪，本次会话的 DeepSeek 凭据不再可用。要再次使用知识库问答：返回普通对话 → 停止真实对话 → 重新输入 Key 启用；如仍不可用，请检查 Embedding Provider 与向量数据。')
+          .fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-knowledge-restart-hint')
         Text('只有问题向量化会调用已配置的 Embedding Provider；检索结果在本机合并后，最多 5 条片段发送给 DeepSeek。')
           .fontSize(12).fontColor(Theme.muted).width('100%')
         Button('返回普通对话').constraintSize({ minHeight: 44 })
@@ -42,6 +42,9 @@ export struct RuntimeKnowledgePanel {
           Text('模型回答：' + knowledgeAnswerStage(this.view)).fontSize(13).fontColor(Theme.ink)
             .id('runtime-knowledge-answer-stage')
         }.alignItems(HorizontalAlign.Start).width('100%').padding(10).backgroundColor(Theme.inputSurface).borderRadius(10)
+      }
+      if (this.view.requestCount > 0) {
+        Text(knowledgeRequestUsage(this.view)).fontSize(12).fontColor(Theme.muted).id('runtime-knowledge-usage')
       }
       if (knowledgeAnswerIsModel(this.view)) {
         Column({ space: 6 }) {
