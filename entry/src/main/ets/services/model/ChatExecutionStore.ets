@@ -131,15 +131,25 @@ export class ChatExecutionStore implements ProductionRuntimePersistencePort {
   async recordReconciliation(_report: ReconciliationReport, _now: number): Promise<RuntimePersistenceResult> { return response(false); }
 }
 
-function databaseConfig(): relationalStore.StoreConfig {
+function databaseConfig(calendar: boolean, assistant: boolean): relationalStore.StoreConfig {
   const request = new EncryptedRdbConfigurationRequest();
   request.executionStoreName = 'shuvi_chat_execution_v1.db'; request.memoryStoreName = 'shuvi_chat_unused_memory_v1.db';
+  if (calendar) {
+    request.executionStoreName = 'shuvi_calendar_draft_execution_v1.db';
+    request.memoryStoreName = 'shuvi_calendar_draft_unused_memory_v1.db';
+  }
+  if (assistant) {
+    request.executionStoreName = 'shuvi_assistant_model_v1.db';
+    request.memoryStoreName = 'shuvi_assistant_unused_memory_v1.db';
+  }
   return createEncryptedRdbStoreConfigs(request).execution;
 }
 export class ChatExecutionResource extends OwnedAgentRdb implements ProductionRuntimePersistencePort {
   private journal?: ChatExecutionStore;
   private readonly digest: AgentHostDigest;
-  constructor(opener: AgentRdbOpenPort, digest: AgentHostDigest) { super(opener, databaseConfig(), 'CHAT_STORAGE'); this.digest = digest; }
+  constructor(opener: AgentRdbOpenPort, digest: AgentHostDigest, calendar: boolean = false, assistant: boolean = false) {
+    super(opener, databaseConfig(calendar, assistant), 'CHAT_STORAGE'); this.digest = digest;
+  }
   protected async initialize(store: relationalStore.RdbStore): Promise<void> {
     const journal = new ChatExecutionStore(new RdbSnapshotBackend(store), this.digest); await journal.open(); this.journal = journal;
   }

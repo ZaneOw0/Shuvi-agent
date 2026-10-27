@@ -11,6 +11,7 @@ export class RuntimeChatView {
   message: string = '尚未启用真实对话。';
   reply: string = '';
   replyId: number = 0;
+  succeeded: boolean = false;
   clearEpoch: number = 0;
 }
 class ChatListener implements AgentFrontendEventListener {
@@ -112,16 +113,17 @@ export class RuntimeChatSession {
   private apply(status: AgentTaskStatus, json: string): void {
     if (status === AgentTaskStatus.COMPLETED) {
       const answer = parseChatAnswer(json);
-      this.finish(answer === undefined ? '回答格式无效，未显示为成功。' : answer.text);
+      this.finish(answer === undefined ? '回答格式无效，未显示为成功。' : answer.text, answer !== undefined);
     } else if (status === AgentTaskStatus.FAILED) this.finish('回答失败。请检查 Key、余额、网络或本次会话的调用上限，再手动重试。');
     else if (status === AgentTaskStatus.CANCELLED) this.finish('已取消本次回答；已发送的请求仍可能计费。');
     else if (status !== AgentTaskStatus.RECEIVED && status !== AgentTaskStatus.RUNNING) this.unexpected(this.generation);
   }
-  private finish(text: string): void {
+  private finish(text: string, succeeded: boolean = false): void {
     if (!this.view.busy) return;
     this.view.busy = false; this.generation++;
     if (this.timer !== undefined) clearTimeout(this.timer); this.timer = undefined;
     this.subscription?.close(); this.subscription = undefined;
+    this.view.succeeded = succeeded;
     this.view.reply = text; this.view.replyId++; this.view.message = this.describe(this.view.lifecycle); this.publish();
   }
   async cancel(): Promise<void> {
@@ -148,6 +150,7 @@ function copyRuntimeChatView(value: RuntimeChatView): RuntimeChatView {
   copy.message = value.message;
   copy.reply = value.reply;
   copy.replyId = value.replyId;
+  copy.succeeded = value.succeeded;
   copy.clearEpoch = value.clearEpoch;
   return copy;
 }

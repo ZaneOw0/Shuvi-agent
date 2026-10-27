@@ -2,15 +2,20 @@ import common from '@ohos.app.ability.common';
 import { KnowledgeRagReadiness } from '../../knowledge/domain/KnowledgeRuntimePorts';
 import { KnowledgeAssembly } from '../../knowledge/infra/KnowledgeAssembly';
 import { KnowledgeRagSessionAdapter } from '../../knowledge/infra/KnowledgeRagSessionAdapter';
-import { chatRuntimeFactory } from './ChatRuntimeAssembly';
+import { CalendarNativeTool } from '../calendar/CalendarNativeTool';
+import { CalendarRuntimeFactory } from '../calendar/CalendarRuntimeAssembly';
+import { NativeAgentRdbOpen } from './AgentRdbResources';
+import { ChatPurpose, ChatRuntimeFactory } from './ChatRuntimeAssembly';
 import { knowledgeAnswerRuntimeFactory } from './KnowledgeAnswerRuntimeAssembly';
 import { RuntimeChatService } from './RuntimeChatService';
 import { RuntimeKnowledgeService } from './RuntimeKnowledgeService';
 import { ShuviRuntimeState } from './ShuviRuntimeController';
 
 /**
- * Coordinates one user-entered DeepSeek key across independent PUBLIC chat and PERSONAL RAG sessions.
- * start() only prepares the RAG answer session; the knowledge store is opened by enableKnowledge().
+ * Coordinates one user-entered DeepSeek key across the calendar-capable assistant session and the PERSONAL RAG session.
+ * The assistant session (ChatPurpose.ASSISTANT) answers or drafts calendar events; writing still requires the
+ * authorized native calendar tool. start() only prepares the RAG answer session; the knowledge store is opened by
+ * enableKnowledge(). The two sessions keep separate planners, adapters and execution stores.
  */
 export class RuntimeAssistantCoordinator {
   static async start(context: common.Context, debug: boolean, key: Uint8Array): Promise<void> {
@@ -22,9 +27,12 @@ export class RuntimeAssistantCoordinator {
       const knowledgeState: ShuviRuntimeState = RuntimeKnowledgeService.session.snapshot().lifecycle;
       if (knowledgeState === ShuviRuntimeState.STARTING || knowledgeState === ShuviRuntimeState.READY ||
         knowledgeState === ShuviRuntimeState.STOPPING || knowledgeState === ShuviRuntimeState.BLOCKED) {
-        try { await RuntimeKnowledgeService.session.stop(); } catch { /* PUBLIC chat may still start; RAG stays fail-closed. */ }
+        try { await RuntimeKnowledgeService.session.stop(); } catch { /* The assistant session may still start; RAG stays fail-closed. */ }
       }
-      await RuntimeChatService.session.start(chatRuntimeFactory(context, debug), chatKey);
+      const opener: NativeAgentRdbOpen = new NativeAgentRdbOpen(context);
+      await RuntimeChatService.session.start(
+        new ChatRuntimeFactory(opener, debug, RuntimeChatService.session.context, ChatPurpose.ASSISTANT),
+        new CalendarRuntimeFactory(opener, new CalendarNativeTool(), debug), chatKey);
       if (RuntimeChatService.session.snapshot().lifecycle !== ShuviRuntimeState.READY) { return; }
       await RuntimeKnowledgeService.session.prepareRag(
         new KnowledgeRagSessionAdapter(KnowledgeAssembly.forContext(context)),

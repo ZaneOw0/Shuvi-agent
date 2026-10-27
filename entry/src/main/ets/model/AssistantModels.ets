@@ -1,4 +1,6 @@
 // Frontend prototype types only; the shared Agent/platform contract is still pending.
+import { CalendarCreatedSummary } from '../services/calendar/CalendarPresentation';
+
 export enum DemoScenario {
   Normal = '正常流程',
   ModelFailure = '模型调用失败',
@@ -36,6 +38,8 @@ export interface ChatMessage {
   isUser: boolean;
   text: string;
   searchId?: string;
+  /** Present only on the reply that reports a verified calendar creation; rendered as a card. */
+  calendar?: CalendarCreatedSummary;
 }
 
 export interface CalendarDraft {

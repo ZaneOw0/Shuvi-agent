@@ -1351,6 +1351,8 @@ test('lifecycle view observes background and cleanup, detaches, and cannot break
 const chatAssembly = load(path.join(services, 'ChatRuntimeAssembly.ets'));
 const { ChatExecutionStore } = load(path.join(services, 'ChatExecutionStore.ets'));
 const { RuntimeChatSession } = load(path.join(services, 'RuntimeChatSession.ets'));
+const calendarContract = load(path.join(services, '../calendar/CalendarDraftContract.ets'));
+const { CalendarDraftSession } = load(path.join(services, '../calendar/CalendarDraftSession.ets'));
 function chatJournalBackend() {
   const h = { value: undefined, fail: false };
   h.port = { async initialize() {}, async load() { return h.value; }, async compareAndSet(rev, next) {
@@ -1361,6 +1363,7 @@ function chatJournalBackend() {
 function chatHarness(options = {}) {
   const journalBackend = chatJournalBackend();
   let journal; let calls = 0; let closed = 0; let modelCancelled = 0;
+  const requests = []; const proposals = [];
   class Resource {
     closed = false;
     async open() { journal = new ChatExecutionStore(journalBackend.port, new AgentHostDigest()); await journal.open(); }
@@ -1378,10 +1381,11 @@ function chatHarness(options = {}) {
       calls++;
       assert.equal(request.authorization, 'Bearer test-only-key');
       const body = JSON.parse(request.body); assert.equal(body.model, 'deepseek-flash');
+      requests.push(body);
       assert.equal(body.messages.length, 2); assert.equal(body.max_tokens, 1024); assert.equal(body.tools, undefined);
       const result = options.gate ? options.gate.promise : Promise.resolve({ statusCode: options.status || 200,
         body: JSON.stringify({ object: 'chat.completion', model: 'deepseek-flash', choices: [{index: 0,
-          message: {role: 'assistant', content: options.text || 'Test model answer'}, finish_reason: options.finish || 'stop'}],
+          message: {role: 'assistant', content: options.texts?.[calls - 1] || options.text || 'Test model answer'}, finish_reason: options.finish || 'stop'}],
           usage: {prompt_tokens: 52, completion_tokens: 18, total_tokens: 70} }) });
       return {result, cancel() { modelCancelled++; }};
     }
@@ -1391,8 +1395,12 @@ function chatHarness(options = {}) {
     './DeepSeekHttpClient': { ArkTsDeepSeekHttpClient: Client }
   });
   const controller = new ShuviRuntimeController(); controller.onForeground();
-  const ui = new RuntimeChatSession(controller);
-  return {ui, controller, journalBackend, factory: new assembly.ChatRuntimeFactory({}, true),
+  const {AssistantRuntimeSession} = load(path.join(services,'../calendar/AssistantRuntimeSession.ets'));
+  const ui = options.assistant ? new AssistantRuntimeSession(controller) : options.calendar ? new CalendarDraftSession(controller) : new RuntimeChatSession(controller);
+  if (options.calendar) ui.attach(() => {}, proposal => proposals.push(proposal));
+  return {ui, controller, journalBackend, requests, proposals,
+    factory: new assembly.ChatRuntimeFactory({}, true, options.calendar || options.assistant ? ui.context : undefined,
+      options.assistant ? assembly.ChatPurpose.ASSISTANT : options.calendar ? assembly.ChatPurpose.CALENDAR_DRAFT : assembly.ChatPurpose.PUBLIC_CHAT),
     calls: () => calls, closed: () => closed, cancelled: () => modelCancelled, store: () => journal};
 }
 async function waitChat(ui) {
@@ -2721,17 +2729,34 @@ test('real RAG composition shows insufficient evidence as a non-success without 
     assert.equal(knowledgePresentation.knowledgeAnswerStage(view), '资料中没有足够依据');
   } finally { await h.ui.stop(); }
 });
-test('assistant coordinator consumes one caller key and gives isolated copies to PUBLIC chat and PERSONAL RAG', async () => {
+// The coordinator composes the calendar-capable assistant session; these stubs keep native calendar/RDB kits out of host tests.
+function coordinatorAssistantStubs(trace = {}) {
+  const ChatPurpose = { PUBLIC_CHAT:0, CALENDAR_DRAFT:1, ASSISTANT:2 };
+  return {
+    './ChatRuntimeAssembly': { ChatPurpose, ChatRuntimeFactory:class {
+      constructor(opener, debug, context, purpose) { Object.assign(this, {opener, debug, context, purpose}); } } },
+    '../calendar/CalendarRuntimeAssembly': { CalendarRuntimeFactory:class {
+      constructor(opener, tool, debug) { Object.assign(this, {opener, tool, debug}); trace.calendarFactories = (trace.calendarFactories ?? 0) + 1; } } },
+    '../calendar/CalendarNativeTool': { CalendarNativeTool:class {} },
+    './AgentRdbResources': { NativeAgentRdbOpen:class { constructor(context) { this.context = context; } } },
+    ChatPurpose
+  };
+}
+test('assistant coordinator consumes one caller key and gives isolated copies to the calendar assistant and PERSONAL RAG', async () => {
   const trace = { chatKey:undefined, ragKey:undefined, chatStopped:0, ragStopped:0 }; let chatState = ShuviRuntimeState.IDLE;
+  const assistantContext = {};
   const fakeKnowledgeSession = { answerContext:{},
     async prepareRag(_search, _factory, key) { trace.ragKey = key.slice(); key.fill(0); },
     answerOutcomeRejected() {}, async activateRag() { return {ready:true}; }, async deactivateRag() {},
     snapshot() { return {lifecycle:ShuviRuntimeState.IDLE}; }, async stop() { trace.ragStopped++; } };
+  const { ChatPurpose, ...stubs } = coordinatorAssistantStubs(trace);
   const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
-    './ChatRuntimeAssembly': { chatRuntimeFactory() { return {kind:'chat'}; } },
+    ...stubs,
     './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {kind:'answer'}; } },
-    './RuntimeChatService': { RuntimeChatService:{session:{
-      async start(_factory, key) { trace.chatKey = key.slice(); key.fill(0); chatState=ShuviRuntimeState.READY; },
+    './RuntimeChatService': { RuntimeChatService:{session:{ context:assistantContext,
+      async start(factory, calendarFactory, key) {
+        trace.chatFactory = factory; trace.calendarFactory = calendarFactory;
+        trace.chatKey = key.slice(); key.fill(0); chatState=ShuviRuntimeState.READY; },
       snapshot() { return {lifecycle:chatState}; }, async stop() { trace.chatStopped++; }
     }}},
     './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:fakeKnowledgeSession} },
@@ -2739,18 +2764,23 @@ test('assistant coordinator consumes one caller key and gives isolated copies to
     '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class { constructor(assembly) { this.assembly=assembly; } } }
   });
   const key = new TextEncoder().encode('one-session-key');
-  await coordinator.RuntimeAssistantCoordinator.start({}, true, key);
+  const hostContext = {};
+  await coordinator.RuntimeAssistantCoordinator.start(hostContext, true, key);
   assert(key.every(value => value === 0)); assert.deepEqual(trace.chatKey, trace.ragKey);
   assert.notEqual(trace.chatKey, trace.ragKey); assert.equal(new TextDecoder().decode(trace.chatKey), 'one-session-key');
+  assert.equal(trace.chatFactory.purpose, ChatPurpose.ASSISTANT); assert.equal(trace.chatFactory.context, assistantContext);
+  assert.equal(trace.chatFactory.debug, true); assert.equal(trace.calendarFactories, 1);
+  assert.equal(trace.calendarFactory.opener, trace.chatFactory.opener); assert.equal(trace.chatFactory.opener.context, hostContext);
   await coordinator.RuntimeAssistantCoordinator.stop(); assert.equal(trace.chatStopped,1); assert.equal(trace.ragStopped,1);
 });
-test('assistant coordinator does not retain or prepare a RAG key when PUBLIC chat startup fails', async () => {
+test('assistant coordinator does not retain or prepare a RAG key when assistant startup fails', async () => {
   let prepared = 0; const fakeKnowledgeSession = { answerContext:{}, snapshot() { return {lifecycle:ShuviRuntimeState.IDLE}; },
     async prepareRag() { prepared++; }, answerOutcomeRejected() {}, async stop() {} };
+  const { ChatPurpose: _purpose, ...stubs } = coordinatorAssistantStubs();
   const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
-    './ChatRuntimeAssembly': { chatRuntimeFactory() { return {}; } },
+    ...stubs,
     './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {}; } },
-    './RuntimeChatService': { RuntimeChatService:{session:{ async start(_factory,key) { key.fill(0); },
+    './RuntimeChatService': { RuntimeChatService:{session:{ context:{}, async start(_factory,_calendar,key) { key.fill(0); },
       snapshot() { return {lifecycle:ShuviRuntimeState.FAILED}; }, async stop() {} }}},
     './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:fakeKnowledgeSession} },
     '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
@@ -2762,13 +2792,14 @@ test('assistant coordinator does not retain or prepare a RAG key when PUBLIC cha
 });
 test('assistant coordinator rejects duplicate start without rotating the prepared RAG key', async () => {
   let chatStarts = 0; let ragPrepares = 0; let ragStops = 0;
+  const { ChatPurpose: _purpose, ...stubs } = coordinatorAssistantStubs();
   const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
-    './RuntimeChatService': { RuntimeChatService:{session:{ snapshot() { return {lifecycle:ShuviRuntimeState.READY}; },
+    ...stubs,
+    './RuntimeChatService': { RuntimeChatService:{session:{ context:{}, snapshot() { return {lifecycle:ShuviRuntimeState.READY}; },
       async start() { chatStarts++; }, async stop() {} }}},
     './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:{ answerContext:{},
       snapshot() { return {lifecycle:ShuviRuntimeState.READY}; }, async prepareRag() { ragPrepares++; },
       answerOutcomeRejected() {}, async stop() { ragStops++; } }}},
-    './ChatRuntimeAssembly': { chatRuntimeFactory() { return {}; } },
     './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {}; } },
     '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
     '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class {} }
@@ -2804,6 +2835,373 @@ for (const kind of ['execution', 'memory']) {
     }
   });
 }
+
+function calendarModelReply(change = {}) {
+  return JSON.stringify({schemaVersion:'1.0', kind:'draft', draft: {
+    title:'项目讨论', startAt:'2099-10-27T15:00:00+08:00', endAt:'2099-10-27T16:00:00+08:00',
+    timeZone:'Asia/Shanghai', reminderMinutes:10, ...change
+  }});
+}
+test('calendar proposal rejects untrusted, missing, rolled-over, stale and out-of-scope fields', () => {
+  const parse = raw => calendarContract.parseCalendarProposal(raw, Date.parse('2026-10-26T10:00:00+08:00'));
+  assert.equal(parse(calendarModelReply()).draft.title, '项目讨论');
+  for (const raw of ['null', '[]', '{}', '```json\n'+calendarModelReply()+'\n```',
+    calendarModelReply({timeZone:'UTC'}), calendarModelReply({startAt:'2099-02-30T15:00:00+08:00'}),
+    calendarModelReply({reminderMinutes:undefined}), calendarModelReply({title:''}),
+    calendarModelReply({reminderMinutes:'10'}), calendarModelReply({repeat:'daily'}),
+    calendarModelReply({startAt:'2026-10-26T10:05:00+08:00'}),
+    calendarModelReply({endAt:'2099-10-27T14:00:00+08:00'})]) assert.equal(parse(raw).draft, undefined, raw);
+  const clarify = JSON.stringify({schemaVersion:'1.0', kind:'clarify', message:'请补充结束时间'});
+  assert.match(parse(clarify).message, /需要补充/); assert.equal(parse(clarify).draft, undefined);
+  assert.equal(parse(JSON.stringify({...JSON.parse(clarify), draft:JSON.parse(calendarModelReply()).draft})).draft, undefined);
+});
+test('calendar context binds exact approved description and reference time without history', () => {
+  const context = new calendarContract.CalendarDraftContext();
+  assert.equal(context.promptFor('明天开会'), undefined);
+  context.bind('明天开会', Date.parse('2026-10-26T23:58:00+08:00'));
+  assert.match(context.promptFor('明天开会'), /2026-10-26T23:58:00\+08:00/);
+  assert.equal(context.promptFor('更改描述'), undefined);
+  context.clear(); assert.equal(context.promptFor('明天开会'), undefined);
+});
+test('calendar Runtime requires per-request approval and PERSONAL scope, returns only a proposal', async () => {
+  const h = chatHarness({calendar:true, text:calendarModelReply()});
+  await h.ui.generate('安排项目讨论', true); assert.equal(h.calls(), 0);
+  await h.ui.start(h.factory, new TextEncoder().encode('test-only-key'));
+  await h.ui.generate('安排项目讨论', false); assert.equal(h.calls(), 0);
+  await h.ui.generate('安排项目讨论', true); await waitChat(h.ui);
+  assert.equal(h.calls(), 1); assert.equal(h.proposals.length, 1);
+  assert.equal(h.proposals[0].title, '项目讨论');
+  const record = JSON.parse(h.journalBackend.value.payloadJson).records[0];
+  assert.equal(record.checkpoint.envelope.privacyClass, contracts.PrivacyClass.PERSONAL);
+  assert.equal(record.checkpoint.workflow.steps[0].kind, contracts.WorkflowStepKind.LLM);
+  assert.match(h.requests[0].messages[0].content, /不能臆造/);
+  assert.match(h.requests[0].messages[1].content, /参考当前时间/);
+  assert.equal(h.requests[0].tools, undefined);
+  assert.equal(h.ui.context.promptFor('安排项目讨论'), undefined);
+  assert.equal(chatAssembly.chatFrontendConfig().privacyClass, contracts.PrivacyClass.PUBLIC);
+  assert.throws(() => new chatAssembly.ChatRuntimeFactory({},true,undefined,chatAssembly.ChatPurpose.CALENDAR_DRAFT).create(), /CONTEXT_REQUIRED/);
+  await h.ui.stop();
+});
+test('calendar model clarification, failed request and malformed result never publish a draft', async () => {
+  for (const opts of [{text:JSON.stringify({schemaVersion:'1.0',kind:'clarify',message:'何时结束？'})},
+    {status:401}, {text:'已创建日程'}, {text:calendarModelReply({reminderMinutes:undefined})}, {finish:'length'}]) {
+    const h = chatHarness({calendar:true,...opts});
+    await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+    await h.ui.generate('明天开会',true); await waitChat(h.ui);
+    assert.equal(h.calls(),1); assert.equal(h.proposals.length,0);
+    assert.notEqual(h.ui.snapshot().message,''); await h.ui.stop();
+  }
+});
+test('calendar stop, background and detach revoke draft delivery even when HTTP resolves late', async () => {
+  for (const action of ['stop','background','detach']) {
+    const gate=deferred(); const h=chatHarness({calendar:true,gate});
+    await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+    await h.ui.generate('安排项目讨论',true); assert.equal(h.calls(),1);
+    if(action==='stop') await h.ui.stop();
+    else if(action==='background') await h.controller.onBackground();
+    else { h.ui.detach(); await h.controller.stop(); }
+    gate.resolve(response({model:'deepseek-flash',choices:[{index:0,message:{role:'assistant',content:calendarModelReply()},finish_reason:'stop'}]}));
+    await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(h.proposals.length,0); assert.equal(h.ui.snapshot().busy,false); assert.equal(h.cancelled(),1);
+  }
+});
+test('calendar storage failure blocks request; separate database is encrypted', async () => {
+  const h=chatHarness({calendar:true,text:calendarModelReply()});
+  await h.ui.start(h.factory,new TextEncoder().encode('test-only-key')); h.journalBackend.fail=true;
+  await h.ui.generate('安排项目讨论',true); await waitChat(h.ui);
+  assert.equal(h.calls(),0); assert.equal(h.proposals.length,0);
+  await assert.rejects(h.ui.stop(),/SHUTDOWN_FAILED/);
+  const db=writableRdb();
+  const {ChatExecutionResource}=load(path.join(services,'ChatExecutionStore.ets'));
+  const resource=new ChatExecutionResource(db.opener,new AgentHostDigest(),true); await resource.open();
+  assert.equal(db.opens[0].name,'shuvi_calendar_draft_execution_v1.db'); assert.equal(db.opens[0].encrypt,true);
+  await resource.close();
+});
+test('calendar Runtime proposal cannot write until separate user confirmation and native permission', async () => {
+  const {CalendarProbeSession} = load(path.join(services,'../calendar/CalendarProbeSession.ets'));
+  for (const action of ['confirm','cancel','deny']) {
+    let writes=0; let authorizations=0; let view;
+    const records=[];
+    const port={async authorize(){authorizations++; if(action==='deny') throw new Error('permission denied');},
+      async prepare(){},async add(){writes++;return 42;},
+      async read(){return {eventId:42,matches:true,reminderConfigured:true};}};
+    const store={async load(){return records[0];},async list(){return records;},async save(record){
+      const idx=records.findIndex(item=>item.operationId===record.operationId);
+      if(idx<0) records.push(structuredClone(record)); else records[idx]=structuredClone(record);
+    }};
+    const calendar=new CalendarProbeSession(port,store,()=> 'shuvi-calendar-test-draft',Date.now);
+    calendar.attach(next=>{view=next;}); await new Promise(resolve=>setImmediate(resolve));
+    const h=chatHarness({calendar:true,text:calendarModelReply()});
+    h.ui.attach(()=>{},draft=>calendar.preview(draft));
+    await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+    await h.ui.generate('2099年10月27日15点到16点项目讨论，提前10分钟提醒',true); await waitChat(h.ui);
+    assert.equal(view.phase,'confirm'); assert.equal(writes,0); assert.equal(authorizations,0);
+    await h.ui.stop();
+    if(action==='cancel') calendar.cancelDraft();
+    await calendar.confirm();
+    assert.equal(writes,action==='confirm'?1:0);
+    assert.equal(authorizations,action==='cancel'?0:1);
+    if(action==='confirm') { assert.equal(view.eventId,42); assert.equal(view.records[0].verified,true); }
+    calendar.detach();
+  }
+});
+test('calendar confirmation and new-draft panel changes reuse the enabled session without another key', async () => {
+  const h=chatHarness({calendar:true,text:calendarModelReply()});
+  await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+  await h.ui.generate('第一条日程',true); await waitChat(h.ui);
+  assert.equal(h.proposals.length,1);
+  h.ui.detachView(); // Confirmation, result/history, then new draft on the same page.
+  assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY); assert.equal(h.closed(),0);
+  h.ui.attach(()=>{},draft=>h.proposals.push(draft));
+  await h.ui.generate('第二条日程',true); await waitChat(h.ui);
+  assert.equal(h.calls(),2); assert.equal(h.proposals.length,2); assert.equal(h.closed(),0);
+  h.ui.detach(); await h.controller.stop(); // Actual calendar page exit owns cleanup.
+  assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.STOPPED); assert.equal(h.closed(),1);
+  await h.ui.generate('离页后不能发送',true); assert.equal(h.calls(),2);
+});
+test('calendar cancellation revokes the current proposal while preserving the session for another request', async () => {
+  const gate=deferred(); const h=chatHarness({calendar:true,gate});
+  await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+  await h.ui.generate('取消这一条',true); await h.ui.cancel();
+  assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY); assert.equal(h.closed(),0);
+  assert.equal(h.ui.snapshot().busy,false); assert.equal(h.proposals.length,0);
+  gate.resolve(response({model:'deepseek-flash',choices:[{index:0,message:{role:'assistant',content:calendarModelReply()},finish_reason:'stop'}]}));
+  await new Promise(resolve=>setTimeout(resolve,10)); assert.equal(h.proposals.length,0);
+  await h.ui.generate('重新描述另一条',true); await waitChat(h.ui);
+  assert.equal(h.calls(),2); assert.equal(h.proposals.length,1); await h.ui.stop();
+});
+test('removing a busy calendar draft panel still stops the unfinished request', async () => {
+  const gate=deferred(); const h=chatHarness({calendar:true,gate});
+  await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+  await h.ui.generate('未完成的描述',true); h.ui.detachView(); await h.controller.stop();
+  assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.STOPPED);
+  assert.equal(h.cancelled(),1); assert.equal(h.proposals.length,0); assert.equal(h.closed(),1);
+});
+
+function assistantHarness(options = {}) {
+  const h = chatHarness({assistant:true, text:calendarModelReply(), ...options});
+  const db = options.db || writableRdb(); const records = options.records || [];
+  const trace = {permissions:0, writes:0, reads:0};
+  const {CalendarProbeSession} = load(path.join(services,'../calendar/CalendarProbeSession.ets'));
+  const probe = new CalendarProbeSession({
+    async authorize() { trace.permissions++; if(options.deny) throw Error('permission denied'); if(options.permissionGate) await options.permissionGate.promise; },
+    async prepare() {},
+    async add(record) { trace.writes++; if(options.writeGate) await options.writeGate.promise; return records.length + 100; },
+    async read(record) { trace.reads++; return {eventId:record.eventId,matches:!options.mismatch,reminderConfigured:true}; }
+  }, {
+    async load(){return records.at(-1);}, async list(){return structuredClone(records);},
+    async save(record){ const idx = records.findIndex(item=>item.operationId===record.operationId);
+      if(idx<0) records.push(structuredClone(record)); else records[idx]=structuredClone(record); }
+  }, ()=>'shuvi-calendar-must-use-runtime-id', Date.now);
+  const {CalendarRuntimeFactory} = load(path.join(services,'../calendar/CalendarRuntimeAssembly.ets'));
+  const factory = new CalendarRuntimeFactory(db.opener, {
+    create(draft,id,cancelled){return probe.executeAuthorized(draft,id,cancelled);}, cancel(){probe.stop();}
+  }, true);
+  h.ui.calendar.onForeground();
+  return {...h, db, records, trace, probe, calendarFactory:factory,
+    async start(){await h.ui.start(h.factory,factory,new TextEncoder().encode('test-only-key'));}};
+}
+async function waitCalendarCard(ui) {
+  for(let i=0;i<200 && ui.snapshot().busy && !ui.snapshot().preview;i++) await new Promise(resolve=>setTimeout(resolve,2));
+  assert.equal(ui.snapshot().calendarStage,'authorization',JSON.stringify(ui.snapshot()));
+}
+
+test('assistant uses real Runtime policy/grant and native tool; confirmation writes once and returns verified result', async () => {
+  const h=assistantHarness(); await h.start();
+  try {
+    assert.equal(h.ui.snapshot().lifecycle,ShuviRuntimeState.READY);
+    await h.ui.send('2099年10月27日15到16点项目讨论，提前10分钟提醒');
+    await waitCalendarCard(h.ui);
+    assert.equal(h.trace.writes,0); assert.equal(h.trace.permissions,0);
+    const preview=h.ui.snapshot().preview; assert.equal(preview.draft.title,'项目讨论');
+    await Promise.all([h.ui.decide(true),h.ui.decide(true)]); await waitChat(h.ui);
+    assert.equal(h.trace.writes,1); assert.equal(h.trace.reads,1); assert.equal(h.ui.snapshot().succeeded,true);
+    assert.match(h.ui.snapshot().reply,/已创建日程并读回核对/);
+    assert.equal(h.records[0].operationId,preview.operationId); assert.equal(h.records[0].verified,true);
+    const stored=JSON.stringify(JSON.parse(h.db.envelope.payloadJson));
+    assert(stored.includes(preview.operationId)); assert(stored.includes('shuvi.calendar.create'));
+    assert.equal(h.db.opens[0].encrypt,true); assert.equal(h.db.opens[0].name,'shuvi_calendar_runtime_v1.db');
+  } finally { await h.ui.stop(); }
+});
+
+test('assistant normal answers, clarification and malformed replies never create tools; session is reused', async () => {
+  const texts=[JSON.stringify({schemaVersion:'1.0',kind:'answer',message:'普通回答'}),
+    JSON.stringify({schemaVersion:'1.0',kind:'clarify',message:'何时结束？'}),calendarModelReply(), '已创建日程'];
+  const h=assistantHarness({texts}); await h.start();
+  try {
+    await h.ui.send('解释日历'); await waitChat(h.ui); assert.equal(h.ui.snapshot().reply,'普通回答');
+    assert.equal(h.trace.writes,0); assert.equal(h.db.envelope,undefined);
+    await h.ui.send('2099年10月27日下午3点项目讨论，提前10分钟提醒'); await waitChat(h.ui);
+    assert.equal(h.ui.snapshot().reply,'何时结束？');
+    await h.ui.send('4点结束'); await waitCalendarCard(h.ui);
+    assert.match(h.requests[2].messages[1].content,/2099年10月27日/);
+    await h.ui.decide(false); await waitChat(h.ui); assert.equal(h.trace.permissions,0);
+    await h.ui.send('再次试试'); await waitChat(h.ui); assert.match(h.ui.snapshot().reply,/格式未通过/);
+    assert.equal(h.calls(),4); assert.equal(h.closed(),0); assert.equal(h.trace.writes,0);
+  } finally {await h.ui.stop();}
+});
+
+test('assistant denial and cancellation preserve enabled model session; another calendar needs fresh confirmation', async () => {
+  const h=assistantHarness({texts:[calendarModelReply(),calendarModelReply({title:'另一条日程'})]}); await h.start();
+  try {
+    await h.ui.send('第一条'); await waitCalendarCard(h.ui); const first=h.ui.snapshot().preview;
+    await h.ui.decide(false); await waitChat(h.ui); assert.equal(h.trace.writes,0);
+    assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY);
+    await h.ui.send('另一条'); await waitCalendarCard(h.ui);
+    assert.notEqual(h.ui.snapshot().preview.operationId,first.operationId);
+    await h.ui.decide(true); await waitChat(h.ui);
+    assert.equal(h.trace.writes,1); assert.equal(h.calls(),2); assert.equal(h.closed(),0);
+  } finally {await h.ui.stop();}
+});
+
+test('assistant system permission refusal and mismatched readback never claim successful calendar creation', async () => {
+  for(const options of [{deny:true},{mismatch:true}]) {
+    const h=assistantHarness(options); await h.start();
+    try {
+      await h.ui.send('日程安排'); await waitCalendarCard(h.ui); await h.ui.decide(true); await waitChat(h.ui);
+      assert.equal(h.ui.snapshot().succeeded,false); assert.equal(h.trace.writes,options.deny?0:1);
+      if(options.mismatch) assert.equal(h.records[0].verified,false);
+    } finally {await h.ui.stop();}
+  }
+});
+
+test('assistant cancellation during permission wait prevents native write and ignores late completion', async () => {
+  const gate=deferred(); const h=assistantHarness({permissionGate:gate}); await h.start();
+  try {
+    await h.ui.send('日程安排'); await waitCalendarCard(h.ui); await h.ui.decide(true);
+    for(let i=0;i<100 && !h.trace.permissions;i++) await new Promise(r=>setTimeout(r,1));
+    await h.ui.cancel(); const reply=h.ui.snapshot().reply;
+    gate.resolve(); await new Promise(r=>setTimeout(r,10));
+    assert.equal(h.trace.writes,0); assert.equal(h.ui.snapshot().reply,reply);
+    assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY);
+  } finally {gate.resolve();await h.ui.stop();}
+});
+
+test('assistant lost UI after native write retains late event id and never repeats creation after restart', async () => {
+  const gate=deferred(); const h=assistantHarness({writeGate:gate}); await h.start();
+  await h.ui.send('日程安排'); await waitCalendarCard(h.ui); await h.ui.decide(true);
+  for(let i=0;i<100 && !h.trace.writes;i++) await new Promise(r=>setTimeout(r,1));
+  assert.equal(h.trace.writes,1); await h.ui.stop(); gate.resolve(); await new Promise(r=>setTimeout(r,10));
+  assert(h.records[0].eventId>0); assert.equal(h.records[0].verified,false);
+  const next=assistantHarness({db:h.db,records:h.records}); await next.start();
+  try {
+    await next.ui.send('相同日程'); await waitCalendarCard(next.ui); await next.ui.decide(true); await waitChat(next.ui);
+    assert.equal(next.trace.writes,0); assert.equal(next.ui.snapshot().succeeded,false);
+  } finally {await next.ui.stop();}
+});
+
+test('assistant journal failure blocks tools before calendar permission and write', async () => {
+  const h=assistantHarness(); await h.start(); h.db.failWrites=true;
+  await h.ui.send('日程安排'); await waitChat(h.ui);
+  assert.equal(h.trace.permissions,0); assert.equal(h.trace.writes,0); assert.equal(h.ui.snapshot().succeeded,false);
+  await h.ui.stop();
+});
+
+test('native calendar verifier rejects altered and expired grants and consumes the valid invocation only once', async () => {
+  const {CalendarExecutionResource}=load(path.join(services,'../calendar/CalendarExecutionResource.ets'));
+  const original=CalendarExecutionResource.prototype.verify; let checked=0;
+  CalendarExecutionResource.prototype.verify=function(invocation) {
+    for(const delta of [{authorizationGrantId:'forged'},{operationId:'shuvi-calendar-other'},
+      {argumentsDigest:'changed'},{schemaDigest:'changed'},{toolIdentityVersion:'2'},{taskId:'other'}]) {
+      assert.equal(original.call(this,{...invocation,...delta}),false);
+    }
+    const clock=Date.now;
+    try {Date.now=()=>clock()+120000;assert.equal(original.call(this,invocation),false);} finally {Date.now=clock;}
+    assert.equal(original.call(this,invocation),true);
+    assert.equal(original.call(this,invocation),false);checked++;return true;
+  };
+  const h=assistantHarness();
+  try {
+    await h.start();await h.ui.send('完整日程');await waitCalendarCard(h.ui);await h.ui.decide(true);await waitChat(h.ui);
+    assert.equal(checked,1);assert.equal(h.trace.writes,1);assert.equal(h.ui.snapshot().succeeded,true);
+  } finally {CalendarExecutionResource.prototype.verify=original;await h.ui.stop();}
+});
+
+test('calendar confirmation snapshot cannot mutate the authorized draft; duplicate request is not written again', async () => {
+  const h=assistantHarness();await h.start();
+  try {
+    await h.ui.send('完整日程');await waitCalendarCard(h.ui);
+    const snapshot=h.ui.snapshot();snapshot.preview.draft.title='篡改标题';snapshot.preview.operationId='shuvi-calendar-forged';
+    await h.ui.decide(true);await waitChat(h.ui);assert.equal(h.records[0].draft.title,'项目讨论');
+    await h.ui.send('同一日程');await waitCalendarCard(h.ui);await h.ui.decide(true);await waitChat(h.ui);
+    assert.equal(h.trace.writes,1);assert.equal(h.ui.snapshot().succeeded,false);assert.match(h.ui.snapshot().reply,/已有同标题/);
+  } finally {await h.ui.stop();}
+});
+
+test('expired calendar confirmation cannot dispatch a tool, and new conversation forgets clarification context', async () => {
+  const h=assistantHarness({texts:[JSON.stringify({schemaVersion:'1.0',kind:'clarify',message:'补充结束时间'}),calendarModelReply()]});
+  await h.start();
+  try {
+    await h.ui.send('待澄清的日程');await waitChat(h.ui);h.ui.clearConversation();
+    await h.ui.send('新的完整安排');await waitCalendarCard(h.ui);
+    assert(!h.requests[1].messages[1].content.includes('待澄清的日程'));
+    const clock=Date.now;
+    try {Date.now=()=>clock()+130000;await h.ui.decide(true);} finally {Date.now=clock;}
+    assert.equal(h.trace.permissions,0);assert.equal(h.trace.writes,0);assert.equal(h.ui.snapshot().busy,false);
+  } finally {await h.ui.stop();}
+});
+
+test('assistant cancelling model generation does not prompt for another key and discards a late draft', async () => {
+  const gate=deferred();const h=assistantHarness({gate});await h.start();
+  try {
+    await h.ui.send('停止生成');await h.ui.cancel();assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY);
+    gate.resolve(response({model:'deepseek-flash',choices:[{index:0,message:{role:'assistant',content:calendarModelReply()},finish_reason:'stop'}]}));
+    await new Promise(r=>setTimeout(r,10));assert.equal(h.ui.snapshot().preview,undefined);assert.equal(h.trace.writes,0);
+    await h.ui.send('重新安排');await waitCalendarCard(h.ui);assert.equal(h.calls(),2);assert.equal(h.closed(),0);
+  } finally {await h.ui.stop();}
+});
+
+test('assistant malformed model drafts and provider failures are terminal without native permission requests', async () => {
+  for(const opts of [{text:calendarModelReply({reminderMinutes:'10'})},{text:calendarModelReply({timeZone:'UTC'})},
+    {text:calendarModelReply({startAt:'2099-02-30T15:00:00+08:00'})},{status:401},{finish:'length'}]) {
+    const h=assistantHarness(opts);await h.start();
+    try {await h.ui.send('日程');await waitChat(h.ui);assert.equal(h.trace.permissions,0);assert.equal(h.trace.writes,0);assert.equal(h.ui.snapshot().succeeded,false);}
+    finally {await h.ui.stop();}
+  }
+});
+
+test('return to edit declines the old Runtime policy, restores absolute schedule text and requires a fresh confirmation', async () => {
+  const h=assistantHarness({texts:[calendarModelReply(),calendarModelReply({title:'修改后的讨论',reminderMinutes:20})]});await h.start();
+  try {
+    await h.ui.send('安排讨论');await waitCalendarCard(h.ui);const oldPreview=h.ui.snapshot().preview;
+    const text=await h.ui.revise();
+    assert.match(text,/项目讨论/);assert.match(text,/2099-10-27 15:00/);assert.match(text,/2099-10-27 16:00/);assert.match(text,/提前 10 分钟/);
+    assert.equal(h.ui.snapshot().busy,false);assert.match(h.ui.snapshot().reply,/原草稿已撤销/);
+    assert.equal(h.trace.permissions,0);assert.equal(h.trace.writes,0);assert.equal(h.calls(),1);assert.equal(h.closed(),0);
+    assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY);
+    assert.equal(await h.ui.decide(true),false);assert.equal(h.trace.writes,0);
+    await h.ui.send(text.replace('项目讨论','修改后的讨论').replace('10 分钟','20 分钟'));await waitCalendarCard(h.ui);
+    assert.notEqual(h.ui.snapshot().preview.operationId,oldPreview.operationId);
+    assert.equal(h.ui.snapshot().preview.draft.reminderMinutes,20);assert.equal(h.trace.writes,0);
+    await h.ui.decide(true);await waitChat(h.ui);
+    assert.equal(h.trace.writes,1);assert.equal(h.records[0].draft.title,'修改后的讨论');assert.equal(h.calls(),2);
+  } finally {await h.ui.stop();}
+});
+
+test('return to edit cannot race confirmation or repeat dismissal', async () => {
+  const h=assistantHarness();await h.start();
+  try {
+    await h.ui.send('安排讨论');await waitCalendarCard(h.ui);
+    const [text,second,confirmed]=await Promise.all([h.ui.revise(),h.ui.revise(),h.ui.decide(true)]);
+    assert.equal(typeof text,'string');assert.equal(second,undefined);assert.equal(confirmed,false);assert.equal(h.trace.writes,0);
+    assert.equal(await h.ui.revise(),undefined);
+  } finally {await h.ui.stop();}
+});
+
+test('edit is unavailable after write dispatch and concurrent stop waits for actual model cleanup', async () => {
+  const gate=deferred();const h=assistantHarness({writeGate:gate});await h.start();
+  try {
+    await h.ui.send('安排讨论');await waitCalendarCard(h.ui);await h.ui.decide(true);
+    assert.equal(await h.ui.revise(),undefined);
+    const closeGate=deferred();const originalStop=h.ui.calendar.stop.bind(h.ui.calendar);
+    h.ui.calendar.stop=async()=>{await closeGate.promise;return originalStop();};
+    const first=h.ui.stop();let secondDone=false;const second=h.ui.stop().then(()=>{secondDone=true;});
+    await new Promise(r=>setTimeout(r,5));assert.equal(secondDone,false);assert.equal(h.ui.snapshot().lifecycle,ShuviRuntimeState.STOPPING);
+    assert.doesNotMatch(h.ui.snapshot().message,/已就绪/);assert.equal(h.closed(),0);
+    closeGate.resolve();await Promise.all([first,second]);assert.equal(h.closed(),1);assert.equal(h.ui.snapshot().lifecycle,ShuviRuntimeState.STOPPED);
+    assert.doesNotMatch(h.ui.snapshot().message,/已就绪/);
+  } finally {gate.resolve();await h.ui.stop();}
+});
 
 // Route 2: session-key direct vision answer. Real protocol/validation; network and image decode are injected.
 const visionProtocol = load(path.join(services, 'VisionChatProtocol.ets'));
@@ -3142,4 +3540,243 @@ test('vision start failure clears consent but preserves the selected image', asy
   assert.equal(view.consent, false); assert.equal(view.imageReady, true);
   assert.equal(view.imageName, 'screen.jpg'); assert(key.every(value => value === 0));
   await ui.stop(); assert.equal(ui.snapshot().imageReady, false);
+});
+
+// Opt-in "remember DeepSeek key": real store logic over an in-memory Asset Store shaped like the platform API.
+function deepSeekAssetKit() {
+  return { Tag:{ SECRET:1, ALIAS:2, ACCESSIBILITY:3, SYNC_TYPE:4, RETURN_TYPE:5, CONFLICT_RESOLUTION:6 },
+    ReturnType:{ ALL:0, ATTRIBUTES:1 }, Accessibility:{ DEVICE_POWERED_ON:0, DEVICE_FIRST_UNLOCKED:1, DEVICE_UNLOCKED:2 },
+    SyncType:{ NEVER:0, THIS_DEVICE:1, TRUSTED_DEVICE:2 }, ConflictResolution:{ OVERWRITE:0, THROW_ERROR:1 } };
+}
+function memoryDeepSeekAssets(asset, options = {}) {
+  const rows = new Map(); const calls = { add:0, update:0, remove:0 };
+  const alias = query => new TextDecoder().decode(query.get(asset.Tag.ALIAS));
+  return { rows, calls,
+    async query(query) {
+      if (options.queryError) throw { code: options.queryError };
+      const row = rows.get(alias(query)); if (!row) throw { code: 24000002 };
+      const copy = new Map(row);
+      if (query.get(asset.Tag.RETURN_TYPE) === asset.ReturnType.ATTRIBUTES) copy.delete(asset.Tag.SECRET);
+      else copy.set(asset.Tag.SECRET, row.get(asset.Tag.SECRET).slice());
+      return [copy];
+    },
+    async add(attributes) {
+      calls.add++; const key = alias(attributes); if (rows.has(key)) throw { code: 24000003 };
+      const row = new Map(attributes); row.set(asset.Tag.SECRET, attributes.get(asset.Tag.SECRET).slice()); rows.set(key, row);
+    },
+    async update(query, attributes) {
+      calls.update++; const row = rows.get(alias(query)); if (!row) throw { code: 24000002 };
+      row.set(asset.Tag.SECRET, attributes.get(asset.Tag.SECRET).slice());
+    },
+    async remove(query) { calls.remove++; if (!rows.delete(alias(query))) throw { code: 24000002 }; }
+  };
+}
+function loadDeepSeekKeyStore(options = {}) {
+  const asset = deepSeekAssetKit();
+  const module = load(path.join(services, 'DeepSeekCredentialStore.ets'), {
+    '@kit.AssetStoreKit': { asset }, '@kit.ArkTS': { util: { TextEncoder: Encoder } }, '@kit.BasicServicesKit': {}
+  });
+  const backend = memoryDeepSeekAssets(asset, options);
+  return { asset, backend, store: new module.DeepSeekCredentialStore(backend), ...module };
+}
+const keyBytes = text => new TextEncoder().encode(text);
+const keyText = bytes => new TextDecoder().decode(bytes);
+test('remembered DeepSeek key is stored device-unlocked and never synced, and each load is a fresh copy', async () => {
+  const { asset, backend, store, DeepSeekKeyStatus, DEEPSEEK_KEY_ALIAS } = loadDeepSeekKeyStore();
+  assert.equal(await store.status(), DeepSeekKeyStatus.Missing); assert.equal(await store.load(), undefined);
+  const key = keyBytes('sk-test-only-0001');
+  await store.save(key);
+  assert.equal(keyText(key), 'sk-test-only-0001', 'the caller keeps and later clears its own buffer');
+  assert.equal(await store.status(), DeepSeekKeyStatus.Saved);
+  const row = backend.rows.get(DEEPSEEK_KEY_ALIAS);
+  assert.equal(row.get(asset.Tag.ACCESSIBILITY), asset.Accessibility.DEVICE_UNLOCKED);
+  assert.equal(row.get(asset.Tag.SYNC_TYPE), asset.SyncType.NEVER);
+  assert.equal(row.get(asset.Tag.CONFLICT_RESOLUTION), asset.ConflictResolution.THROW_ERROR);
+  const first = await store.load(); const second = await store.load();
+  assert.equal(keyText(first), 'sk-test-only-0001'); assert.notEqual(first, second);
+  first.fill(0);
+  assert.equal(keyText(second), 'sk-test-only-0001', 'a session clearing its copy does not affect the next start');
+  assert.equal(keyText(backend.rows.get(DEEPSEEK_KEY_ALIAS).get(asset.Tag.SECRET)), 'sk-test-only-0001');
+});
+test('saving again replaces the single remembered DeepSeek key and remove clears it idempotently', async () => {
+  const { backend, store, DeepSeekKeyStatus } = loadDeepSeekKeyStore();
+  await store.save(keyBytes('sk-old-key-0001')); await store.save(keyBytes('sk-new-key-0002'));
+  assert.equal(backend.calls.add, 1); assert.equal(backend.calls.update, 1); assert.equal(backend.rows.size, 1);
+  assert.equal(keyText(await store.load()), 'sk-new-key-0002');
+  await store.remove(); assert.equal(await store.status(), DeepSeekKeyStatus.Missing); assert.equal(await store.load(), undefined);
+  await store.remove(); assert.equal(backend.calls.remove, 1);
+});
+test('remembered DeepSeek key rejects empty, spaced, control and oversized input without storing anything', async () => {
+  const { backend, store, DeepSeekKeyStatus } = loadDeepSeekKeyStore();
+  for (const bad of ['', 'sk test', 'sk-\n1', '密钥', 'x'.repeat(2049)]) {
+    await assert.rejects(store.save(keyBytes(bad)), /INVALID_KEY/);
+  }
+  assert.equal(backend.rows.size, 0); assert.equal(backend.calls.add, 0);
+  await store.save(keyBytes('x'.repeat(2048))); assert.equal(await store.status(), DeepSeekKeyStatus.Saved);
+});
+test('remembered DeepSeek key fails closed on synced, damaged or unreadable records', async () => {
+  const { asset, backend, store, DeepSeekKeyStatus, DEEPSEEK_KEY_ALIAS } = loadDeepSeekKeyStore();
+  const plant = (secret, sync) => backend.rows.set(DEEPSEEK_KEY_ALIAS, new Map([[asset.Tag.ALIAS, keyBytes(DEEPSEEK_KEY_ALIAS)],
+    [asset.Tag.SECRET, keyBytes(secret)], [asset.Tag.ACCESSIBILITY, asset.Accessibility.DEVICE_UNLOCKED], [asset.Tag.SYNC_TYPE, sync]]));
+  plant('sk-planted-0001', asset.SyncType.TRUSTED_DEVICE);
+  assert.equal(await store.status(), DeepSeekKeyStatus.Unavailable);
+  await assert.rejects(store.load(), /ATTRIBUTES/); await assert.rejects(store.save(keyBytes('sk-new-key-0003')), /ATTRIBUTES/);
+  await store.remove(); assert.equal(await store.status(), DeepSeekKeyStatus.Missing, 'a damaged record can still be deleted');
+  plant('sk bad\u0000', asset.SyncType.NEVER);
+  assert.equal(await store.status(), DeepSeekKeyStatus.Saved); assert.equal(await store.load(), undefined);
+  const failing = loadDeepSeekKeyStore({ queryError: 24000010 });
+  assert.equal(await failing.store.status(), failing.DeepSeekKeyStatus.Unavailable);
+  await assert.rejects(failing.store.load(), /QUERY/); await assert.rejects(failing.store.save(keyBytes('sk-ok-key-0004')), /QUERY/);
+});
+
+// Chat UI overhaul: in-card calendar edit, created-event summary, per-enable request limit and RAG excerpt order.
+const calendarPresentation = load(path.join(services, '../calendar/CalendarPresentation.ets'));
+const editedDraft = (...args) => calendarPresentation.calendarEditedDraft(...args);
+test('calendar card helpers format Beijing wall-clock dates, reminders and edited drafts without the device zone', () => {
+  const p = calendarPresentation;
+  assert.equal(p.calendarDateText('2026-10-28T16:00:00+08:00'), '10月28日 周三');
+  assert.equal(p.calendarWhenText({ startAt:'2026-10-28T16:00:00+08:00', endAt:'2026-10-28T17:00:00+08:00' }), '10月28日 周三 16:00–17:00');
+  assert.equal(p.calendarWhenText({ startAt:'2026-10-31T23:00:00+08:00', endAt:'2026-11-01T01:00:00+08:00' }),
+    '10月31日 周六 23:00–11月1日 周日 01:00');
+  assert.equal(p.calendarReminderText(0), '开始时提醒'); assert.equal(p.calendarReminderText(15), '提前 15 分钟提醒');
+  const draft = editedDraft('  评审会 ', '2099-10-27', '09:05', '10:00', 30);
+  assert.deepEqual(JSON.parse(JSON.stringify(draft)), { title:'评审会', startAt:'2099-10-27T09:05:00+08:00',
+    endAt:'2099-10-27T10:00:00+08:00', timeZone:'Asia/Shanghai', reminderMinutes:30 });
+  assert.equal(p.calendarTwoDigits(7), '07'); assert.equal(p.calendarTwoDigits(12), '12');
+  assert.deepEqual(p.CALENDAR_REMINDER_CHOICES, [0, 5, 10, 15, 30, 60]);
+  const summary = p.calendarCreatedSummary(draft, 105, false);
+  assert.equal(summary.title, '评审会'); assert.equal(summary.reminder, '提前 30 分钟提醒');
+  assert.equal(summary.eventId, 105); assert.equal(summary.reminderConfigured, false);
+});
+test('workbench calendar list groups by Beijing day: pending first, upcoming ascending with a limit, finished folded', () => {
+  const p = calendarPresentation;
+  const rec = (id, title, startAt, endAt, verified = true, reminderConfigured = true) => ({ schemaVersion:1,
+    operationId:'shuvi-calendar-' + id, draft:{ title, startAt, endAt, timeZone:'Asia/Shanghai', reminderMinutes:10 },
+    eventId: verified ? 100 : -1, verified, reminderConfigured });
+  const now = Date.parse('2026-10-27T20:50:00+08:00');
+  const records = [
+    rec('a', '讨论', '2026-10-26T15:00:00+08:00', '2026-10-26T16:00:00+08:00'),
+    rec('b', '项目评审会', '2026-10-28T16:00:00+08:00', '2026-10-28T17:00:00+08:00'),
+    rec('c', '项目评审会', '2026-10-28T15:00:00+08:00', '2026-10-28T16:00:00+08:00', true, false),
+    rec('d', '进行中', '2026-10-27T20:00:00+08:00', '2026-10-27T21:00:00+08:00'),
+    rec('e', '跨天', '2026-10-30T23:00:00+08:00', '2026-10-31T01:00:00+08:00'),
+    rec('f', '待核查', '2026-10-25T09:00:00+08:00', '2026-10-25T10:00:00+08:00', false, false),
+    rec('g', '昨天上午', '2026-10-26T09:00:00+08:00', '2026-10-26T10:00:00+08:00')
+  ];
+  const ids = groups => groups.map(g => g.rows.map(r => r.operationId.slice(-1)));
+  const s = p.calendarRecordSections(records, now, 3);
+  assert.deepEqual(s.groups.map(g => g.label), ['待核查', '今天 · 10月27日 周二', '明天 · 10月28日 周三']);
+  assert.deepEqual(ids(s.groups), [['f'], ['d'], ['c', 'b']], 'an ongoing event stays upcoming; a pending one is never folded');
+  assert.equal(s.groups[0].rows[0].time, '10月25日 周日 09:00–10:00'); assert.equal(s.groups[0].rows[0].status, 'pending');
+  assert.equal(s.groups[2].rows[0].time, '15:00–16:00'); assert.equal(s.groups[2].rows[0].status, 'reminder');
+  assert.equal(s.groups[2].rows[1].status, 'ok'); assert.equal(s.groups[2].rows[1].when, '10月28日 周三 16:00–17:00');
+  assert.equal(s.hiddenUpcoming, 1); assert.equal(s.pastCount, 2);
+  assert.deepEqual(s.past.map(g => g.label), ['10月26日 周一']); assert.deepEqual(ids(s.past), [['a', 'g']]);
+  const all = p.calendarRecordSections(records, now, 64);
+  assert.equal(all.hiddenUpcoming, 0); assert.equal(all.groups.at(-1).label, '10月30日 周五');
+  assert.equal(all.groups.at(-1).rows[0].time, '23:00–次日 01:00');
+  assert.equal(p.calendarRecordSections([], now, 5).groups.length, 0);
+  assert.match(p.calendarRecordStatusText('pending'), /核清前不能新建/);
+});
+test('workbench new-schedule form defaults to the next Beijing hour and keeps the duration when the start moves', () => {
+  const p = calendarPresentation;
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-10-27T20:50:00+08:00')), ['2026-10-27', '21:00', '2026-10-27', '22:00']);
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-10-27T22:10:00+08:00')), ['2026-10-28', '09:00', '2026-10-28', '10:00']);
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-12-31T23:59:00+08:00')), ['2027-01-01', '09:00', '2027-01-01', '10:00']);
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-10-27T00:30:00+08:00')), ['2026-10-27', '01:00', '2026-10-27', '02:00']);
+  assert.deepEqual(p.calendarShiftedEnd('2026-10-28', '15:00', '2026-10-28', '16:30', '2026-10-28', '23:00'), ['2026-10-29', '00:30']);
+  assert.deepEqual(p.calendarShiftedEnd('2026-10-28', '15:00', '2026-10-28', '15:00', '2026-10-30', '09:00'), ['2026-10-30', '10:00'],
+    'an empty or inverted range falls back to one hour');
+  assert.deepEqual(p.calendarShiftedEnd('2026-12-31', '23:00', '2027-01-01', '01:00', '2027-01-01', '08:00'), ['2027-01-01', '10:00']);
+  const draft = p.calendarFormDraft(' 跨天 ', '2026-10-30', '23:00', '2026-10-31', '01:00', 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(draft)), { title:'跨天', startAt:'2026-10-30T23:00:00+08:00',
+    endAt:'2026-10-31T01:00:00+08:00', timeZone:'Asia/Shanghai', reminderMinutes:0 });
+  assert.equal(p.calendarTimeRange(draft), '23:00–次日 01:00');
+  assert.equal(p.calendarTimeRange({ startAt:'2026-10-30T23:00:00+08:00', endAt:'2026-11-02T01:00:00+08:00' }), '23:00–11月2日 周一 01:00');
+  const { calendarProbeDraftError } = load(path.join(services, '../calendar/CalendarProbeSession.ets'));
+  assert.equal(calendarProbeDraftError(draft, Date.parse('2026-10-27T20:50:00+08:00')), '', 'cross-day form drafts stay valid');
+});
+test('card edit resubmits a validated draft as a new confirmation without another model call and writes the edited event', async () => {
+  const texts = [calendarModelReply(), JSON.stringify({ schemaVersion:'1.0', kind:'answer', message:'普通回答' })];
+  const h = assistantHarness({ texts }); await h.start();
+  try {
+    await h.ui.send('安排讨论'); await waitCalendarCard(h.ui); const old = h.ui.snapshot().preview;
+    assert.equal(await h.ui.resubmit(editedDraft('修改后的讨论', '2099-10-27', '15:30', '16:30', 30)), '');
+    await waitCalendarCard(h.ui); const next = h.ui.snapshot().preview;
+    assert.notEqual(next.operationId, old.operationId); assert.notEqual(next.taskId, old.taskId);
+    assert.deepEqual(next.draft, { title:'修改后的讨论', startAt:'2099-10-27T15:30:00+08:00', endAt:'2099-10-27T16:30:00+08:00',
+      timeZone:'Asia/Shanghai', reminderMinutes:30 });
+    assert.match(h.ui.snapshot().reply, /已按你的修改更新日程/);
+    assert.equal(h.calls(), 1); assert.equal(h.trace.permissions, 0); assert.equal(h.trace.writes, 0); assert.equal(h.closed(), 0);
+    assert.equal(await h.ui.decide(true), true); await waitChat(h.ui);
+    assert.equal(h.trace.writes, 1); assert.equal(h.records.length, 1);
+    assert.equal(h.records[0].draft.title, '修改后的讨论'); assert.equal(h.records[0].operationId, next.operationId);
+    const view = h.ui.snapshot(); assert.equal(view.succeeded, true);
+    assert.equal(view.created.title, '修改后的讨论'); assert.equal(view.created.reminder, '提前 30 分钟提醒');
+    assert.match(view.created.when, /^10月27日 周. 15:30–16:30$/);
+    assert.equal(view.created.eventId, h.records[0].eventId); assert.equal(view.created.reminderConfigured, true);
+    await h.ui.send('普通问题'); await waitChat(h.ui);
+    assert.equal(h.ui.snapshot().reply, '普通回答'); assert.equal(h.ui.snapshot().created, undefined, 'only the verified reply carries a card');
+  } finally { await h.ui.stop(); }
+});
+test('card edit keeps the pending confirmation when the edit is unchanged, invalid or no longer pending', async () => {
+  const h = assistantHarness(); await h.start();
+  try {
+    await h.ui.send('安排讨论'); await waitCalendarCard(h.ui); const preview = h.ui.snapshot().preview;
+    assert.equal(await h.ui.resubmit(editedDraft('项目讨论', '2099-10-27', '15:00', '16:00', 10)), '内容没有变化。');
+    assert.match(await h.ui.resubmit(editedDraft('   ', '2099-10-27', '15:00', '16:00', 10)), /标题/);
+    for (const bad of [editedDraft('项目讨论', '2099-10-27', '16:00', '15:00', 10), editedDraft('项目讨论', '2001-10-27', '15:00', '16:00', 10),
+      { ...preview.draft, timeZone:'UTC' }, editedDraft('项目讨论', '2099-10-27', '15:00', '16:00', 1.5)]) {
+      assert.notEqual(await h.ui.resubmit(bad), '', JSON.stringify(bad));
+    }
+    const view = h.ui.snapshot(); assert.equal(view.calendarStage, 'authorization'); assert.equal(view.preview.operationId, preview.operationId);
+    assert.equal(h.trace.permissions, 0);
+    await h.ui.decide(true); await waitChat(h.ui); assert.equal(h.trace.writes, 1); assert.equal(h.records[0].draft.title, '项目讨论');
+    assert.equal(await h.ui.resubmit(editedDraft('另一条', '2099-10-28', '15:00', '16:00', 10)), '当前没有可修改的日程。');
+    assert.equal(h.calls(), 1); assert.equal(h.trace.writes, 1);
+  } finally { await h.ui.stop(); }
+});
+test('assistant per-enable request limit rejects the eleventh input before any model call', async () => {
+  const texts = Array.from({ length:12 }, (_, i) => JSON.stringify({ schemaVersion:'1.0', kind:'answer', message:'回答' + i }));
+  const h = assistantHarness({ texts }); await h.start();
+  try {
+    assert.equal(h.ui.snapshot().requestCount, 0); assert.equal(h.ui.snapshot().maxRequests, 10);
+    for (let i = 0; i < 10; i++) { await h.ui.send('问题' + i); await waitChat(h.ui); }
+    assert.equal(h.calls(), 10); assert.equal(h.ui.snapshot().requestCount, 10);
+    const reply = h.ui.snapshot().reply;
+    await h.ui.send('第十一个问题');
+    assert.equal(h.calls(), 10); assert.equal(h.ui.snapshot().busy, false); assert.equal(h.ui.snapshot().reply, reply);
+    assert.match(h.ui.snapshot().message, /10 次请求已用完/);
+  } finally { await h.ui.stop(); }
+});
+test('RAG excerpt selection demotes heading-only fragments behind body text without dropping them', async () => {
+  const { ragHeadingLike } = semanticRagAdapterModule;
+  for (const [text, title] of [['# 营业时间', ''], ['## 一、概述\n### 1.1 背景', ''], ['营业时间', '星河咖啡馆'], ['星河咖啡馆', '星河咖啡馆']]) {
+    assert.equal(ragHeadingLike(text, title), true, text);
+  }
+  for (const [text, title] of [['每周三闭店做设备保养。', ''], ['营业时间：9:00-21:00', ''], ['# 标题\n正文第一句。', ''], ['', ''], ['x'.repeat(41), '']]) {
+    assert.equal(ragHeadingLike(text, title), false, text);
+  }
+  const card = (key, text, route = 'BodyDirect') => ({ key, kind:'Text', title:'星河咖啡馆', text, documentKey:'doc-' + key,
+    generation:'gen', current:true, reasons:[{ route }] });
+  const headings = [card('h1', '营业时间'), card('h2', '# 设备保养'), card('h3', '星河咖啡馆')];
+  const bodies = [1, 2, 3, 4, 5].map(i => card('b' + i, '正文第' + i + '段，说明闭店安排。', 'Vector'));
+  const session = { state:{ direct:{ cards:headings, error:'' }, related:{ cards:bodies, error:'' }, semanticState:'Complete' },
+    async start() {}, async review() {}, async allowSemantic() {}, async close() {} };
+  const search = () => new semanticRagAdapterModule.KnowledgeSemanticRuntimeSearchAdapter(() => session)
+    .search({ query:'周几闭店', maxResults:5 }, { check() {} });
+  const full = await search();
+  assert.deepEqual(full.citations.map(c => c.evidenceId), ['b1', 'b2', 'b3', 'b4', 'b5']);
+  assert.deepEqual(full.citations.map(c => c.citationId), [1, 2, 3, 4, 5]);
+  session.state.related.cards = bodies.slice(0, 2);
+  const sparse = await search();
+  assert.deepEqual(sparse.citations.map(c => c.evidenceId), ['b1', 'b2', 'h1', 'h2', 'h3']);
+});
+test('RAG source chips preview the excerpt, not the shared file title', () => {
+  const chip = knowledgePresentation.knowledgeCitationChip;
+  assert.equal(chip(2, '消费满 10 杯可兑换任意一杯饮品。'), '[2] 消费满 10 杯可兑换任…');
+  assert.equal(chip(4, '> 本文档为虚构测试资料'), '[4] 本文档为虚构测试资料');
+  assert.equal(chip(5, '## 营业\n\n时间'), '[5] 营业 时间');
+  assert.equal(chip(1, '短句'), '[1] 短句');
+  assert.equal(chip(3, '😀'.repeat(13)), '[3] ' + '😀'.repeat(12) + '…', 'surrogate pairs are never split');
 });

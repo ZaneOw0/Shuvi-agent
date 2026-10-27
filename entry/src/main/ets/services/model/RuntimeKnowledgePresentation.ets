@@ -1,6 +1,16 @@
 import { RuntimeKnowledgeView } from './RuntimeKnowledgeSession';
 import { ShuviRuntimeState } from './ShuviRuntimeController';
 
+const CHIP_PREVIEW: number = 12;
+
+/** "[2] 消费满 10 杯可兑换任…": excerpts from one file share a title, so the chip previews the excerpt itself. */
+export function knowledgeCitationChip(citationId: number, excerpt: string): string {
+  const text: string = excerpt.replace(new RegExp('^[#>\\s]+'), '').replace(new RegExp('\\s+', 'g'), ' ').trim();
+  const chars: string[] = Array.from(text);
+  const preview: string = chars.length > CHIP_PREVIEW ? chars.slice(0, CHIP_PREVIEW).join('') + '…' : text;
+  return '[' + citationId.toString() + '] ' + preview;
+}
+
 /** Page-facing wording for the two RAG phases; pure functions so the host suite can check every stage. */
 function excerptCount(view: RuntimeKnowledgeView): string {
   return '已完成 · ' + view.citations.length.toString() + ' 条本机片段';

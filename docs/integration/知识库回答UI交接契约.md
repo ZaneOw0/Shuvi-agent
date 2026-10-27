@@ -2,14 +2,14 @@
 
 > 状态：检索优先 RAG 已接入 debug 首页；2026-10-27 修复检索结果被丢弃并补齐面板、准备时机、检索历史与调用上限，同日在模拟器上以真实 SiliconFlow / DeepSeek 跑通端到端（见第 7 节）；完整落盘的设备证据、断网重试、最大字体/读屏与真机待验收。
 > 归属：`RuntimeAssistantCoordinator` 负责同一 DeepSeek Key 下的普通聊天与 RAG 会话；知识库仍负责 Embedding 配置、问题向量化、本机 KNN 和证据生命周期。
-> 当前页面状态：普通聊天输入一次 DeepSeek Key；点击现有“知识库”开关即检查并启用 RAG，不新增 Key 输入或逐问题确认控件。
+> 当前页面状态：普通聊天输入一次 DeepSeek Key；点击现有“知识库”开关即检查并启用 RAG，不新增 Key 输入或逐问题确认控件。2026-10-27 面板改为“回答 + 来源胶囊 + 可折叠原文”、阶段合为一行，并调整证据排序（见第 4、6 节），宿主与模拟器自测通过，待开发者人工验收。
 
 ## 1. 边界
 
 - 前端通过 `RuntimeAssistantCoordinator` 启停组合会话，通过 `RuntimeKnowledgeService.session.send(...)` 发送 RAG 问题；不直接调用 Provider、Runtime、RDB 或知识库仓储。
-- 前端不读取、不记录、不持久化 API Key；Key 以 `Uint8Array` 传入后端，后端消费并清零。
+- 前端不记录 API Key；只有用户勾选“记住 Key”时，`DeepSeekKeyField` 才把它存入本机系统 Asset Store（`DEVICE_UNLOCKED`、不同步、可删除，见 spec 09 §8.5）。每次启用仍需用户点击；Key 以 `Uint8Array` 传入后端，后端消费并清零。
 - 用户点击现有“知识库”开关即表示允许当前会话按既有 Embedding 设置处理问题；关闭开关立即撤销新问题的 RAG 使用权，但保留普通聊天会话。
-- Embedding Provider 的 Key 与 DeepSeek Key 是两套凭据：前者继续由知识库设置和 AssetStore 管理，后者只保留在本次 Runtime 会话内。
+- Embedding Provider 的 Key 与 DeepSeek Key 是两套凭据：前者继续由知识库设置和 AssetStore 管理，后者在会话中只存在内存，用户也可选择把它记在本机 Asset Store（独立别名，与嵌入 Key 互不共用）。
 - 聊天 RAG 的问题与片段只显示在聊天面板、回答写入 `shuvi_knowledge_answer_v1.db`，**不写入知识库页面的检索历史**（`EphemeralQueryHistory`）。
 - 后端不负责页面布局、视觉样式、动画、无障碍朗读和截图验收；这些由前端负责。
 
@@ -23,7 +23,7 @@ if (readiness.ready) {
 }
 ```
 
-- `RuntimeAssistantCoordinator.start(...)` 在内存中生成两份隔离副本：普通聊天保持 PUBLIC，知识库回答保持 PERSONAL；调用方缓冲区和临时副本都会清零。它只准备 PERSONAL 回答会话，**不打开本机知识库**，因此启动普通聊天不会触发资料恢复或处理队列。
+- `RuntimeAssistantCoordinator.start(...)` 在内存中生成两份隔离副本：一份给助手聊天（`ChatPurpose.ASSISTANT` / PERSONAL，可生成日程草稿，写入需确认后的原生日历工具），一份给知识库回答（PERSONAL）；调用方缓冲区和临时副本都会清零。它只准备 PERSONAL 回答会话，**不打开本机知识库**，因此启动普通聊天不会触发资料恢复或处理队列。
 - `enableKnowledge()` 首次调用时打开本机知识库（获取 `KnowledgeAssembly` 租约），再做本机就绪检查；不发送问题、不调用 DeepSeek，也不调用 Embedding Provider。打开失败返回 `RagOpenFailed`，普通聊天不受影响，下次开启会重试；打开期间重复调用返回 `RagOpening`。
 - `send(query)` 固定先加载本机正文/标签，再对当前问题调用一次已配置的 Embedding Provider，随后执行本机 KNN；只有得到可引用片段后才提交 PERSONAL DeepSeek 回答。
 - `disableKnowledge()` 取消当前 RAG 并撤销新问题许可，但不会停止普通聊天或清除其 Key，知识库租约保留以便再次开启；`stop()`、退后台、页面销毁才关闭两条会话、释放租约并清除凭据。
@@ -85,8 +85,8 @@ if (readiness.ready) {
    - 不发送完整文档、文件路径、数据库标识、`sourceHash`、`generation`、`evidenceId` 或其他内部元数据。
    - DeepSeek 的实际处理、留存和费用以供应商规则为准。
 3. **启用不发送请求**：开关只打开本机知识库并做本机状态检查，打开期间按钮显示“准备中…”；点击发送后才调用问题 Embedding，取得证据后才调用 DeepSeek。
-4. **两阶段状态**：分别显示“本机检索”和“模型回答”的当前阶段。
-5. **原始引用常驻**：只要本轮有引用，无论模型成功、失败、取消或停止，都保留编号引用供用户核对。
+4. **两阶段状态**：分别显示“本机检索”和“模型回答”的当前阶段（2026-10-27 起合为一行“本机检索 · … → 模型回答 · …”，两段文字与 id 仍各自独立）。
+5. **原始引用常驻**：只要本轮有引用，无论模型成功、失败、取消或停止，都保留编号引用供用户核对。2026-10-27 起：有 DeepSeek 回答时，回答下方常驻编号来源胶囊（“[n] 片段开头…”），片段原文折叠在“查看 N 条来源原文”中；没有模型回答（失败、资料不足、停止）时原文默认展开。
 6. **回答标识**：模型回答必须标注“DeepSeek 整理回答（依据下方片段，不是原始资料）”，不能与原始片段混同。
 7. **失败与重试**：`stage=answerFailed` 且会话仍有回答次数时显示“仅重试回答”；重试不触发检索。
 8. **资料不足**：`stage=insufficient` 时显示“资料中没有足够依据”，保留本机引用，不标记为成功，不显示“仅重试回答”。
@@ -97,7 +97,7 @@ if (readiness.ready) {
 
 ## 5. 后端保证
 
-- 普通 PUBLIC 对话未被放宽：普通聊天仍只接受 PUBLIC；知识库回答使用独立 PERSONAL profile、Planner、Adapter 和加密执行库 `shuvi_knowledge_answer_v1.db`。
+- 助手聊天与知识库回答隔离：助手聊天（`ChatPurpose.ASSISTANT` / PERSONAL）不承载知识库片段，日程写入另需用户确认后的原生日历工具；知识库回答使用独立 PERSONAL profile、Planner、Adapter 和加密执行库 `shuvi_knowledge_answer_v1.db`。
 - 每个 RAG 问题使用独立 `KnowledgeQuerySession`，不会取消知识库页面的查询；检索顺序固定为本机 Direct/Tag → 当前问题 Embedding → 本机 KNN → 合并去重。
 - 空结果、Tag-only、失效证据、scope 不完整、结果校验失败：不调用模型。
 - 模型输出严格 JSON，校验 `[1]..[N]`、至少一个有效引用、无重复/越界/未声明编号；持久化成功后才显示成功。
@@ -123,7 +123,7 @@ if (readiness.ready) {
 - 旧工具路径的本机工具执行库 `shuvi_knowledge_runtime_v1.db` 没有容量上限/保留策略；该路径当前无调用方。
 - 宿主测试使用替身网络与数据库，不等同于设备验收。
 - 仍需验证：断网等失败后的“仅重试回答”（模拟器无法单独拦截 DeepSeek）、Key 清空的设备级取证、最大字体与读屏，以及真机上的全部项。两阶段展示、资料不足、次数上限与后台停止已有模拟器结果（第 7 节）。
-- 知识库切分会把 Markdown 标题切成独立片段，可能占用 5 条证据名额（模拟器验收 R-01 中 5 条有 3 条只有标题），属知识库既有行为，待后续处理。
+- 知识库切分会把 Markdown 标题切成独立片段（模拟器验收 R-01 中 5 条有 3 条只有标题），切分本身属知识库既有行为。2026-10-27 起 `KnowledgeSemanticRuntimeSearchAdapter` 分两轮取证：先取正文，再用剩余名额取“像标题”的片段（全部为 Markdown 标题行、与文档标题相同，或 40 字内不含标点的单行），只降序不丢弃；同一问题在模拟器上重问时前 4 条均为正文（第 5 条未截图）。启发式可能把很短的正文句也降序，正文不足 5 条时标题片段仍会占位。
 - 不得把后端 host 测试或未签名构建宣称为前端设备验收。
 
 ## 7. 验证依据
