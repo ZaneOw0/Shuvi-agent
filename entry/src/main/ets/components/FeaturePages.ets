@@ -19,6 +19,7 @@ interface WorkbenchPageOptions {
   onDocuments: () => void;
   recordCount: number;
   onCalendar: () => void;
+  onRealCalendar: () => void;
   onNotice: (title: string, message: string) => void;
 }
 
@@ -59,7 +60,9 @@ export function WorkbenchPage($$: WorkbenchPageOptions) {
       Text('把琐事安放好').fontSize(26).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
       Text('从一件小事开始，让生活更有条理。').fontSize(14).fontColor(Theme.muted)
     }.width('100%').alignItems(HorizontalAlign.Start).margin({ top: 12, bottom: 16 })
-    FeatureRow({ title: '日历日程', description: `${$$.recordCount} 条演示日程 · 查看与安排`, icon: $r('app.media.chat_calendar'),
+    FeatureRow({ title: '日历日程', description: '创建日程 · 查看与核查记录', icon: $r('app.media.chat_calendar'),
+      onOpen: $$.onRealCalendar, id: 'workbench-calendar' })
+    FeatureRow({ title: '日程演示', description: `${$$.recordCount} 条演示日程 · Mock`, icon: $r('app.media.chat_calendar'),
       onOpen: $$.onCalendar })
     FeatureRow({ title: '文件管理', description: '文档与图片 · 本机资料', icon: $r('app.media.ui_folder'), id: 'workbench-documents',
       onOpen: $$.onDocuments })
@@ -145,6 +148,6 @@ export function ProfilePage($$: ProfilePageOptions) {
     FeatureRow({ title: '主题与外观', description: '当前：奶油白与莓紫 · 切换待接入', icon: $r('app.media.ui_palette'),
       onOpen: () => $$.onNotice('主题与外观', '界面采用角色形象中的莓紫、深紫和奶油黄。主题切换和自定义将在后续实现。') })
     FeatureRow({ title: '关于 Shuvi', description: '让想法，成为行动', icon: $r('app.media.chat_info'),
-      onOpen: () => $$.onNotice('关于 Shuvi', '休比是你的个人助理。知识库资料保存在本机；日程目前为演示功能，不会产生真实提醒。') })
+      onOpen: () => $$.onNotice('关于 Shuvi', '休比是你的个人助理。工作台支持经确认创建真实日程；对话中的日程样例仍为演示。') })
   }.width('100%').padding({ bottom: 24 })
 }

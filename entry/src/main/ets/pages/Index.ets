@@ -39,6 +39,7 @@ import { KnowledgeDocumentListPort } from '../knowledge/domain/KnowledgePorts';
 import { AssistantWelcome, CalendarDraftCard } from '../components/ChatVisuals';
 import { AppIcon } from '../components/AppIcon';
 import { BrandAvatar } from '../components/BrandAvatar';
+import { CalendarCapabilityCheck } from '../components/CalendarCapabilityCheck';
 import {
   AssistantService, CalendarDraft, ChatMessage, DEMO_SCENARIOS, DemoScenario,
   OperationResult, OperationState, RequestState
@@ -85,17 +86,19 @@ import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { RuntimeSearchView } from '../services/model/RuntimeSearchSession';
 import { RuntimeSearchPanel } from '../components/RuntimeSearchPanel';
 import { searchRuntimeFactory } from '../services/model/SearchRuntimeAssembly';
-import { ChatRuntimeFactory } from '../services/model/ChatRuntimeAssembly';
+import { ChatRuntimeFactory, ChatPurpose } from '../services/model/ChatRuntimeAssembly';
 import { NativeAgentRdbOpen } from '../services/model/AgentRdbResources';
-import { RuntimeChatView } from '../services/model/RuntimeChatSession';
+import { AssistantView } from '../services/calendar/AssistantRuntimeSession';
+import { CalendarRuntimeFactory } from '../services/calendar/CalendarRuntimeAssembly';
+import { CalendarNativeTool } from '../services/calendar/CalendarNativeTool';
+import { RuntimeCalendarCard } from '../components/RuntimeCalendarCard';
 import { ShuviRuntimeState } from '../services/model/ShuviRuntimeController';
-import { chatRuntimeFactory } from '../services/model/ChatRuntimeAssembly';
 
 @Entry
 @Component
 struct Index {
   @State realChatMode: boolean = false;
-  @State runtimeChat: RuntimeChatView = new RuntimeChatView();
+  @State runtimeChat: AssistantView = new AssistantView();
   @State runtimeSearch: RuntimeSearchView = new RuntimeSearchView();
   @State runtimeSwitching: boolean = false;
   private lastRuntimeReply: number = 0;
@@ -117,6 +120,7 @@ struct Index {
   private parsedImports: ParsedDocumentImportAdapter | undefined = undefined;
   @State tab: number = 0;
   @State calendarOpen: boolean = false;
+  @State realCalendarOpen: boolean = false;
   @State input: string = '';
   @State messages: ChatMessage[] = [];
   @State draft: CalendarDraft | undefined = undefined;
@@ -185,13 +189,15 @@ struct Index {
     this.alive = true;
     RuntimeSearchService.session.attach((view: RuntimeSearchView): void => { this.runtimeSearch = view; });
     this.lastRuntimeReply = RuntimeChatService.session.snapshot().replyId;
-    RuntimeChatService.session.attach((view: RuntimeChatView): void => {
+    RuntimeChatService.session.attach((view: AssistantView): void => {
+      const newCalendarCard = view.preview !== undefined && view.preview.requestId !== this.runtimeChat.preview?.requestId;
       this.runtimeChat = view;
       if (this.alive && view.replyId > this.lastRuntimeReply) {
         this.lastRuntimeReply = view.replyId;
         this.addMessage('真实对话 · ' + view.reply);
         this.scroller.scrollEdge(Edge.Bottom);
       }
+      if (this.alive && newCalendarCard) this.scroller.scrollEdge(Edge.Bottom);
     });
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
   }
@@ -240,6 +246,7 @@ struct Index {
       this.calendarOpen = false;
       return true;
     }
+    if (this.realCalendarOpen) { this.realCalendarOpen = false; return true; }
     if (this.tab !== 0) {
       this.changeTab(0);
       return true;
@@ -280,6 +287,7 @@ struct Index {
     this.tab = index;
     if (index === 2) { this.openKnowledge(); }
     this.calendarOpen = false;
+    this.realCalendarOpen = false;
     this.showScenarios = false;
     this.drawerOpen = false;
     this.scroller.scrollEdge(Edge.Top);
@@ -477,8 +485,17 @@ struct Index {
     try {
       const context = this.getUIContext().getHostContext();
       if (context === undefined || !DEBUG || !this.realChatMode || this.searchEnabled || this.tab !== 0) return;
-      await RuntimeChatService.session.start(chatRuntimeFactory(context, DEBUG), key);
+      const opener = new NativeAgentRdbOpen(context);
+      await RuntimeChatService.session.start(new ChatRuntimeFactory(opener, DEBUG, RuntimeChatService.session.context, ChatPurpose.ASSISTANT),
+        new CalendarRuntimeFactory(opener, new CalendarNativeTool(), DEBUG), key);
     } finally { key.fill(0); }
+  }
+
+  private async reviseRuntimeCalendar(): Promise<void> {
+    const text = await RuntimeChatService.session.revise();
+    if (text === undefined || !this.alive || this.tab !== 0 || !this.realChatMode || this.searchEnabled || this.blocked()) return;
+    this.input = text;
+    this.scroller.scrollEdge(Edge.Bottom);
   }
 
   private async switchChatMode(): Promise<void> {
@@ -570,8 +587,9 @@ struct Index {
       if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
         this.notice('真实对话尚未就绪', '请先启用会话。本次未发送，也不会回退为演示回答。'); return;
       }
-      this.inputController.stopEditing(); this.addMessage(this.input, true);
-      await RuntimeChatService.session.send(this.input); return;
+      const message = this.input; this.input = '';
+      this.inputController.stopEditing(); this.addMessage(message, true);
+      await RuntimeChatService.session.send(message); return;
     }
     if (this.searchEnabled) {
       await this.sendSearch();
@@ -653,7 +671,7 @@ struct Index {
     }
     this.getUIContext().showAlertDialog({
       title: '开始新对话？',
-      message: '将清空当前对话和未发送文字，已确认的演示日程会保留。',
+      message: '将清空当前对话和未发送文字；已创建的日程和操作记录会保留。',
       primaryButton: { value: '继续当前对话', action: () => {} },
       secondaryButton: { value: '开始新对话', action: () => this.resetConversation() }
     });
@@ -664,6 +682,7 @@ struct Index {
     if (this.blocked()) {
       return;
     }
+    RuntimeChatService.session.clearConversation();
     this.service.cancel(this.requestId);
     this.searchSession.cancel();
     this.searchTurns = [];
@@ -914,11 +933,18 @@ struct Index {
             .backgroundColor(Theme.soft).fontColor(Theme.accent).onClick(() => this.cancelGeneration())
         }.width('100%')
       }
-      if (this.runtimeChat.busy) {
+      if (this.runtimeChat.preview !== undefined) {
+        RuntimeCalendarCard({ preview: this.runtimeChat.preview, writing: this.runtimeChat.calendarStage !== 'authorization',
+          pendingLabel: this.runtimeChat.message,
+          onConfirm: (): void => { void RuntimeChatService.session.decide(true).catch((): void => {}); },
+          onModify: (): void => { void this.reviseRuntimeCalendar().catch((): void => {}); },
+          onCancel: (): void => { void RuntimeChatService.session.decide(false).catch((): void => {}); } })
+      }
+      if (this.runtimeChat.busy && this.runtimeChat.calendarStage !== 'authorization') {
         Row({ space: 10 }) {
           LoadingProgress().width(22).height(22).color(Theme.accent)
           Text(this.runtimeChat.message).fontSize(14).fontColor(Theme.muted).layoutWeight(1)
-          Button('取消回答').constraintSize({ minHeight: 44 }).fontColor(Theme.accent).backgroundColor(Theme.soft)
+          Button(this.runtimeChat.calendarStage === 'idle' ? '取消回答' : '停止等待').constraintSize({ minHeight: 44 }).fontColor(Theme.accent).backgroundColor(Theme.soft)
             .id('runtime-chat-cancel').onClick((): void => { void RuntimeChatService.session.cancel().catch((): void => {}); })
         }.width('100%')
       }
@@ -1128,7 +1154,7 @@ struct Index {
       if (this.input.length > 500) {
         Text('最多 500 字，请缩短后发送。').fontSize(12).fontColor(Theme.danger).width('100%')
       }
-      Text(this.realChatMode ? (this.searchEnabled ? '真实搜索 · 逐次授权 · 费用待核对 · 未读取知识库' : '真实模型 · 单轮问答 · 未搜索或读取知识库') : (this.searchEnabled ? '固定样例演示 · 未联网 · 回答非模型生成' : '演示数据 · 重启后重置 · 图片与语音待接入'))
+      Text(this.realChatMode ? (this.searchEnabled ? '真实搜索 · 逐次授权 · 费用待核对 · 未读取知识库' : '真实助手 · 日程需确认 · 未搜索或读取知识库') : (this.searchEnabled ? '固定样例演示 · 未联网 · 回答非模型生成' : '演示数据 · 重启后重置 · 图片与语音待接入'))
         .fontSize(10).fontColor(Theme.muted)
         .textAlign(TextAlign.Center).width('100%')
     }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%').backgroundColor(Theme.surface)
@@ -1297,12 +1323,17 @@ struct Index {
               this.assistant()
             }
           } else if (this.tab === 1) {
-            if (this.calendarOpen) {
+            if (this.realCalendarOpen) {
+              Button('返回工作台').backgroundColor(Theme.soft).fontColor(Theme.accent)
+                .onClick((): void => { this.realCalendarOpen = false; })
+              CalendarCapabilityCheck()
+            } else if (this.calendarOpen) {
               this.calendar()
             } else {
               WorkbenchPage({ recordCount: this.records.length,
                 onDocuments: (): void => { this.changeTab(2); this.parsedDocumentId = ''; this.openParsed(); },
                 onCalendar: () => this.calendarOpen = true,
+                onRealCalendar: (): void => { this.realCalendarOpen = true; },
                 onNotice: (title: string, message: string) => this.notice(title, message) })
             }
            } else if (this.tab === 2) {

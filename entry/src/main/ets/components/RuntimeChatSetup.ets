@@ -11,7 +11,7 @@ export struct RuntimeChatSetup {
   build() {
     Column({ space: 10 }) {
       Text('真实对话 · deepseek-flash').fontSize(16).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
-      Text('启用后，每次发送仅将本次公开问题交给 DeepSeek，不携带历史消息或知识库。问题与结果保存在本机加密库；不执行搜索、日程或其他工具。')
+      Text('启用后，将本次问题或日程描述发送给 DeepSeek；补充日程信息时会携带尚未完成的描述，可能含个人信息。不会读取历史日历或知识库。日程草稿须逐次确认，再由 Runtime 写入系统日历；问题和结果保存在本机加密库。')
         .fontSize(13).fontColor(Theme.muted).width('100%')
       Text('单次最多 500 字符、1024 输出 tokens，30 秒请求超时；每次启用最多 10 次请求，无自动重试。按峰时价作 USD 0.01/次的本地估算检查，实际扣费以供应商账单为准。取消也可能计费。')
         .fontSize(12).fontColor(Theme.muted).width('100%')

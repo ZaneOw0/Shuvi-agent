@@ -28,12 +28,15 @@ import { SemanticQualitySession } from '../knowledge/platformtests/SemanticQuali
 import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
 import { DocxIngestionService } from '../knowledge/application/DocxIngestionService';
 import { ImageIntegrationSuite } from '../knowledge/platformtests/ImageIntegrationSuite';
+import { CalendarProbeService } from '../services/calendar/CalendarProbeService';
+import { CalendarDraftService } from '../services/calendar/CalendarDraftService';
 
 const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     SourceLinkService.bind(this.context);
+    CalendarProbeService.bind(this.context);
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     } catch (err) {
@@ -43,8 +46,12 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    void CalendarDraftService.controller.onDestroy().catch((): void => {});
+    CalendarProbeService.release();
     void RuntimeSearchService.session.onDestroy().catch((): void => {});
     void RuntimeChatService.controller.onDestroy().catch((): void => {});
+    void RuntimeChatService.session.calendar.onDestroy().catch((): void => {});
+    void RuntimeChatService.session.stop().catch((): void => {});
     void ShuviRuntimeService.session.onDestroy().catch((): void => {
       hilog.error(DOMAIN, 'ShuviRuntime', 'Agent session shutdown failed');
     });
@@ -79,8 +86,10 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
+    CalendarDraftService.controller.onForeground();
     RuntimeSearchService.session.onForeground();
     RuntimeChatService.controller.onForeground();
+    RuntimeChatService.session.calendar.onForeground();
     ShuviRuntimeService.session.onForeground();
     KnowledgeAssembly.foreground();
     // Ability has brought to foreground
@@ -88,8 +97,12 @@ export default class EntryAbility extends UIAbility {
   }
 
   onBackground(): void {
+    void CalendarDraftService.controller.onBackground().catch((): void => {});
+    CalendarProbeService.background();
     void RuntimeSearchService.session.onBackground().catch((): void => {});
     void RuntimeChatService.controller.onBackground().catch((): void => {});
+    void RuntimeChatService.session.calendar.onBackground().catch((): void => {});
+    void RuntimeChatService.session.stop().catch((): void => {});
     void ShuviRuntimeService.session.onBackground().catch((): void => {
       hilog.error(DOMAIN, 'ShuviRuntime', 'Agent session background cleanup failed');
     });
