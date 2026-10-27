@@ -7,11 +7,18 @@ import { ShuviRuntimeSessionFactory } from '../model/ShuviRuntimeSession';
 import { AssistantContext, parseAssistantIntent } from './AssistantIntent';
 import { CalendarRuntimeFactory } from './CalendarRuntimeAssembly';
 import { CalendarToolPreview, parseCalendarToolResult } from './CalendarToolContract';
-import { CalendarProbeDraft } from './CalendarProbeSession';
+import { CalendarProbeDraft, calendarProbeDraftError } from './CalendarProbeSession';
+import { CalendarCreatedSummary, calendarCreatedSummary } from './CalendarPresentation';
+import { CHAT_MAX_REQUESTS } from '../model/ChatRuntimeAssembly';
 
 export class AssistantView extends RuntimeChatView {
   preview?: CalendarToolPreview;
   calendarStage: string = 'idle';
+  /** Display summary for the reply that reports a verified creation; undefined for every other reply. */
+  created?: CalendarCreatedSummary;
+  /** Model requests sent in this enable; the chat adapter enforces the same limit. */
+  requestCount: number = 0;
+  maxRequests: number = CHAT_MAX_REQUESTS;
 }
 class CalendarListener implements AgentFrontendEventListener {
   private readonly owner: AssistantRuntimeSession; private readonly generation: number;
@@ -41,6 +48,7 @@ export class AssistantRuntimeSession {
   private closing?: Promise<void>;
   private editingTask: string = '';
   private writing: boolean = false;
+  private resubmitting: boolean = false;
   private draftJson: string = '';
   constructor(controller: ShuviRuntimeController) {
     this.model = new RuntimeChatSession(controller);
@@ -77,6 +85,7 @@ export class AssistantRuntimeSession {
       if (this.taskId === id && this.view.busy) { this.finish('日历执行结果未能可靠保存，请到工作台核查日程；不要重复创建。'); void this.calendar.stop().catch((): void => {}); }
     };
     const generation = ++this.generation;
+    this.view.requestCount = 0;
     this.view.lifecycle = ShuviRuntimeState.STARTING; this.view.message = '正在启用助手与日历工具…'; this.publish();
     try {
       await this.calendar.start(calendarFactory, new Uint8Array());
@@ -90,6 +99,10 @@ export class AssistantRuntimeSession {
   }
   async send(input: string): Promise<void> {
     if (this.view.busy || this.stopping || this.view.lifecycle !== ShuviRuntimeState.READY || !input.trim() || input.length > 500) return;
+    if (this.view.requestCount >= this.view.maxRequests) {
+      this.view.message = `本次启用的 ${this.view.maxRequests} 次请求已用完；请停止后重新启用。未发送本次输入。`; this.publish(); return;
+    }
+    this.view.requestCount++;
     this.context.bind(input, Date.now()); this.awaiting = true; await this.model.send(input);
   }
   private async submitCalendar(draft: CalendarProbeDraft): Promise<void> {
@@ -129,11 +142,13 @@ export class AssistantRuntimeSession {
   private apply(status: AgentTaskStatus, raw: string): void {
     if (status === AgentTaskStatus.COMPLETED) {
       const result = parseCalendarToolResult(raw);
-      if (result === undefined || !result.verified || result.operationId !== this.view.preview?.operationId) {
+      const preview = this.view.preview;
+      if (result === undefined || !result.verified || preview === undefined || result.operationId !== preview.operationId) {
         this.finish('日程结果未通过核验，请到工作台核查；不要重复创建。'); return;
       }
       this.finish(`已创建日程并读回核对，系统日程 ID：${result.eventId}。` +
-        (result.reminderConfigured ? '提醒配置已核对；实际通知以系统送达为准。' : '提醒配置未核实，请到工作台核查。'), true);
+        (result.reminderConfigured ? '提醒配置已核对；实际通知以系统送达为准。' : '提醒配置未核实，请到工作台核查。'), true,
+        calendarCreatedSummary(preview.draft, result.eventId, result.reminderConfigured));
     } else if (status === AgentTaskStatus.FAILED || status === AgentTaskStatus.CANCELLED || status === AgentTaskStatus.WAITING_RECONCILIATION) {
       const result = this.factory?.resultFor(this.taskId);
       const detail = result !== undefined && result.operationId === this.view.preview?.operationId && !result.verified ? result.message : '';
@@ -141,7 +156,34 @@ export class AssistantRuntimeSession {
     }
   }
   private declinedMessage(): string {
+    if (this.editingTask === this.taskId && this.resubmitting) return '已按你的修改更新日程，请重新核对确认；原草稿已撤销。';
     return this.editingTask === this.taskId ? '原草稿已撤销，尚未创建日程。请修改输入框中的安排后发送，再次核对确认。' : '已取消本次日程，未写入日历。';
+  }
+  /**
+   * Card-side edit of a pending draft without another model call: the edited draft is validated like any draft, the old
+   * policy request is declined first, then a new tool task (new operation ID, new confirmation) is submitted.
+   * Returns '' when the new confirmation is being prepared, otherwise a message explaining why nothing changed.
+   */
+  async resubmit(edited: CalendarProbeDraft): Promise<string> {
+    const preview = this.view.preview;
+    if (preview === undefined || this.view.calendarStage !== 'authorization' || this.deciding || this.stopping) return '当前没有可修改的日程。';
+    const draft: CalendarProbeDraft = new CalendarProbeDraft();
+    draft.title = typeof edited.title === 'string' ? edited.title.trim() : ''; draft.startAt = edited.startAt; draft.endAt = edited.endAt;
+    draft.timeZone = edited.timeZone; draft.reminderMinutes = edited.reminderMinutes;
+    const error = calendarProbeDraftError(draft, Date.now());
+    if (error) return error;
+    if (JSON.stringify(draft) === JSON.stringify(preview.draft)) return '内容没有变化。';
+    const taskId = preview.taskId;
+    this.editingTask = taskId; this.resubmitting = true;
+    try {
+      const declined = await this.decide(false);
+      if (!declined || this.taskId !== taskId || this.view.busy || this.stopping || this.view.lifecycle !== ShuviRuntimeState.READY) {
+        return '原确认已失效，未创建日程。请重新发送安排。';
+      }
+    } finally { this.resubmitting = false; if (this.editingTask === taskId) this.editingTask = ''; }
+    this.context.clear();
+    void this.submitCalendar(draft);
+    return '';
   }
   async revise(): Promise<string | undefined> {
     const preview = this.view.preview;
@@ -181,8 +223,9 @@ export class AssistantRuntimeSession {
     } catch { if (this.active(generation)) await this.cancel(); return false; }
     finally { this.deciding = false; }
   }
-  private finish(message: string, succeeded: boolean = false): void {
+  private finish(message: string, succeeded: boolean = false, created?: CalendarCreatedSummary): void {
     ++this.generation; this.subscription?.close(); this.subscription = undefined;
+    this.view.created = created;
     if (this.timer !== undefined) clearTimeout(this.timer); this.timer = undefined;
     this.factory?.previews.clear(); this.prompt = undefined; this.view.preview = undefined;
     this.view.busy = false; this.view.calendarStage = 'idle'; this.view.reply = message; this.view.replyId++;

@@ -10,6 +10,7 @@ import { SourceLinkService } from '../services/SourceLinkService';
 export struct RuntimeSearchPanel {
   @Prop view: RuntimeSearchView = new RuntimeSearchView();
   @State linkMessage: string = '';
+  @State details: boolean = false;
   onStart: (key: Uint8Array) => void = (_key: Uint8Array): void => {};
   build() {
     Column({ space: 10 }) {
@@ -17,11 +18,20 @@ export struct RuntimeSearchPanel {
       Text(this.view.message).fontSize(13).fontColor(Theme.muted).id('runtime-search-status')
       if (this.view.lifecycle === ShuviRuntimeState.IDLE || this.view.lifecycle === ShuviRuntimeState.STOPPED ||
         this.view.lifecycle === ShuviRuntimeState.FAILED) {
-        Text('关键词发送至 Tavily；检索后的摘录发送至 DeepSeek 整理回答。不读取聊天历史、知识库或日历。启用只连接服务，发送后还需确认搜索。')
-          .fontSize(13).fontColor(Theme.muted)
-        Text('账户 shuvi-dev-tavily · 账单币种 CNY。最多一次未核账搜索，重启不重置；失败、取消也可能占用额度。模型沿用 USD 0.01/次估算准入，实际扣款另核对。')
-          .fontSize(12).fontColor(Theme.muted)
-        DeepSeekKeyField({ clearEpoch: this.view.clearEpoch, enableLabel: '同意上述范围并连接', idPrefix: 'runtime-search',
+        Text('关键词发给 Tavily 搜索，摘录交给 DeepSeek 整理；每次搜索前都会征求你的同意。')
+          .fontSize(13).fontColor(Theme.muted).width('100%')
+        Button(this.details ? '收起范围与费用 ▴' : '了解范围与费用 ▾').fontSize(Theme.noteSize).fontColor(Theme.accent)
+          .backgroundColor(Color.Transparent).padding({ left: 0, right: 0 }).constraintSize({ minHeight: 32 })
+          .id('runtime-search-details').onClick((): void => { this.details = !this.details; })
+        if (this.details) {
+          Column({ space: 6 }) {
+            Text('不读取聊天历史、知识库或日历。启用只连接服务，发送后还需确认搜索。')
+              .fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
+            Text('账户 shuvi-dev-tavily · 账单币种 CNY。最多一次未核账搜索，重启不重置；失败、取消也可能占用额度。模型沿用 USD 0.01/次估算准入，实际扣款另核对。')
+              .fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
+          }.width('100%').padding(10).backgroundColor(Theme.inputSurface).borderRadius(Theme.radius)
+        }
+        DeepSeekKeyField({ clearEpoch: this.view.clearEpoch, enableLabel: '同意并连接', idPrefix: 'runtime-search',
           purpose: '搜索回答', onKey: (key: Uint8Array): void => { this.onStart(key); } })
       }
       if (this.view.preview !== undefined) {

@@ -21,6 +21,27 @@ function bounded(value: string, limit: number): string {
   return value.slice(0, end);
 }
 
+const RAG_HEADING_MAX: number = 40;
+const RAG_CLAUSE_MARKS: string = '。！？；，、：.!?;,:';
+
+/**
+ * A fragment that carries no body text: only Markdown heading lines, the document title itself,
+ * or one short line without any clause punctuation (parsed Heading blocks arrive without "#").
+ */
+export function ragHeadingLike(text: string, title: string): boolean {
+  const value: string = text.trim();
+  if (value.length === 0) { return false; }
+  if (value === title.trim()) { return true; }
+  const lines: string[] = value.split('\n').map((line: string): string => line.trim())
+    .filter((line: string): boolean => line.length > 0);
+  if (lines.every((line: string): boolean => new RegExp('^#{1,6}\\s+\\S').test(line))) { return true; }
+  if (lines.length !== 1 || value.length > RAG_HEADING_MAX) { return false; }
+  for (let index: number = 0; index < value.length; index++) {
+    if (RAG_CLAUSE_MARKS.indexOf(value.charAt(index)) >= 0) { return false; }
+  }
+  return true;
+}
+
 function evidenceRoute(card: UnifiedSearchCard): string | undefined {
   const preferred: string[] = ['BodyDirect', 'OcrDirect', 'Vector'];
   for (let routeIndex: number = 0; routeIndex < preferred.length; routeIndex++) {
@@ -61,19 +82,24 @@ export class KnowledgeSemanticRuntimeSearchAdapter implements KnowledgeRuntimeSe
       result.query = request.query; result.route = 'local-rag';
       const candidates: UnifiedSearchCard[] = session.state.direct.cards.concat(session.state.related.cards);
       const seen: string[] = []; let remaining: number = RAG_MAX_TOTAL_TEXT;
-      for (let index: number = 0; index < candidates.length && result.citations.length < request.maxResults && remaining > 0; index++) {
-        cancel.check(); const card: UnifiedSearchCard = candidates[index]; const route: string | undefined = evidenceRoute(card);
-        if (!card.current || route === undefined || seen.indexOf(card.key) >= 0 || card.key.length < 1 ||
-          card.key.length > 512 || card.documentKey.length < 1 || card.generation.length < 1) { continue; }
-        const excerpt: string = bounded(card.text.trim(), Math.min(RAG_MAX_EXCERPT, remaining));
-        if (excerpt.length === 0) { continue; }
-        seen.push(card.key);
-        const citation: KnowledgeRuntimeCitation = new KnowledgeRuntimeCitation();
-        citation.citationId = result.citations.length + 1; citation.evidenceId = card.key;
-        citation.documentId = card.documentKey; citation.generation = card.generation;
-        citation.title = bounded(card.title.trim(), RAG_MAX_TITLE); citation.excerpt = excerpt;
-        citation.kind = card.kind; citation.evidence = route;
-        result.citations.push(citation); remaining -= excerpt.length;
+      // Two passes keep retrieval order but let body text take the 5 slots before heading-like
+      // fragments; heading-like cards are only demoted, never dropped, so evidence is not lost.
+      for (let pass: number = 0; pass < 2; pass++) {
+        for (let index: number = 0; index < candidates.length && result.citations.length < request.maxResults && remaining > 0; index++) {
+          cancel.check(); const card: UnifiedSearchCard = candidates[index]; const route: string | undefined = evidenceRoute(card);
+          if (!card.current || route === undefined || seen.indexOf(card.key) >= 0 || card.key.length < 1 ||
+            card.key.length > 512 || card.documentKey.length < 1 || card.generation.length < 1) { continue; }
+          if (ragHeadingLike(card.text, card.title) !== (pass === 1)) { continue; }
+          const excerpt: string = bounded(card.text.trim(), Math.min(RAG_MAX_EXCERPT, remaining));
+          if (excerpt.length === 0) { continue; }
+          seen.push(card.key);
+          const citation: KnowledgeRuntimeCitation = new KnowledgeRuntimeCitation();
+          citation.citationId = result.citations.length + 1; citation.evidenceId = card.key;
+          citation.documentId = card.documentKey; citation.generation = card.generation;
+          citation.title = bounded(card.title.trim(), RAG_MAX_TITLE); citation.excerpt = excerpt;
+          citation.kind = card.kind; citation.evidence = route;
+          result.citations.push(citation); remaining -= excerpt.length;
+        }
       }
       return result;
     } finally {

@@ -3628,3 +3628,107 @@ test('remembered DeepSeek key fails closed on synced, damaged or unreadable reco
   assert.equal(await failing.store.status(), failing.DeepSeekKeyStatus.Unavailable);
   await assert.rejects(failing.store.load(), /QUERY/); await assert.rejects(failing.store.save(keyBytes('sk-ok-key-0004')), /QUERY/);
 });
+
+// Chat UI overhaul: in-card calendar edit, created-event summary, per-enable request limit and RAG excerpt order.
+const calendarPresentation = load(path.join(services, '../calendar/CalendarPresentation.ets'));
+const editedDraft = (...args) => calendarPresentation.calendarEditedDraft(...args);
+test('calendar card helpers format Beijing wall-clock dates, reminders and edited drafts without the device zone', () => {
+  const p = calendarPresentation;
+  assert.equal(p.calendarDateText('2026-10-28T16:00:00+08:00'), '10月28日 周三');
+  assert.equal(p.calendarWhenText({ startAt:'2026-10-28T16:00:00+08:00', endAt:'2026-10-28T17:00:00+08:00' }), '10月28日 周三 16:00–17:00');
+  assert.equal(p.calendarWhenText({ startAt:'2026-10-31T23:00:00+08:00', endAt:'2026-11-01T01:00:00+08:00' }),
+    '10月31日 周六 23:00–11月1日 周日 01:00');
+  assert.equal(p.calendarReminderText(0), '开始时提醒'); assert.equal(p.calendarReminderText(15), '提前 15 分钟提醒');
+  const draft = editedDraft('  评审会 ', '2099-10-27', '09:05', '10:00', 30);
+  assert.deepEqual(JSON.parse(JSON.stringify(draft)), { title:'评审会', startAt:'2099-10-27T09:05:00+08:00',
+    endAt:'2099-10-27T10:00:00+08:00', timeZone:'Asia/Shanghai', reminderMinutes:30 });
+  assert.equal(p.calendarTwoDigits(7), '07'); assert.equal(p.calendarTwoDigits(12), '12');
+  assert.deepEqual(p.CALENDAR_REMINDER_CHOICES, [0, 5, 10, 15, 30, 60]);
+  const summary = p.calendarCreatedSummary(draft, 105, false);
+  assert.equal(summary.title, '评审会'); assert.equal(summary.reminder, '提前 30 分钟提醒');
+  assert.equal(summary.eventId, 105); assert.equal(summary.reminderConfigured, false);
+});
+test('card edit resubmits a validated draft as a new confirmation without another model call and writes the edited event', async () => {
+  const texts = [calendarModelReply(), JSON.stringify({ schemaVersion:'1.0', kind:'answer', message:'普通回答' })];
+  const h = assistantHarness({ texts }); await h.start();
+  try {
+    await h.ui.send('安排讨论'); await waitCalendarCard(h.ui); const old = h.ui.snapshot().preview;
+    assert.equal(await h.ui.resubmit(editedDraft('修改后的讨论', '2099-10-27', '15:30', '16:30', 30)), '');
+    await waitCalendarCard(h.ui); const next = h.ui.snapshot().preview;
+    assert.notEqual(next.operationId, old.operationId); assert.notEqual(next.taskId, old.taskId);
+    assert.deepEqual(next.draft, { title:'修改后的讨论', startAt:'2099-10-27T15:30:00+08:00', endAt:'2099-10-27T16:30:00+08:00',
+      timeZone:'Asia/Shanghai', reminderMinutes:30 });
+    assert.match(h.ui.snapshot().reply, /已按你的修改更新日程/);
+    assert.equal(h.calls(), 1); assert.equal(h.trace.permissions, 0); assert.equal(h.trace.writes, 0); assert.equal(h.closed(), 0);
+    assert.equal(await h.ui.decide(true), true); await waitChat(h.ui);
+    assert.equal(h.trace.writes, 1); assert.equal(h.records.length, 1);
+    assert.equal(h.records[0].draft.title, '修改后的讨论'); assert.equal(h.records[0].operationId, next.operationId);
+    const view = h.ui.snapshot(); assert.equal(view.succeeded, true);
+    assert.equal(view.created.title, '修改后的讨论'); assert.equal(view.created.reminder, '提前 30 分钟提醒');
+    assert.match(view.created.when, /^10月27日 周. 15:30–16:30$/);
+    assert.equal(view.created.eventId, h.records[0].eventId); assert.equal(view.created.reminderConfigured, true);
+    await h.ui.send('普通问题'); await waitChat(h.ui);
+    assert.equal(h.ui.snapshot().reply, '普通回答'); assert.equal(h.ui.snapshot().created, undefined, 'only the verified reply carries a card');
+  } finally { await h.ui.stop(); }
+});
+test('card edit keeps the pending confirmation when the edit is unchanged, invalid or no longer pending', async () => {
+  const h = assistantHarness(); await h.start();
+  try {
+    await h.ui.send('安排讨论'); await waitCalendarCard(h.ui); const preview = h.ui.snapshot().preview;
+    assert.equal(await h.ui.resubmit(editedDraft('项目讨论', '2099-10-27', '15:00', '16:00', 10)), '内容没有变化。');
+    assert.match(await h.ui.resubmit(editedDraft('   ', '2099-10-27', '15:00', '16:00', 10)), /标题/);
+    for (const bad of [editedDraft('项目讨论', '2099-10-27', '16:00', '15:00', 10), editedDraft('项目讨论', '2001-10-27', '15:00', '16:00', 10),
+      { ...preview.draft, timeZone:'UTC' }, editedDraft('项目讨论', '2099-10-27', '15:00', '16:00', 1.5)]) {
+      assert.notEqual(await h.ui.resubmit(bad), '', JSON.stringify(bad));
+    }
+    const view = h.ui.snapshot(); assert.equal(view.calendarStage, 'authorization'); assert.equal(view.preview.operationId, preview.operationId);
+    assert.equal(h.trace.permissions, 0);
+    await h.ui.decide(true); await waitChat(h.ui); assert.equal(h.trace.writes, 1); assert.equal(h.records[0].draft.title, '项目讨论');
+    assert.equal(await h.ui.resubmit(editedDraft('另一条', '2099-10-28', '15:00', '16:00', 10)), '当前没有可修改的日程。');
+    assert.equal(h.calls(), 1); assert.equal(h.trace.writes, 1);
+  } finally { await h.ui.stop(); }
+});
+test('assistant per-enable request limit rejects the eleventh input before any model call', async () => {
+  const texts = Array.from({ length:12 }, (_, i) => JSON.stringify({ schemaVersion:'1.0', kind:'answer', message:'回答' + i }));
+  const h = assistantHarness({ texts }); await h.start();
+  try {
+    assert.equal(h.ui.snapshot().requestCount, 0); assert.equal(h.ui.snapshot().maxRequests, 10);
+    for (let i = 0; i < 10; i++) { await h.ui.send('问题' + i); await waitChat(h.ui); }
+    assert.equal(h.calls(), 10); assert.equal(h.ui.snapshot().requestCount, 10);
+    const reply = h.ui.snapshot().reply;
+    await h.ui.send('第十一个问题');
+    assert.equal(h.calls(), 10); assert.equal(h.ui.snapshot().busy, false); assert.equal(h.ui.snapshot().reply, reply);
+    assert.match(h.ui.snapshot().message, /10 次请求已用完/);
+  } finally { await h.ui.stop(); }
+});
+test('RAG excerpt selection demotes heading-only fragments behind body text without dropping them', async () => {
+  const { ragHeadingLike } = semanticRagAdapterModule;
+  for (const [text, title] of [['# 营业时间', ''], ['## 一、概述\n### 1.1 背景', ''], ['营业时间', '星河咖啡馆'], ['星河咖啡馆', '星河咖啡馆']]) {
+    assert.equal(ragHeadingLike(text, title), true, text);
+  }
+  for (const [text, title] of [['每周三闭店做设备保养。', ''], ['营业时间：9:00-21:00', ''], ['# 标题\n正文第一句。', ''], ['', ''], ['x'.repeat(41), '']]) {
+    assert.equal(ragHeadingLike(text, title), false, text);
+  }
+  const card = (key, text, route = 'BodyDirect') => ({ key, kind:'Text', title:'星河咖啡馆', text, documentKey:'doc-' + key,
+    generation:'gen', current:true, reasons:[{ route }] });
+  const headings = [card('h1', '营业时间'), card('h2', '# 设备保养'), card('h3', '星河咖啡馆')];
+  const bodies = [1, 2, 3, 4, 5].map(i => card('b' + i, '正文第' + i + '段，说明闭店安排。', 'Vector'));
+  const session = { state:{ direct:{ cards:headings, error:'' }, related:{ cards:bodies, error:'' }, semanticState:'Complete' },
+    async start() {}, async review() {}, async allowSemantic() {}, async close() {} };
+  const search = () => new semanticRagAdapterModule.KnowledgeSemanticRuntimeSearchAdapter(() => session)
+    .search({ query:'周几闭店', maxResults:5 }, { check() {} });
+  const full = await search();
+  assert.deepEqual(full.citations.map(c => c.evidenceId), ['b1', 'b2', 'b3', 'b4', 'b5']);
+  assert.deepEqual(full.citations.map(c => c.citationId), [1, 2, 3, 4, 5]);
+  session.state.related.cards = bodies.slice(0, 2);
+  const sparse = await search();
+  assert.deepEqual(sparse.citations.map(c => c.evidenceId), ['b1', 'b2', 'h1', 'h2', 'h3']);
+});
+test('RAG source chips preview the excerpt, not the shared file title', () => {
+  const chip = knowledgePresentation.knowledgeCitationChip;
+  assert.equal(chip(2, '消费满 10 杯可兑换任意一杯饮品。'), '[2] 消费满 10 杯可兑换任…');
+  assert.equal(chip(4, '> 本文档为虚构测试资料'), '[4] 本文档为虚构测试资料');
+  assert.equal(chip(5, '## 营业\n\n时间'), '[5] 营业 时间');
+  assert.equal(chip(1, '短句'), '[1] 短句');
+  assert.equal(chip(3, '😀'.repeat(13)), '[3] ' + '😀'.repeat(12) + '…', 'surrogate pairs are never split');
+});

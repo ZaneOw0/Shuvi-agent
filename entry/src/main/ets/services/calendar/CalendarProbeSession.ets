@@ -190,7 +190,7 @@ export class CalendarProbeSession {
     if (this.records.some((item: CalendarProbeRecord): boolean => item.draft.title === draft.title.trim() &&
       item.draft.startAt === draft.startAt && item.draft.endAt === draft.endAt && item.draft.timeZone === draft.timeZone)) {
       this.draft = undefined;
-      this.publish('failed', '已有同标题、同时间的操作记录，请从下方记录查看或核查原日程。');
+      this.publish('failed', '已有同标题、同时间的操作记录，未重复创建；请在工作台的日程记录中查看或核查原日程。');
       return;
     }
     this.draft = copyDraft(draft);

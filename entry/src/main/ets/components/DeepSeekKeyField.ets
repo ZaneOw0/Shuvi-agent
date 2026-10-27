@@ -17,6 +17,7 @@ export struct DeepSeekKeyField {
   @State status: DeepSeekKeyStatus = DeepSeekKeyStatus.Checking;
   @State busy: boolean = false;
   @State note: string = '';
+  @State otherKey: boolean = false;
   onKey: (key: Uint8Array) => void = (_key: Uint8Array): void => {};
 
   aboutToAppear(): void { void this.refresh(); }
@@ -69,30 +70,41 @@ export struct DeepSeekKeyField {
   build() {
     Column({ space: 10 }) {
       if (this.status === DeepSeekKeyStatus.Saved) {
-        Text('已在本机安全存储记住 DeepSeek Key').fontSize(13).fontColor(Theme.ink).width('100%')
-        Button(`${this.enableLabel}（使用已记住的 Key）`).enabled(!this.busy).constraintSize({ minHeight: 44 })
-          .backgroundColor(Theme.accent).fontColor(Color.White).id(`${this.idPrefix}-enable-saved`)
-          .accessibilityText(`${this.purpose}，使用本机已记住的 DeepSeek Key 启用`)
+        Button(this.enableLabel).enabled(!this.busy).width('100%').constraintSize({ minHeight: Theme.controlHeight })
+          .backgroundColor(Theme.accent).fontColor(Color.White).borderRadius(Theme.radius).id(`${this.idPrefix}-enable-saved`)
+          .accessibilityText(`${this.purpose}，同意范围并使用本机已记住的 DeepSeek Key 启用`)
           .onClick((): void => { void this.enableSaved(); })
-        Button('删除已记住的 Key').enabled(!this.busy).constraintSize({ minHeight: 44 })
-          .backgroundColor(Theme.soft).fontColor(Theme.accent).id(`${this.idPrefix}-forget-key`)
-          .onClick((): void => { this.confirmRemove(); })
+        Row({ space: 4 }) {
+          Text('使用本机记住的 Key').fontSize(Theme.noteSize).fontColor(Theme.muted)
+          Button('删除').fontSize(Theme.noteSize).fontColor(Theme.accent).backgroundColor(Color.Transparent)
+            .enabled(!this.busy).constraintSize({ minHeight: 32 }).padding({ left: 6, right: 6 })
+            .id(`${this.idPrefix}-forget-key`).accessibilityText('删除本机记住的 DeepSeek Key')
+            .onClick((): void => { this.confirmRemove(); })
+          Blank()
+          Button(this.otherKey ? '收起' : '使用其他 Key').fontSize(Theme.noteSize).fontColor(Theme.accent)
+            .backgroundColor(Color.Transparent).constraintSize({ minHeight: 32 }).padding({ left: 6, right: 6 })
+            .id(`${this.idPrefix}-other-key`).onClick((): void => { this.otherKey = !this.otherKey; this.apiKey = ''; })
+        }.width('100%')
       }
-      TextInput({ text: this.apiKey, placeholder: this.status === DeepSeekKeyStatus.Saved ? '输入新 Key 替换（可选）' : 'DeepSeek API Key' })
-        .type(InputType.Password).showPasswordIcon(false).copyOption(CopyOptions.None).selectionMenuHidden(false)
-        .enableAutoFill(false).enablePreviewText(false).maxLength(2048)
-        .onChange((value: string): void => { this.apiKey = value; })
-        .accessibilityText(`${this.purpose}使用的 DeepSeek API Key，允许粘贴`).id(`${this.idPrefix}-key`)
-      Row({ space: 8 }) {
-        Checkbox().selectedColor(Theme.accent).select(this.remember).id(`${this.idPrefix}-remember-key`)
-          .onChange((checked: boolean): void => { this.remember = checked; })
-        Text(this.status === DeepSeekKeyStatus.Saved ? '用新 Key 替换已记住的 Key' : '记住 Key（只保存在本机系统安全存储，不同步，可随时删除）')
-          .fontSize(12).fontColor(Theme.ink).layoutWeight(1)
-      }.width('100%')
-      Button(this.enableLabel).enabled(!this.busy && this.apiKey.trim().length > 0).constraintSize({ minHeight: 44 })
-        .backgroundColor(this.status === DeepSeekKeyStatus.Saved ? Theme.soft : Theme.accent)
-        .fontColor(this.status === DeepSeekKeyStatus.Saved ? Theme.accent : Color.White).id(`${this.idPrefix}-enable`)
-        .onClick((): void => { void this.enableTyped(); })
+      if (this.status !== DeepSeekKeyStatus.Saved || this.otherKey) {
+        TextInput({ text: this.apiKey, placeholder: this.status === DeepSeekKeyStatus.Saved ? '输入其他 Key' : 'DeepSeek API Key' })
+          .type(InputType.Password).showPasswordIcon(false).copyOption(CopyOptions.None).selectionMenuHidden(false)
+          .enableAutoFill(false).enablePreviewText(false).maxLength(2048).borderRadius(Theme.radius)
+          .constraintSize({ minHeight: Theme.controlHeight })
+          .onChange((value: string): void => { this.apiKey = value; })
+          .accessibilityText(`${this.purpose}使用的 DeepSeek API Key，允许粘贴`).id(`${this.idPrefix}-key`)
+        Row({ space: 8 }) {
+          Checkbox().selectedColor(Theme.accent).select(this.remember).id(`${this.idPrefix}-remember-key`)
+            .onChange((checked: boolean): void => { this.remember = checked; })
+          Text(this.status === DeepSeekKeyStatus.Saved ? '用这个 Key 替换已记住的 Key' : '记住 Key（只保存在本机系统安全存储，不同步，可随时删除）')
+            .fontSize(Theme.noteSize).fontColor(Theme.ink).layoutWeight(1)
+        }.width('100%')
+        Button(this.enableLabel).enabled(!this.busy && this.apiKey.trim().length > 0).width('100%')
+          .constraintSize({ minHeight: Theme.controlHeight }).borderRadius(Theme.radius)
+          .backgroundColor(this.status === DeepSeekKeyStatus.Saved ? Theme.soft : Theme.accent)
+          .fontColor(this.status === DeepSeekKeyStatus.Saved ? Theme.accent : Color.White).id(`${this.idPrefix}-enable`)
+          .onClick((): void => { void this.enableTyped(); })
+      }
       if (this.status === DeepSeekKeyStatus.Unavailable) {
         Text('本机安全存储暂不可用，本次请直接输入 Key。').fontSize(12).fontColor(Theme.muted).width('100%')
       }
