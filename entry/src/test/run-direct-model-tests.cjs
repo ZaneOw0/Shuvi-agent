@@ -2484,6 +2484,7 @@ const realRagAdapterModule = load(path.join(root, 'entry/src/main/ets/knowledge/
 });
 const realRagModels = load(path.join(root, 'entry/src/main/ets/knowledge/domain/UnifiedQueryModels.ets'));
 const realRagParsed = load(path.join(root, 'entry/src/main/ets/knowledge/domain/ParsedDocumentModels.ets'));
+const realRagHistoryModule = load(path.join(root, 'entry/src/main/ets/knowledge/application/EphemeralQueryHistory.ets'));
 function realRagVectorCard() {
   const card = new realRagModels.UnifiedSearchCard(); card.key = 'text:upd-vector-doc:gen-vector-1:chunk-vector-1';
   card.title = '向量笔记'; card.text = '向量片段说明回答必须先固定本机证据。';
@@ -2493,7 +2494,7 @@ function realRagVectorCard() {
 }
 function realRagStack(options = {}) {
   const trace = { acquired:0, released:0, reviews:0, embeddings:0 };
-  function createQuerySession() {
+  function createRagQuerySession() {
     const scope = new realRagModels.UnifiedQueryScope(); scope.complete = true;
     if (options.directText) {
       const source = new realRagModels.UnifiedQueryTextSource();
@@ -2514,12 +2515,13 @@ function realRagStack(options = {}) {
         cancel.check(); return options.vector ? [realRagVectorCard()] : [];
       }
     };
-    const history = { async append() {}, async list() { return []; } };
+    const history = options.history ?? new realRagHistoryModule.EphemeralQueryHistory();
     const identity = { id() { return crypto.randomUUID(); }, async hash() { return 'host-hash'; } };
     return new realRagQueryModule.KnowledgeQuerySession(scopePort, engine, { currentConfig() { return {}; } }, history, identity);
   }
   const assembly = { async acquire() { trace.acquired++; }, async release() { trace.released++; },
-    async ragReadiness() { return { ready:true, code:'Ready', message:'知识库 RAG 已就绪。' }; }, createQuerySession };
+    async ragReadiness() { return { ready:true, code:'Ready', message:'知识库 RAG 已就绪。' }; }, createRagQuerySession,
+    createQuerySession() { throw Error('chat RAG must not open the knowledge page history session'); } };
   return { trace, port: new realRagAdapterModule.KnowledgeRagSessionAdapter(assembly) };
 }
 test('real RAG composition keeps a successful retrieval and dispatches one grounded DeepSeek answer', async () => {
@@ -2557,6 +2559,26 @@ test('real RAG composition still discards retrieval cancelled during the query e
     gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(h.trace.models, 0); assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
   } finally { gate.resolve(); await h.ui.stop(); }
+});
+test('chat RAG uses the history-free query session and leaves the knowledge page history untouched', async () => {
+  const pages = []; const recording = { async append(page) { pages.push(page); }, async list() { return pages; } };
+  const recordingStack = realRagStack({ vector:true, history:recording });
+  await recordingStack.port.open();
+  const result = await recordingStack.port.search({ query:'Runtime 设计', maxResults:5 }, new realRagParsed.ParsedCancellation());
+  await recordingStack.port.close();
+  assert.equal(result.citations.length, 1); assert(pages.length > 0, 'the query session must write history when given a page history port');
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'complete', h.ui.snapshot().message);
+  } finally { await h.ui.stop(); }
+  const ephemeral = new realRagHistoryModule.EphemeralQueryHistory();
+  await ephemeral.append({ question:'Runtime 设计' }); assert.deepEqual(await ephemeral.list(0, 10), []);
+  const assemblySource = fs.readFileSync(path.join(root, 'entry/src/main/ets/knowledge/infra/KnowledgeAssembly.ets'), 'utf8');
+  const ragFactory = assemblySource.match(/createRagQuerySession\(\): KnowledgeQuerySession \{([\s\S]*?)\n  \}/);
+  assert(ragFactory, 'KnowledgeAssembly must expose createRagQuerySession');
+  assert(ragFactory[1].includes('new EphemeralQueryHistory()') && !ragFactory[1].includes('unifiedHistory'));
 });
 const knowledgePresentation = load(path.join(services, 'RuntimeKnowledgePresentation.ets'));
 test('knowledge panel wording covers both RAG phases and only offers retry when the session would accept it', () => {

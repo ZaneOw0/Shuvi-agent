@@ -63,6 +63,7 @@ import { ParsedDocumentMigrationService } from '../application/ParsedDocumentMig
 import { UnifiedQueryRepository } from './UnifiedQueryRepository';
 import { UnifiedQueryService } from '../application/UnifiedQueryService';
 import { KnowledgeQuerySession } from '../application/KnowledgeQuerySession';
+import { EphemeralQueryHistory } from '../application/EphemeralQueryHistory';
 import { UnifiedKnowledgeHistoryRepository } from './UnifiedKnowledgeHistoryRepository';
 import { KnowledgeDatabaseAdapter } from '../application/KnowledgeDatabaseAdapter';
 import { KnowledgeRuntimeSearchAdapter } from '../application/KnowledgeRuntimeSearchAdapter';
@@ -220,6 +221,11 @@ export class KnowledgeAssembly {
   createQuerySession(): KnowledgeQuerySession {
     return new KnowledgeQuerySession(this.runtimeQueryRepository,this.runtimeQueryEngine,this.runtimeUnifiedConfig,
       this.unifiedHistory,new KnowledgePlatformIdentity());
+  }
+  /** Chat RAG: same scope, engine and config, but nothing is written to the knowledge page search history. */
+  createRagQuerySession(): KnowledgeQuerySession {
+    return new KnowledgeQuerySession(this.runtimeQueryRepository,this.runtimeQueryEngine,this.runtimeUnifiedConfig,
+      new EphemeralQueryHistory(),new KnowledgePlatformIdentity());
   }
   async ragReadiness(): Promise<KnowledgeRagReadiness> {
     const result: KnowledgeRagReadiness=new KnowledgeRagReadiness();

@@ -14,7 +14,7 @@ export class KnowledgeRagSessionAdapter implements KnowledgeRagSearchPort {
 
   constructor(assembly: KnowledgeAssembly) {
     this.assembly = assembly;
-    this.searcher = new KnowledgeSemanticRuntimeSearchAdapter(() => this.assembly.createQuerySession());
+    this.searcher = new KnowledgeSemanticRuntimeSearchAdapter(() => this.assembly.createRagQuerySession());
   }
 
   async open(): Promise<void> {
