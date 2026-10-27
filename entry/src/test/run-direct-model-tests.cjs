@@ -2477,6 +2477,87 @@ test('semantic Runtime adapter fails closed when the exact-query embedding step 
   const cancel = { invalid:false, check() {} };
   await assert.rejects(adapter.search({query:'same query',maxResults:5}, cancel), /RuntimeRagSemanticUnavailable/);
 });
+// Real composition: page session -> RAG session adapter -> semantic adapter -> KnowledgeQuerySession.
+const realRagQueryModule = load(path.join(root, 'entry/src/main/ets/knowledge/application/KnowledgeQuerySession.ets'));
+const realRagAdapterModule = load(path.join(root, 'entry/src/main/ets/knowledge/infra/KnowledgeRagSessionAdapter.ets'), {
+  './KnowledgeAssembly': { KnowledgeAssembly: class {} }
+});
+const realRagModels = load(path.join(root, 'entry/src/main/ets/knowledge/domain/UnifiedQueryModels.ets'));
+const realRagParsed = load(path.join(root, 'entry/src/main/ets/knowledge/domain/ParsedDocumentModels.ets'));
+function realRagVectorCard() {
+  const card = new realRagModels.UnifiedSearchCard(); card.key = 'text:upd-vector-doc:gen-vector-1:chunk-vector-1';
+  card.title = '向量笔记'; card.text = '向量片段说明回答必须先固定本机证据。';
+  card.documentKey = 'upd-vector-doc'; card.generation = 'gen-vector-1';
+  const reason = new realRagModels.UnifiedSearchReason(); reason.route = 'Vector'; card.reasons = [reason];
+  return card;
+}
+function realRagStack(options = {}) {
+  const trace = { acquired:0, released:0, reviews:0, embeddings:0 };
+  function createQuerySession() {
+    const scope = new realRagModels.UnifiedQueryScope(); scope.complete = true;
+    if (options.directText) {
+      const source = new realRagModels.UnifiedQueryTextSource();
+      source.document.id = 'upd-direct-doc'; source.document.title = '本机设计笔记';
+      const chunk = new realRagParsed.ParsedTextChunk(); chunk.id = 'chunk-direct-1'; chunk.documentKey = 'upd-direct-doc';
+      chunk.generation = 'gen-direct-1'; chunk.text = options.directText; chunk.evidence = 'Body';
+      source.chunks = [chunk]; scope.texts = [source];
+    }
+    const scopePort = { async capture() { return scope; }, async visible() { return true; } };
+    const engine = {
+      async review(question, session, epoch) {
+        trace.reviews++; const approval = new realRagModels.UnifiedQueryApproval();
+        approval.session = session; approval.epoch = epoch; approval.actual = question; return approval;
+      },
+      async approve() {}, async revoke() {},
+      async semantic(_approval, cancel) {
+        trace.embeddings++; if (options.semanticGate) await options.semanticGate.promise;
+        cancel.check(); return options.vector ? [realRagVectorCard()] : [];
+      }
+    };
+    const history = { async append() {}, async list() { return []; } };
+    const identity = { id() { return crypto.randomUUID(); }, async hash() { return 'host-hash'; } };
+    return new realRagQueryModule.KnowledgeQuerySession(scopePort, engine, { currentConfig() { return {}; } }, history, identity);
+  }
+  const assembly = { async acquire() { trace.acquired++; }, async release() { trace.released++; },
+    async ragReadiness() { return { ready:true, code:'Ready', message:'知识库 RAG 已就绪。' }; }, createQuerySession };
+  return { trace, port: new realRagAdapterModule.KnowledgeRagSessionAdapter(assembly) };
+}
+test('real RAG composition keeps a successful retrieval and dispatches one grounded DeepSeek answer', async () => {
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ directText:'休比 Runtime 设计 采用持久化执行记录。', vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    assert.equal((await h.ui.activateRag()).ready, true);
+    assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    const view = h.ui.snapshot();
+    assert.equal(view.stage, 'complete', view.message); assert.equal(stack.trace.embeddings, 1); assert.equal(h.trace.models, 1);
+    assert.deepEqual(view.citations.map(citation => citation.evidence), ['BodyDirect', 'Vector']);
+    const prompt = h.trace.bodies[0].messages[1].content;
+    assert(prompt.includes('采用持久化执行记录') && prompt.includes('必须先固定本机证据'));
+    for (const internal of ['upd-direct-doc','gen-direct-1','chunk-direct-1','upd-vector-doc','gen-vector-1']) assert(!prompt.includes(internal));
+  } finally { await h.ui.stop(); }
+  assert.equal(stack.trace.acquired, 1); assert.equal(stack.trace.released, 1);
+});
+test('real RAG composition finishes empty without DeepSeek when nothing is citable', async () => {
+  const h = liveKnowledgeHarness(); const stack = realRagStack();
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'empty', h.ui.snapshot().message);
+    assert.equal(stack.trace.embeddings, 1); assert.equal(h.trace.models, 0);
+  } finally { await h.ui.stop(); }
+});
+test('real RAG composition still discards retrieval cancelled during the query embedding', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true, semanticGate:gate });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true);
+    for (let i = 0; i < 200 && stack.trace.embeddings === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(stack.trace.embeddings, 1); await h.ui.cancelCurrent();
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed'); assert.equal(h.ui.snapshot().busy, false);
+    gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.trace.models, 0); assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+  } finally { gate.resolve(); await h.ui.stop(); }
+});
 test('assistant coordinator consumes one caller key and gives isolated copies to PUBLIC chat and PERSONAL RAG', async () => {
   const trace = { chatKey:undefined, ragKey:undefined, chatStopped:0, ragStopped:0 }; let chatState = ShuviRuntimeState.IDLE;
   const fakeKnowledgeSession = { answerContext:{},

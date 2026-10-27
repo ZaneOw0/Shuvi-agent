@@ -260,7 +260,9 @@ export class RuntimeKnowledgeSession {
     const request: KnowledgeRuntimeSearchRequest = new KnowledgeRuntimeSearchRequest(); request.query = query; request.maxResults = 5;
     try {
       const result: KnowledgeRuntimeSearchResult = await rag.search(request, cancel);
-      if (!this.active(generation) || cancel.invalid) { return; }
+      // The query session invalidates this shared token when it closes, even after success.
+      // Generation is the staleness signal: cancel, stop, deactivate and the watchdog all advance it.
+      if (!this.active(generation)) { return; }
       this.ragCancel = undefined; this.view.citations = result.citations;
       if (result.route !== 'local-rag') {
         this.finish('retrievalFailed', 'RAG 检索结果类型无效；未调用 DeepSeek。'); return;
