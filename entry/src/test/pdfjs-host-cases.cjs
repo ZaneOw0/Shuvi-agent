@@ -4,6 +4,9 @@ exports.cases=h=>{
  const D=h.load('domain/DocumentParseModels');const {PdfJsRuntime,pdfJsReceipt}=h.load('infra/PdfJsRuntime');
  const receipt=(extra={})=>JSON.stringify({id:'webpdf-unit',state:'Loaded',pages:1,bytes:20,received:20,rendered:0,page:0,error:'',version:'6.4.299',...extra});
  return [
+  ['pdfjs_hidpi_render_and_existing_bridge_share_validated_document',async()=>{
+   const cp=require('node:child_process'),path=require('node:path');const result=cp.spawnSync(process.execPath,['--experimental-vm-modules',path.join(__dirname,'pdfjs-render-host-cases.cjs')],{encoding:'utf8',timeout:10000});assert.equal(result.status,0,result.stderr);assert(result.stdout.includes('PDFJS_RENDER_HOST_SUMMARY passed=11 failed=0 requests=0'));console.log(result.stdout.trim());
+  }],
   ['pdfjs_page_bridge_rejects_encrypted_bad_and_oversized_input',async()=>{
    const cp=require('node:child_process'),path=require('node:path');const result=cp.spawnSync(process.execPath,['--experimental-vm-modules',path.join(__dirname,'pdfjs-bridge-cases.cjs')],{encoding:'utf8',timeout:10000});assert.equal(result.status,0,result.stderr);assert(result.stdout.includes('cases=8 passed=8 requests=0'));
   }],
