@@ -20,6 +20,8 @@ export class RuntimeKnowledgeView {
   message: string = '尚未启用本机知识库检索。';
   query: string = '';
   answer: string = '';
+  /** Who wrote `answer`: 'deepseek' (model answer over the excerpts), 'local' (startLocal count notice) or ''. */
+  answerSource: string = '';
   citations: KnowledgeRuntimeCitation[] = [];
   consent: boolean = false;
   clearEpoch: number = 0;
@@ -56,7 +58,7 @@ export class RuntimeKnowledgeSession {
   snapshot(): RuntimeKnowledgeView { return copyRuntimeKnowledgeView(this.view); }
   clearConversation(): void {
     if (this.view.busy) { return; }
-    this.answerContext.clear(); this.view.query = ''; this.view.answer = ''; this.view.citations = [];
+    this.answerContext.clear(); this.view.query = ''; this.view.answer = ''; this.view.answerSource = ''; this.view.citations = [];
     this.view.stage = 'idle'; this.publish();
   }
   private publish(): void { this.listener?.(this.snapshot()); }
@@ -88,7 +90,7 @@ export class RuntimeKnowledgeSession {
       await this.answer.start(answerFactory, key);
       if (generation !== this.generation) { return; }
       this.ragPrepared = true; this.answerContext.clear();
-      this.view.query = ''; this.view.answer = ''; this.view.citations = [];
+      this.view.query = ''; this.view.answer = ''; this.view.answerSource = ''; this.view.citations = [];
       this.view.lifecycle = ShuviRuntimeState.READY;
       this.view.message = '知识库 RAG 后端已准备；开启知识库后才允许问题向量化和资料整理。';
       this.publish();
@@ -160,7 +162,7 @@ export class RuntimeKnowledgeSession {
       if (generation !== this.generation) { return; }
       await this.answer.start(answerFactory, answerKey);
       if (generation !== this.generation) { return; }
-      this.answerContext.clear(); this.view.query = ''; this.view.answer = ''; this.view.citations = [];
+      this.answerContext.clear(); this.view.query = ''; this.view.answer = ''; this.view.answerSource = ''; this.view.citations = [];
       this.view.lifecycle = ShuviRuntimeState.READY;
       this.view.message = '已就绪。发送问题后先检索本机片段，再按你同意的范围请求 DeepSeek 回答。';
       this.publish();
@@ -192,7 +194,7 @@ export class RuntimeKnowledgeSession {
     try {
       await this.knowledge.start(toolFactory, marker);
       if (generation !== this.generation) { return; }
-      this.answerContext.clear(); this.view.query = ''; this.view.answer = ''; this.view.citations = [];
+      this.answerContext.clear(); this.view.query = ''; this.view.answer = ''; this.view.answerSource = ''; this.view.citations = [];
       this.view.lifecycle = ShuviRuntimeState.READY;
       this.view.message = '已就绪。发送问题后只读检索本机当前有效正文，不调用外部模型。'; this.publish();
     } catch {
@@ -244,7 +246,7 @@ export class RuntimeKnowledgeSession {
     const value: string = query.trim();
     if (this.view.busy || this.view.lifecycle !== ShuviRuntimeState.READY || (!this.consentGranted && !this.localOnly) ||
       value !== query || !value || value.length > 500) { return false; }
-    this.answerContext.clear(); this.view.query = value; this.view.answer = ''; this.view.citations = [];
+    this.answerContext.clear(); this.view.query = value; this.view.answer = ''; this.view.answerSource = ''; this.view.citations = [];
     this.view.busy = true; this.view.stage = 'retrieving'; this.view.message = '正在检索本机知识库…';
     this.answering = false; this.cancelRequested = false; const generation: number = ++this.generation; this.watch(generation);
     this.publish();
@@ -363,11 +365,11 @@ export class RuntimeKnowledgeSession {
         }
         const answer = parseKnowledgeAnswer(json, this.view.citations.length);
         if (answer !== undefined) {
-          this.view.answer = answer.text;
+          this.view.answer = answer.text; this.view.answerSource = 'deepseek';
           this.finish('complete', '本机检索与 DeepSeek 回答均已完成；下方回答不是原始资料。'); return;
         }
         if (parseKnowledgeInsufficient(json) !== undefined) {
-          this.view.answer = '';
+          this.view.answer = ''; this.view.answerSource = '';
           this.finish('insufficient', '资料中没有足够依据；本机引用已保留。'); return;
         }
         this.finish('answerFailed', '回答格式或引用编号无效；本机引用已保留，可仅重试回答。');
@@ -384,6 +386,7 @@ export class RuntimeKnowledgeSession {
         if (result.citations.length === 0) { this.finish('empty', '本机知识库没有直接正文命中；未调用模型。'); return; }
         if (this.localOnly) {
           this.view.answer = '已找到 ' + result.citations.length.toString() + ' 条本机直接证据。请按编号核对下方原文片段。';
+          this.view.answerSource = 'local';
           this.finish('complete', '本机知识库检索已完成；片段未发送给外部模型。');
           return;
         }
@@ -454,7 +457,7 @@ export class RuntimeKnowledgeSession {
 function copyRuntimeKnowledgeView(value: RuntimeKnowledgeView): RuntimeKnowledgeView {
   const copy: RuntimeKnowledgeView = new RuntimeKnowledgeView();
   copy.lifecycle = value.lifecycle; copy.busy = value.busy; copy.stage = value.stage; copy.message = value.message;
-  copy.query = value.query; copy.answer = value.answer; copy.consent = value.consent;
+  copy.query = value.query; copy.answer = value.answer; copy.answerSource = value.answerSource; copy.consent = value.consent;
   copy.citations = value.citations.map((source: KnowledgeRuntimeCitation): KnowledgeRuntimeCitation => {
     const citation: KnowledgeRuntimeCitation = new KnowledgeRuntimeCitation(); citation.citationId = source.citationId;
     citation.evidenceId = source.evidenceId; citation.documentId = source.documentId;

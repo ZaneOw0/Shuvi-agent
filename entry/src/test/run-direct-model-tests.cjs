@@ -2558,6 +2558,69 @@ test('real RAG composition still discards retrieval cancelled during the query e
     assert.equal(h.trace.models, 0); assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
   } finally { gate.resolve(); await h.ui.stop(); }
 });
+const knowledgePresentation = load(path.join(services, 'RuntimeKnowledgePresentation.ets'));
+test('knowledge panel wording covers both RAG phases and only offers retry when the session would accept it', () => {
+  const { RuntimeKnowledgeView } = load(path.join(services, 'RuntimeKnowledgeSession.ets'));
+  const view = (fields) => Object.assign(new RuntimeKnowledgeView(), fields);
+  const two = [knowledgeCitation(1), knowledgeCitation(2)];
+  const cases = [
+    [{ stage:'idle' }, '未开始', '未开始'],
+    [{ stage:'retrieving', busy:true }, '检索中', '等待本机检索完成'],
+    [{ stage:'answering', busy:true, citations:two }, '已完成 · 2 条本机片段', 'DeepSeek 整理中'],
+    [{ stage:'complete', citations:two, answer:'回答 [1]', answerSource:'deepseek' }, '已完成 · 2 条本机片段', '已完成'],
+    [{ stage:'complete', citations:two, answer:'已找到 2 条', answerSource:'local' }, '已完成 · 2 条本机片段', '未调用 DeepSeek'],
+    [{ stage:'answerFailed', citations:two }, '已完成 · 2 条本机片段', '未完成，可仅重试回答'],
+    [{ stage:'insufficient', citations:two }, '已完成 · 2 条本机片段', '资料中没有足够依据'],
+    [{ stage:'empty' }, '没有可引用的片段', '未调用 DeepSeek'],
+    [{ stage:'retrievalFailed' }, '未完成', '未调用 DeepSeek'],
+    [{ stage:'stopped', citations:two, answer:'回答 [1]', answerSource:'deepseek' }, '已完成 · 2 条本机片段', '已完成'],
+    [{ stage:'stopped' }, '已停止', '已停止']
+  ];
+  for (const [fields, retrieval, answer] of cases) {
+    assert.equal(knowledgePresentation.knowledgeRetrievalStage(view(fields)), retrieval, fields.stage);
+    assert.equal(knowledgePresentation.knowledgeAnswerStage(view(fields)), answer, fields.stage);
+  }
+  const retryable = { stage:'answerFailed', lifecycle:ShuviRuntimeState.READY, consent:true, citations:two };
+  assert.equal(knowledgePresentation.knowledgeRetryAvailable(view(retryable)), true);
+  for (const blocked of [{ busy:true }, { consent:false }, { citations:[] }, { stage:'insufficient' },
+    { lifecycle:ShuviRuntimeState.STOPPED }]) {
+    assert.equal(knowledgePresentation.knowledgeRetryAvailable(view({ ...retryable, ...blocked })), false, JSON.stringify(blocked));
+  }
+  assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view({ answer:'回答 [1]', answerSource:'deepseek' })), true);
+  assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view({ answer:'已找到 1 条', answerSource:'local' })), false);
+  assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view({ answer:'', answerSource:'deepseek' })), false);
+});
+test('real RAG composition offers answer-only retry after a model failure and never re-runs retrieval', async () => {
+  const h = liveKnowledgeHarness({ failFirst:true }); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    let view = h.ui.snapshot();
+    assert.equal(view.stage, 'answerFailed', view.message); assert.equal(view.citations.length, 1);
+    assert.equal(knowledgePresentation.knowledgeRetryAvailable(view), true);
+    assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view), false);
+    await h.ui.retryAnswer(); await waitKnowledge(h.ui); view = h.ui.snapshot();
+    assert.equal(view.stage, 'complete', view.message); assert.equal(view.answerSource, 'deepseek');
+    assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view), true);
+    assert.equal(knowledgePresentation.knowledgeRetryAvailable(view), false);
+    assert.equal(h.trace.models, 2); assert.equal(stack.trace.embeddings, 1);
+    assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().answerSource, 'deepseek'); assert.equal(stack.trace.embeddings, 2);
+    h.ui.clearConversation(); assert.equal(h.ui.snapshot().answerSource, ''); assert.equal(h.ui.snapshot().answer, '');
+  } finally { await h.ui.stop(); }
+});
+test('real RAG composition shows insufficient evidence as a non-success without retry or model label', async () => {
+  const h = liveKnowledgeHarness({ modelText:'{"answer":"资料中没有足够依据","citations":[]}' });
+  const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    const view = h.ui.snapshot();
+    assert.equal(view.stage, 'insufficient', view.message); assert.equal(view.answer, ''); assert.equal(view.answerSource, '');
+    assert.equal(view.citations.length, 1); assert.equal(knowledgePresentation.knowledgeRetryAvailable(view), false);
+    assert.equal(knowledgePresentation.knowledgeAnswerStage(view), '资料中没有足够依据');
+  } finally { await h.ui.stop(); }
+});
 test('assistant coordinator consumes one caller key and gives isolated copies to PUBLIC chat and PERSONAL RAG', async () => {
   const trace = { chatKey:undefined, ragKey:undefined, chatStopped:0, ragStopped:0 }; let chatState = ShuviRuntimeState.IDLE;
   const fakeKnowledgeSession = { answerContext:{},

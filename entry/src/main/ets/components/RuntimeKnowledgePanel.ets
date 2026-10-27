@@ -1,6 +1,9 @@
 import { KnowledgeRuntimeCitation } from '../knowledge/domain/KnowledgeRuntimePorts';
 import { RuntimeKnowledgeService } from '../services/model/RuntimeKnowledgeService';
 import { RuntimeKnowledgeView } from '../services/model/RuntimeKnowledgeSession';
+import {
+  knowledgeAnswerIsModel, knowledgeAnswerStage, knowledgeRetrievalStage, knowledgeRetryAvailable
+} from '../services/model/RuntimeKnowledgePresentation';
 import { ShuviRuntimeState } from '../services/model/ShuviRuntimeController';
 import { Theme } from './Theme';
 
@@ -31,7 +34,39 @@ export struct RuntimeKnowledgePanel {
             else { this.onDisable(); }
           })
       }
-      if (this.view.query.length > 0) { Text('本次问题：' + this.view.query).fontSize(13).fontColor(Theme.ink).width('100%') }
+      if (this.view.query.length > 0) {
+        Text('本次问题：' + this.view.query).fontSize(13).fontColor(Theme.ink).width('100%')
+        Column({ space: 4 }) {
+          Text('本机检索：' + knowledgeRetrievalStage(this.view)).fontSize(13).fontColor(Theme.ink)
+            .id('runtime-knowledge-retrieval-stage')
+          Text('模型回答：' + knowledgeAnswerStage(this.view)).fontSize(13).fontColor(Theme.ink)
+            .id('runtime-knowledge-answer-stage')
+        }.alignItems(HorizontalAlign.Start).width('100%').padding(10).backgroundColor(Theme.inputSurface).borderRadius(10)
+      }
+      if (knowledgeAnswerIsModel(this.view)) {
+        Column({ space: 6 }) {
+          Text('DeepSeek 整理回答（依据下方片段，不是原始资料）').fontSize(12).fontColor(Theme.muted)
+            .id('runtime-knowledge-answer-label')
+          Text(this.view.answer).fontSize(15).fontColor(Theme.ink).width('100%').id('runtime-knowledge-answer')
+        }.alignItems(HorizontalAlign.Start).width('100%').padding(12).backgroundColor(Theme.bubble).borderRadius(12)
+      } else if (this.view.answer.length > 0) {
+        Text(this.view.answer).fontSize(15).fontColor(Theme.ink).width('100%').id('runtime-knowledge-local-answer')
+      }
+      if (this.view.stage === 'insufficient') {
+        Text('资料中没有足够依据。这不是成功的回答；下方是本机检索到的片段，供你核对。')
+          .fontSize(14).fontColor(Theme.amber).width('100%').padding(10)
+          .backgroundColor(Theme.warning).border({ width: 1, color: Theme.warningLine }).borderRadius(10)
+          .id('runtime-knowledge-insufficient')
+      }
+      if (knowledgeRetryAvailable(this.view)) {
+        Button('仅重试回答').constraintSize({ minHeight: 44 }).backgroundColor(Theme.soft).fontColor(Theme.accent)
+          .accessibilityText('仅重试 DeepSeek 回答，复用下方片段，不重新检索本机资料')
+          .id('runtime-knowledge-retry')
+          .onClick((): void => { void RuntimeKnowledgeService.session.retryAnswer(); })
+      }
+      if (this.view.citations.length > 0) {
+        Text('本机原始片段').fontSize(13).fontColor(Theme.muted).fontWeight(FontWeight.Medium)
+      }
       ForEach(this.view.citations, (citation: KnowledgeRuntimeCitation) => {
         Column({ space: 6 }) {
           Text('[' + citation.citationId.toString() + '] ' + citation.title).fontSize(14).fontColor(Theme.ink)
@@ -41,9 +76,6 @@ export struct RuntimeKnowledgePanel {
         }.alignItems(HorizontalAlign.Start).width('100%').padding(10)
           .border({ width: 1, color: Theme.line }).borderRadius(10)
       }, (citation: KnowledgeRuntimeCitation): string => citation.evidenceId)
-      if (this.view.answer.length > 0) {
-        Text(this.view.answer).fontSize(15).fontColor(Theme.ink).width('100%').id('runtime-knowledge-answer')
-      }
     }.width('100%').padding(16).alignItems(HorizontalAlign.Start).backgroundColor(Theme.surface)
       .borderRadius(16).border({ width: 1, color: Theme.line })
   }
