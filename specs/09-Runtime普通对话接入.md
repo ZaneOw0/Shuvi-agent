@@ -113,7 +113,7 @@
 ## 7. 已知限制与未覆盖项
 
 - 单轮普通对话，历史只在当前界面展示，不会发给模型；尚无 token 流式渲染、真实来源或知识库引用。
-- Key 仅本次会话可用；异常关闭和进程被回收无法保证远端取消，失败不能推断免费。
+- 会话凭据只在内存，随会话停止清除；用户可选择把 Key 记在本机系统安全存储，下次仍需手动点击启用（§8.5）。异常关闭和进程被回收无法保证远端取消，失败不能推断免费。
 - 暂不展示细分错误码和恢复历史；存储异常时可能需要关闭/重启排查，禁止清库“解决”。
 - 四项主要模拟器交互已有用户反馈，设备日志尚未归档；实际 HTTP 与持久化的设备级取证、离开助手页、最大字体、读屏及 OpenHarmony 真机仍待验收。
 
@@ -200,6 +200,17 @@
 - 证据（`.cache/`，不入库）：截图 `.cache/device-smoke/rag-emu-{embed-fail,embed-pass,imported,q1,q1-top,q4,q4-top,kb-history3}.jpeg`；日志 `.cache/test-logs/2026-10-27-rag-emulator-acceptance-710d1c0/hilog-transcribed.txt` 是验收过程中 `hdc shell hilog -x | grep` 即时输出的逐行转录（不含 Key），同目录 `hilog-shuvi-r2-netstack.txt` 是事后导出，缓冲已被覆盖，仅 2 行。
 - 结论：本节按 [协作约定第 7.0 节](../docs/01-协作与工程约定.md#70-测试日志必须落盘每次测试) 只记为模拟器人工验收与部分证据：设备日志不是经 `scripts/capture-test-log.sh` 完整落盘，R-02、R-03、L-01、B-01 主要依赖用户确认，因此状态保持“已实现待验收”。不能据此推断账单金额、真机行为或断网重试路径。
 - 复现：在嵌入模型页配置硅基流动 / `BAAI/bge-m3` → 保存配置与 Key → 勾选同意后“检测固定短句” → 勾选两项确认后“开启自动入库” → 知识库“文本文档”导入测试资料 → 助手页输入 DeepSeek Key 启用 → 打开“知识库”开关 → 依次提问上表问题。下次应在开始操作前，于电脑端持续接收设备日志并落盘，例如 PowerShell 中 `hdc -t 127.0.0.1:5555 shell hilog | Select-String 'SHUVI_R2|NETSTACK_RCP' | Out-File -Encoding utf8 .cache/test-logs/<日期>-rag-emulator-<提交>/hilog-stream.txt`（`hilog` 不加 `-x` 为持续输出），并在同目录记录提交、安装包与设备信息。
+
+### 8.5 可选“记住 DeepSeek Key”（2026-10-27）
+
+来源：开发者在会话中明确要求“给 DeepSeek Key 做记住 Key”。此前 Key 只在内存，每次启用都要重新输入。
+
+- 页面：真实对话启用卡与真实搜索启用卡共用新组件 `DeepSeekKeyField`。输入框下方新增“记住 Key（只保存在本机系统安全存储，不同步，可随时删除）”勾选，默认不勾选。已记住时显示“同意上述范围并启用（使用已记住的 Key）”和“删除已记住的 Key”（二次确认）；也可输入新 Key 并勾选替换。
+- 存储：`DeepSeekCredentialStore` 写入系统 Asset Store（与嵌入 Key 相同的平台能力，独立别名 `shuvi.deepseek.api-key.v1`），属性 `DEVICE_UNLOCKED`、`SyncType.NEVER`、`CONFLICT_RESOLUTION=THROW_ERROR`；只接受 1–2048 字节、不含空白与控制字符的可打印 ASCII。属性不符、多条记录或读取失败时一律不可用并提示重新输入；即使记录损坏也能删除。卸载应用随之清除，`install -r` 不清除。
+- 不变的约束：每次启用仍需用户点击并同意范围，不在启动或回到前台时自动启用；会话内的 Key 仍只在内存，离开助手页、退后台、切换模式、停止或用完 10 次后照旧结束会话、清除内存凭据。记住的 Key 不进入日志、提示词、数据库、截图或仓库；没有新增权限或依赖。
+- 宿主测试：`run-direct-model-tests.cjs` 新增 4 项（属性与每次读取都是新副本、再次保存为替换且删除幂等、非法输入不落盘、同步/损坏/读取失败时失败关闭），共 216/216。变异检查：把 `SyncType` 改为 `TRUSTED_DEVICE` 时 3 项失败，去掉字符校验时 2 项失败；去掉读取后的复制与清零不会被用例发现（平台每次查询本身返回新缓冲区，复制只是纵深防护）。
+- 构建：未签名 `assembleHap --no-daemon` 成功，0 ERROR；新文件仅有与嵌入 Key 存储相同的“Function may throw exceptions”提示，调用处已统一用 Promise `catch` 失败关闭。
+- 待验收：模拟器上勾选记住 → 退后台/重启后用“使用已记住的 Key”启用 → 删除后需重新输入；搜索启用卡同样验证。
 
 ## 9. 前端交接契约
 

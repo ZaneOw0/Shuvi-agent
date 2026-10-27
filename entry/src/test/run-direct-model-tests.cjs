@@ -3541,3 +3541,90 @@ test('vision start failure clears consent but preserves the selected image', asy
   assert.equal(view.imageName, 'screen.jpg'); assert(key.every(value => value === 0));
   await ui.stop(); assert.equal(ui.snapshot().imageReady, false);
 });
+
+// Opt-in "remember DeepSeek key": real store logic over an in-memory Asset Store shaped like the platform API.
+function deepSeekAssetKit() {
+  return { Tag:{ SECRET:1, ALIAS:2, ACCESSIBILITY:3, SYNC_TYPE:4, RETURN_TYPE:5, CONFLICT_RESOLUTION:6 },
+    ReturnType:{ ALL:0, ATTRIBUTES:1 }, Accessibility:{ DEVICE_POWERED_ON:0, DEVICE_FIRST_UNLOCKED:1, DEVICE_UNLOCKED:2 },
+    SyncType:{ NEVER:0, THIS_DEVICE:1, TRUSTED_DEVICE:2 }, ConflictResolution:{ OVERWRITE:0, THROW_ERROR:1 } };
+}
+function memoryDeepSeekAssets(asset, options = {}) {
+  const rows = new Map(); const calls = { add:0, update:0, remove:0 };
+  const alias = query => new TextDecoder().decode(query.get(asset.Tag.ALIAS));
+  return { rows, calls,
+    async query(query) {
+      if (options.queryError) throw { code: options.queryError };
+      const row = rows.get(alias(query)); if (!row) throw { code: 24000002 };
+      const copy = new Map(row);
+      if (query.get(asset.Tag.RETURN_TYPE) === asset.ReturnType.ATTRIBUTES) copy.delete(asset.Tag.SECRET);
+      else copy.set(asset.Tag.SECRET, row.get(asset.Tag.SECRET).slice());
+      return [copy];
+    },
+    async add(attributes) {
+      calls.add++; const key = alias(attributes); if (rows.has(key)) throw { code: 24000003 };
+      const row = new Map(attributes); row.set(asset.Tag.SECRET, attributes.get(asset.Tag.SECRET).slice()); rows.set(key, row);
+    },
+    async update(query, attributes) {
+      calls.update++; const row = rows.get(alias(query)); if (!row) throw { code: 24000002 };
+      row.set(asset.Tag.SECRET, attributes.get(asset.Tag.SECRET).slice());
+    },
+    async remove(query) { calls.remove++; if (!rows.delete(alias(query))) throw { code: 24000002 }; }
+  };
+}
+function loadDeepSeekKeyStore(options = {}) {
+  const asset = deepSeekAssetKit();
+  const module = load(path.join(services, 'DeepSeekCredentialStore.ets'), {
+    '@kit.AssetStoreKit': { asset }, '@kit.ArkTS': { util: { TextEncoder: Encoder } }, '@kit.BasicServicesKit': {}
+  });
+  const backend = memoryDeepSeekAssets(asset, options);
+  return { asset, backend, store: new module.DeepSeekCredentialStore(backend), ...module };
+}
+const keyBytes = text => new TextEncoder().encode(text);
+const keyText = bytes => new TextDecoder().decode(bytes);
+test('remembered DeepSeek key is stored device-unlocked and never synced, and each load is a fresh copy', async () => {
+  const { asset, backend, store, DeepSeekKeyStatus, DEEPSEEK_KEY_ALIAS } = loadDeepSeekKeyStore();
+  assert.equal(await store.status(), DeepSeekKeyStatus.Missing); assert.equal(await store.load(), undefined);
+  const key = keyBytes('sk-test-only-0001');
+  await store.save(key);
+  assert.equal(keyText(key), 'sk-test-only-0001', 'the caller keeps and later clears its own buffer');
+  assert.equal(await store.status(), DeepSeekKeyStatus.Saved);
+  const row = backend.rows.get(DEEPSEEK_KEY_ALIAS);
+  assert.equal(row.get(asset.Tag.ACCESSIBILITY), asset.Accessibility.DEVICE_UNLOCKED);
+  assert.equal(row.get(asset.Tag.SYNC_TYPE), asset.SyncType.NEVER);
+  assert.equal(row.get(asset.Tag.CONFLICT_RESOLUTION), asset.ConflictResolution.THROW_ERROR);
+  const first = await store.load(); const second = await store.load();
+  assert.equal(keyText(first), 'sk-test-only-0001'); assert.notEqual(first, second);
+  first.fill(0);
+  assert.equal(keyText(second), 'sk-test-only-0001', 'a session clearing its copy does not affect the next start');
+  assert.equal(keyText(backend.rows.get(DEEPSEEK_KEY_ALIAS).get(asset.Tag.SECRET)), 'sk-test-only-0001');
+});
+test('saving again replaces the single remembered DeepSeek key and remove clears it idempotently', async () => {
+  const { backend, store, DeepSeekKeyStatus } = loadDeepSeekKeyStore();
+  await store.save(keyBytes('sk-old-key-0001')); await store.save(keyBytes('sk-new-key-0002'));
+  assert.equal(backend.calls.add, 1); assert.equal(backend.calls.update, 1); assert.equal(backend.rows.size, 1);
+  assert.equal(keyText(await store.load()), 'sk-new-key-0002');
+  await store.remove(); assert.equal(await store.status(), DeepSeekKeyStatus.Missing); assert.equal(await store.load(), undefined);
+  await store.remove(); assert.equal(backend.calls.remove, 1);
+});
+test('remembered DeepSeek key rejects empty, spaced, control and oversized input without storing anything', async () => {
+  const { backend, store, DeepSeekKeyStatus } = loadDeepSeekKeyStore();
+  for (const bad of ['', 'sk test', 'sk-\n1', '密钥', 'x'.repeat(2049)]) {
+    await assert.rejects(store.save(keyBytes(bad)), /INVALID_KEY/);
+  }
+  assert.equal(backend.rows.size, 0); assert.equal(backend.calls.add, 0);
+  await store.save(keyBytes('x'.repeat(2048))); assert.equal(await store.status(), DeepSeekKeyStatus.Saved);
+});
+test('remembered DeepSeek key fails closed on synced, damaged or unreadable records', async () => {
+  const { asset, backend, store, DeepSeekKeyStatus, DEEPSEEK_KEY_ALIAS } = loadDeepSeekKeyStore();
+  const plant = (secret, sync) => backend.rows.set(DEEPSEEK_KEY_ALIAS, new Map([[asset.Tag.ALIAS, keyBytes(DEEPSEEK_KEY_ALIAS)],
+    [asset.Tag.SECRET, keyBytes(secret)], [asset.Tag.ACCESSIBILITY, asset.Accessibility.DEVICE_UNLOCKED], [asset.Tag.SYNC_TYPE, sync]]));
+  plant('sk-planted-0001', asset.SyncType.TRUSTED_DEVICE);
+  assert.equal(await store.status(), DeepSeekKeyStatus.Unavailable);
+  await assert.rejects(store.load(), /ATTRIBUTES/); await assert.rejects(store.save(keyBytes('sk-new-key-0003')), /ATTRIBUTES/);
+  await store.remove(); assert.equal(await store.status(), DeepSeekKeyStatus.Missing, 'a damaged record can still be deleted');
+  plant('sk bad\u0000', asset.SyncType.NEVER);
+  assert.equal(await store.status(), DeepSeekKeyStatus.Saved); assert.equal(await store.load(), undefined);
+  const failing = loadDeepSeekKeyStore({ queryError: 24000010 });
+  assert.equal(await failing.store.status(), failing.DeepSeekKeyStatus.Unavailable);
+  await assert.rejects(failing.store.load(), /QUERY/); await assert.rejects(failing.store.save(keyBytes('sk-ok-key-0004')), /QUERY/);
+});

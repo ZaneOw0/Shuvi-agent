@@ -1,5 +1,5 @@
-import util from '@ohos.util';
 import { Theme } from './Theme';
+import { DeepSeekKeyField } from './DeepSeekKeyField';
 import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { RuntimeSearchView } from '../services/model/RuntimeSearchSession';
 import { ShuviRuntimeState } from '../services/model/ShuviRuntimeController';
@@ -8,13 +8,9 @@ import { SourceLinkService } from '../services/SourceLinkService';
 
 @Component
 export struct RuntimeSearchPanel {
-  @Prop @Watch('clearInput') view: RuntimeSearchView = new RuntimeSearchView();
-  @State apiKey: string = '';
+  @Prop view: RuntimeSearchView = new RuntimeSearchView();
   @State linkMessage: string = '';
-  private clearEpoch: number = -1;
   onStart: (key: Uint8Array) => void = (_key: Uint8Array): void => {};
-  private clearInput(): void { if (this.clearEpoch !== this.view.clearEpoch) { this.apiKey = ''; this.clearEpoch = this.view.clearEpoch; } }
-  aboutToDisappear(): void { this.apiKey = ''; }
   build() {
     Column({ space: 10 }) {
       Text('真实联网搜索 · 单次调试').fontSize(16).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
@@ -25,16 +21,8 @@ export struct RuntimeSearchPanel {
           .fontSize(13).fontColor(Theme.muted)
         Text('账户 shuvi-dev-tavily · 账单币种 CNY。最多一次未核账搜索，重启不重置；失败、取消也可能占用额度。模型沿用 USD 0.01/次估算准入，实际扣款另核对。')
           .fontSize(12).fontColor(Theme.muted)
-        TextInput({ text: this.apiKey, placeholder: 'DeepSeek API Key，仅本次会话' })
-          .type(InputType.Password).showPasswordIcon(false).copyOption(CopyOptions.None).selectionMenuHidden(false)
-          .enableAutoFill(false).enablePreviewText(false).maxLength(2048).onChange((value: string): void => { this.apiKey = value; })
-          .accessibilityText('搜索回答使用的 DeepSeek API Key，允许粘贴').id('runtime-search-key')
-        Button('同意上述范围并连接').enabled(this.apiKey.trim().length > 0).constraintSize({ minHeight: 44 })
-          .backgroundColor(Theme.accent).fontColor(Color.White).id('runtime-search-enable')
-          .onClick((): void => {
-            const bytes = new util.TextEncoder().encodeInto(this.apiKey); this.apiKey = '';
-            try { this.onStart(bytes); } catch { bytes.fill(0); }
-          })
+        DeepSeekKeyField({ clearEpoch: this.view.clearEpoch, enableLabel: '同意上述范围并连接', idPrefix: 'runtime-search',
+          purpose: '搜索回答', onKey: (key: Uint8Array): void => { this.onStart(key); } })
       }
       if (this.view.preview !== undefined) {
         Text('允许发送以下关键词？').fontSize(15).fontWeight(FontWeight.Medium).fontColor(Theme.ink)

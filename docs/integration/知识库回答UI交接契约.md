@@ -7,9 +7,9 @@
 ## 1. 边界
 
 - 前端通过 `RuntimeAssistantCoordinator` 启停组合会话，通过 `RuntimeKnowledgeService.session.send(...)` 发送 RAG 问题；不直接调用 Provider、Runtime、RDB 或知识库仓储。
-- 前端不读取、不记录、不持久化 API Key；Key 以 `Uint8Array` 传入后端，后端消费并清零。
+- 前端不记录 API Key；只有用户勾选“记住 Key”时，`DeepSeekKeyField` 才把它存入本机系统 Asset Store（`DEVICE_UNLOCKED`、不同步、可删除，见 spec 09 §8.5）。每次启用仍需用户点击；Key 以 `Uint8Array` 传入后端，后端消费并清零。
 - 用户点击现有“知识库”开关即表示允许当前会话按既有 Embedding 设置处理问题；关闭开关立即撤销新问题的 RAG 使用权，但保留普通聊天会话。
-- Embedding Provider 的 Key 与 DeepSeek Key 是两套凭据：前者继续由知识库设置和 AssetStore 管理，后者只保留在本次 Runtime 会话内。
+- Embedding Provider 的 Key 与 DeepSeek Key 是两套凭据：前者继续由知识库设置和 AssetStore 管理，后者在会话中只存在内存，用户也可选择把它记在本机 Asset Store（独立别名，与嵌入 Key 互不共用）。
 - 聊天 RAG 的问题与片段只显示在聊天面板、回答写入 `shuvi_knowledge_answer_v1.db`，**不写入知识库页面的检索历史**（`EphemeralQueryHistory`）。
 - 后端不负责页面布局、视觉样式、动画、无障碍朗读和截图验收；这些由前端负责。
 
