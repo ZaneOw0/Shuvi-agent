@@ -18,7 +18,10 @@ class Decoder {
 }
 const nativeModules = {
   '@ohos.net.http': http,
-  '@ohos.util': { TextEncoder: Encoder, TextDecoder: Decoder, generateRandomUUID: () => crypto.randomUUID() },
+  '@ohos.util': { TextEncoder: Encoder, TextDecoder: Decoder, generateRandomUUID: () => crypto.randomUUID(),
+    Type: { BASIC: 0 }, Base64Helper: class {
+      async encodeToString(bytes) { return Buffer.from(bytes).toString('base64'); }
+    } },
   '@ohos.security.asset': {},
   '@kit.BasicServicesKit': {},
   '@ohos.app.ability.common': {},
@@ -1348,6 +1351,8 @@ test('lifecycle view observes background and cleanup, detaches, and cannot break
 const chatAssembly = load(path.join(services, 'ChatRuntimeAssembly.ets'));
 const { ChatExecutionStore } = load(path.join(services, 'ChatExecutionStore.ets'));
 const { RuntimeChatSession } = load(path.join(services, 'RuntimeChatSession.ets'));
+const calendarContract = load(path.join(services, '../calendar/CalendarDraftContract.ets'));
+const { CalendarDraftSession } = load(path.join(services, '../calendar/CalendarDraftSession.ets'));
 function chatJournalBackend() {
   const h = { value: undefined, fail: false };
   h.port = { async initialize() {}, async load() { return h.value; }, async compareAndSet(rev, next) {
@@ -1358,6 +1363,7 @@ function chatJournalBackend() {
 function chatHarness(options = {}) {
   const journalBackend = chatJournalBackend();
   let journal; let calls = 0; let closed = 0; let modelCancelled = 0;
+  const requests = []; const proposals = [];
   class Resource {
     closed = false;
     async open() { journal = new ChatExecutionStore(journalBackend.port, new AgentHostDigest()); await journal.open(); }
@@ -1375,10 +1381,11 @@ function chatHarness(options = {}) {
       calls++;
       assert.equal(request.authorization, 'Bearer test-only-key');
       const body = JSON.parse(request.body); assert.equal(body.model, 'deepseek-flash');
+      requests.push(body);
       assert.equal(body.messages.length, 2); assert.equal(body.max_tokens, 1024); assert.equal(body.tools, undefined);
       const result = options.gate ? options.gate.promise : Promise.resolve({ statusCode: options.status || 200,
         body: JSON.stringify({ object: 'chat.completion', model: 'deepseek-flash', choices: [{index: 0,
-          message: {role: 'assistant', content: options.text || 'Test model answer'}, finish_reason: options.finish || 'stop'}],
+          message: {role: 'assistant', content: options.texts?.[calls - 1] || options.text || 'Test model answer'}, finish_reason: options.finish || 'stop'}],
           usage: {prompt_tokens: 52, completion_tokens: 18, total_tokens: 70} }) });
       return {result, cancel() { modelCancelled++; }};
     }
@@ -1388,8 +1395,12 @@ function chatHarness(options = {}) {
     './DeepSeekHttpClient': { ArkTsDeepSeekHttpClient: Client }
   });
   const controller = new ShuviRuntimeController(); controller.onForeground();
-  const ui = new RuntimeChatSession(controller);
-  return {ui, controller, journalBackend, factory: new assembly.ChatRuntimeFactory({}, true),
+  const {AssistantRuntimeSession} = load(path.join(services,'../calendar/AssistantRuntimeSession.ets'));
+  const ui = options.assistant ? new AssistantRuntimeSession(controller) : options.calendar ? new CalendarDraftSession(controller) : new RuntimeChatSession(controller);
+  if (options.calendar) ui.attach(() => {}, proposal => proposals.push(proposal));
+  return {ui, controller, journalBackend, requests, proposals,
+    factory: new assembly.ChatRuntimeFactory({}, true, options.calendar || options.assistant ? ui.context : undefined,
+      options.assistant ? assembly.ChatPurpose.ASSISTANT : options.calendar ? assembly.ChatPurpose.CALENDAR_DRAFT : assembly.ChatPurpose.PUBLIC_CHAT),
     calls: () => calls, closed: () => closed, cancelled: () => modelCancelled, store: () => journal};
 }
 async function waitChat(ui) {
@@ -1821,6 +1832,983 @@ test('search quota is enforced before dispatch even when two tasks already await
   } finally { await session.stop(); }
 });
 
+// Knowledge UX integration: actual Runtime, durable zero-cost grant verifier, local retrieval and PERSONAL answer.
+const knowledgeSupport = load(path.join(services, 'KnowledgeTaskSupport.ets'));
+const knowledgeAnswerSupport = load(path.join(services, 'KnowledgeAnswerTaskSupport.ets'));
+const { KnowledgeAnswerExecutionStore, KnowledgeAnswerExecutionResource } = load(path.join(services, 'KnowledgeAnswerExecutionStore.ets'));
+const { RuntimeKnowledgeSession } = load(path.join(services, 'RuntimeKnowledgeSession.ets'));
+function knowledgeJournalBackend() {
+  const h = { value: undefined, fail: false };
+  h.port = { async initialize() {}, async load() { return h.value; }, async compareAndSet(rev, next) {
+    if (h.fail || rev !== (h.value?.revision || 0)) return false;
+    h.value = structuredClone(next); return true;
+  } }; return h;
+}
+function knowledgeModelResponse(text, status = 200) {
+  if (status !== 200) return { statusCode: status, body: JSON.stringify({ error: { message: 'private provider body' } }) };
+  return { statusCode: 200, body: JSON.stringify({ object: 'chat.completion', model: 'deepseek-flash',
+    choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }) };
+}
+function knowledgeCitation(id = 1, excerpt = '本机知识库片段说明 Runtime 采用持久化执行记录。') {
+  return { citationId: id, evidenceId: 'internal-evidence-' + id, documentId: 'upd-internal-document',
+    generation: 'generation-internal-' + id, title: '本机笔记 ' + id, excerpt, kind: 'Text', evidence: 'BodyDirect' };
+}
+function knowledgeCitations(options = {}) {
+  if (options.empty) return [];
+  if (options.tagOnly) { const item = knowledgeCitation(); item.evidence = 'Tag'; return [item]; }
+  if (options.badEvidence) { const item = knowledgeCitation(); item.excerpt = ''; return [item]; }
+  if (options.twoCitations) return [knowledgeCitation(1), knowledgeCitation(2, '第二条本机片段用于引用编号校验。')];
+  return [knowledgeCitation()];
+}
+function liveKnowledgeHarness(options = {}) {
+  const toolDb = writableRdb(); const answerBackend = knowledgeJournalBackend();
+  const trace = { searches: 0, models: 0, acquired: 0, released: 0, answerOpened: 0, answerClosed: 0,
+    modelCancelled: 0, bodies: [] };
+  let journal;
+  const assemblyPort = {
+    async acquire() { trace.acquired++; }, async release() { trace.released++; },
+    runtimeSearch: { async search(request) {
+      trace.searches++;
+      if (options.searchFail) throw Error('private local failure');
+      if (options.searchGate) await options.searchGate.promise;
+      if (options.failToolOutcome) { toolDb.failWrites = true; }
+      return { schemaVersion: '1.0', provider: 'shuvi-local-knowledge', query: request.query, route: 'local-direct',
+        citations: knowledgeCitations(options) };
+    } }
+  };
+  class FakeKnowledgeAssembly { static forContext() { return assemblyPort; } }
+  class AnswerResource {
+    closed = false;
+    async open() {
+      trace.answerOpened++; journal = new KnowledgeAnswerExecutionStore(answerBackend.port, new AgentHostDigest());
+      await journal.open();
+    }
+    async close() { if (!this.closed) trace.answerClosed++; this.closed = true; }
+    saveCheckpoint(...args) { return journal.saveCheckpoint(...args); }
+    loadCheckpoint(...args) { return journal.loadCheckpoint(...args); }
+    beforeDispatch(...args) { return journal.beforeDispatch(...args); }
+    async recordOutcome(...args) {
+      try {
+        const result = await journal.recordOutcome(...args);
+        if (!result.accepted && !result.duplicate) this.onOutcomeRejected(args[0]);
+        return result;
+      } catch (error) { this.onOutcomeRejected(args[0]); throw error; }
+    }
+    recordDispatchRejected(...args) { return journal.recordDispatchRejected(...args); }
+    normalizeRecoveredOperation(...args) { return journal.normalizeRecoveredOperation(...args); }
+    recordReconciliation(...args) { return journal.recordReconciliation(...args); }
+  }
+  class ModelClient {
+    start(request) {
+      trace.models++; assert.equal(request.authorization, 'Bearer test-only-key');
+      trace.bodies.push(JSON.parse(request.body));
+      if (options.failAnswerWriteAfterModel) answerBackend.fail = true;
+      if (options.modelGate) return { result: options.modelGate.promise, cancel() { trace.modelCancelled++; } };
+      const firstFailure = options.failFirst && trace.models === 1;
+      const status = firstFailure ? 401 : (options.modelStatus || 200);
+      return { result: Promise.resolve(knowledgeModelResponse(options.modelText || '{"answer":"依据本机片段回答 [1]","citations":[1]}', status)),
+        cancel() { trace.modelCancelled++; } };
+    }
+  }
+  const toolAssembly = load(path.join(services, 'KnowledgeRuntimeAssembly.ets'), {
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly: FakeKnowledgeAssembly }
+  });
+  const answerAssembly = load(path.join(services, 'KnowledgeAnswerRuntimeAssembly.ets'), {
+    './KnowledgeAnswerExecutionStore': { KnowledgeAnswerExecutionResource: AnswerResource },
+    './DeepSeekHttpClient': { ArkTsDeepSeekHttpClient: ModelClient }
+  });
+  const ui = new RuntimeKnowledgeSession(); ui.onForeground();
+  const toolFactory = new toolAssembly.KnowledgeRuntimeFactory({ open(config) { return toolDb.opener.open(config); } }, assemblyPort, true,
+    (taskId) => ui.toolOutcomeRejected(taskId));
+  const answerFactory = new answerAssembly.KnowledgeAnswerRuntimeFactory({}, true, ui.answerContext,
+    (taskId) => ui.answerOutcomeRejected(taskId));
+  return { ui, toolFactory, answerFactory, trace, toolDb, answerBackend, assemblyPort, async start(consent = true) {
+    const key = new TextEncoder().encode('test-only-key');
+    await ui.start(toolFactory, answerFactory, key, consent);
+    if (consent) assert.equal(ui.snapshot().lifecycle, ShuviRuntimeState.READY, ui.snapshot().message);
+    assert(key.every(value => value === 0), 'knowledge session must consume the key');
+  } };
+}
+async function waitKnowledge(ui, predicate = view => !view.busy) {
+  for (let i = 0; i < 200; i++) { if (predicate(ui.snapshot())) return; await new Promise(resolve => setTimeout(resolve, 2)); }
+  assert.fail('Knowledge state did not arrive: ' + JSON.stringify(ui.snapshot()));
+}
+async function waitKnowledgeModel(ui) {
+  for (let i = 0; i < 200 && ui.snapshot().stage !== 'answering'; i++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert.equal(ui.snapshot().stage, 'answering', JSON.stringify(ui.snapshot()));
+}
+test('knowledge UX auto-authorizes one zero-cost local read, then persists one PERSONAL answer', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  try {
+    assert.equal(h.trace.searches, 0); assert.equal(h.trace.models, 0);
+    assert.equal(await h.ui.send('same query'), true);
+    await waitKnowledge(h.ui);
+    assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 1);
+    assert.equal(h.ui.snapshot().stage, 'complete');
+    assert.equal(h.ui.snapshot().citations[0].evidenceId, 'internal-evidence-1');
+    assert.match(h.ui.snapshot().answer, /\[1\]/); assert.match(h.ui.snapshot().message, /本机检索与 DeepSeek 回答均已完成/);
+    assert.equal(h.toolDb.opens[0].name, 'shuvi_knowledge_runtime_v1.db'); assert.equal(h.toolDb.opens[0].encrypt, true);
+    const toolPayload = JSON.parse(h.toolDb.envelope.payloadJson); assert.equal(toolPayload.operations.length, 1);
+    assert.equal(toolPayload.operations[0].state, invoiceCore.OperationJournalState.COMMITTED);
+    assert.equal(toolPayload.operations[0].invoice, undefined); assert.equal(toolPayload.operations[0].pendingInvoice, undefined);
+    const answerPayload = JSON.parse(h.answerBackend.value.payloadJson); assert.equal(answerPayload.records.length, 1);
+    assert.equal(answerPayload.records[0].checkpoint.envelope.privacyClass, contracts.PrivacyClass.PERSONAL);
+    assert.equal(answerPayload.records[0].checkpoint.workflow.steps[0].stepId, 'knowledge-answer');
+    assert.equal(answerPayload.records[0].outcome.status, contracts.ToolOutcomeStatus.SUCCEEDED);
+    assert(!JSON.stringify(answerPayload).includes('test-only-key'));
+  } finally { await h.ui.stop(); }
+  assert.equal(h.trace.acquired, 1); assert.equal(h.trace.released, 1);
+  assert.equal(h.trace.answerOpened, 1); assert.equal(h.trace.answerClosed, 1);
+});
+test('knowledge empty and failed reads never fabricate citations or an answer', async () => {
+  for (const options of [{empty:true},{searchFail:true}]) {
+    const h = liveKnowledgeHarness(options); await h.start();
+    try {
+      await h.ui.send('same query'); await waitKnowledge(h.ui);
+      assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 0);
+      assert.equal(h.ui.snapshot().citations.length, 0);
+      assert.equal(h.ui.snapshot().answer, '');
+      assert.equal(h.ui.snapshot().stage, options.empty ? 'empty' : 'retrievalFailed');
+    } finally { await h.ui.stop(); }
+  }
+});
+test('knowledge result parser rejects tag-only, duplicate or unstable evidence and mismatched questions', () => {
+  const base = { schemaVersion:'1.0', provider:'shuvi-local-knowledge', query:'q', route:'local-direct', citations:[
+    {citationId:1,evidenceId:'e1',documentId:'d1',generation:'g1',title:'t',excerpt:'body',kind:'Text',evidence:'BodyDirect'}] };
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify(base),'q').citations.length,1);
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify(base),'other'),undefined);
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify({...base,citations:[{...base.citations[0],evidence:'Tag'}]}),'q'),undefined);
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify({...base,citations:[base.citations[0],
+    {...base.citations[0],citationId:2}]}),'q'),undefined);
+  const four={...base,citations:[1,2,3,4].map(i=>({...base.citations[0],citationId:i,evidenceId:'e'+i,excerpt:'x'.repeat(800)}))};
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify(four),'q').citations.length,4);
+  const five={...base,citations:[1,2,3,4,5].map(i=>({...base.citations[0],citationId:i,evidenceId:'e5-'+i,excerpt:'x'.repeat(800)}))};
+  assert.equal(knowledgeSupport.parseKnowledgeToolResult(JSON.stringify(five),'q'),undefined);
+});
+test('knowledge local-only mode keeps the citations-only page path and never calls the model', async () => {
+  const h = liveKnowledgeHarness(); await h.ui.startLocal(h.toolFactory);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY);
+  assert.equal(h.trace.answerOpened, 0);
+  await h.ui.send('same query'); await waitKnowledge(h.ui);
+  assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 0);
+  assert.equal(h.ui.snapshot().stage, 'complete');
+  assert.equal(h.ui.snapshot().citations.length, 1);
+  assert.match(h.ui.snapshot().answer, /1 条/);
+  await h.ui.stop();
+});
+test('knowledge local-only stop leaves the idle prompt and never claims a model request', async () => {
+  const idle = liveKnowledgeHarness();
+  await idle.ui.stop();
+  assert.equal(idle.ui.snapshot().lifecycle, ShuviRuntimeState.IDLE);
+  assert.match(idle.ui.snapshot().message, /尚未启用/);
+  const h = liveKnowledgeHarness(); await h.ui.startLocal(h.toolFactory);
+  await h.ui.send('same query'); await waitKnowledge(h.ui);
+  await h.ui.stop();
+  assert.match(h.ui.snapshot().message, /未发送模型请求/);
+  assert.doesNotMatch(h.ui.snapshot().message, /模型请求仍可能计费/);
+});
+test('knowledge answer startup failure rolls back the tool session and keeps prior citations', async () => {
+  const h = liveKnowledgeHarness(); await h.ui.startLocal(h.toolFactory);
+  await h.ui.send('same query'); await waitKnowledge(h.ui);
+  const previous = h.ui.snapshot().citations.length;
+  await h.ui.stop();
+  const failing = { create() { throw Error('injected answer start failure'); } };
+  const key = new TextEncoder().encode('test-only-key');
+  await h.ui.start(h.toolFactory, failing, key, true);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.FAILED, h.ui.snapshot().message);
+  assert.match(h.ui.snapshot().message, /启动失败/);
+  assert.equal(h.ui.snapshot().consent, false);
+  assert.equal(h.ui.snapshot().citations.length, previous);
+  assert(key.every(value => value === 0));
+  assert.equal(h.trace.answerOpened, 0);
+  assert.equal(h.trace.released, 2);
+});
+test('knowledge answer startup close failure keeps the BLOCKED recovery message', async () => {
+  const h = liveKnowledgeHarness();
+  h.assemblyPort.release = async () => { throw Error('injected close failure'); };
+  const failing = { create() { throw Error('injected answer start failure'); } };
+  await h.ui.start(h.toolFactory, failing, new TextEncoder().encode('test-only-key'), true);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.BLOCKED);
+  assert.match(h.ui.snapshot().message, /资源关闭未确认/);
+  assert.doesNotMatch(h.ui.snapshot().message, /启动失败/);
+});
+test('knowledge cancel during retrieval never calls the model and ignores late evidence', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ searchGate: gate }); await h.start();
+  try {
+    await h.ui.send('same query');
+    for (let i = 0; i < 200 && h.trace.searches === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(h.trace.searches, 1);
+    await h.ui.cancelCurrent();
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    assert.equal(h.ui.snapshot().citations.length, 0);
+    gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.trace.models, 0);
+    assert.equal(h.ui.snapshot().citations.length, 0);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge cancel during retrieval suppresses a completion that arrives while cancel is pending', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ searchGate: gate }); await h.start();
+  const originalCancel = h.ui.knowledge.cancel.bind(h.ui.knowledge);
+  let releaseCancel; let cancelStarted = false;
+  h.ui.knowledge.cancel = async (taskId) => {
+    cancelStarted = true; gate.resolve();
+    await new Promise(resolve => { releaseCancel = resolve; });
+    return originalCancel(taskId);
+  };
+  try {
+    await h.ui.send('same query');
+    for (let i = 0; i < 200 && h.trace.searches === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    const pending = h.ui.cancelCurrent();
+    for (let i = 0; i < 200 && !cancelStarted; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    assert.equal(h.trace.models, 0);
+    if (releaseCancel) releaseCancel();
+    await pending;
+    assert.equal(h.trace.models, 0);
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+  } finally { if (releaseCancel) releaseCancel(); await h.ui.stop(); }
+});
+test('knowledge submit failure after acceptance cancels the orphan task', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  const originalCancel = h.ui.knowledge.cancel.bind(h.ui.knowledge);
+  let cancelled = ''; h.ui.knowledge.cancel = async (taskId) => { cancelled = taskId; return originalCancel(taskId); };
+  h.ui.knowledge.subscribe = async () => { throw Error('injected subscribe failure'); };
+  try {
+    await h.ui.send('same query'); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    assert(cancelled.length > 0);
+    assert.equal(h.trace.models, 0);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge answer stops after ten model calls and refuses the eleventh question before retrieval', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  try {
+    for (let i = 0; i < 10; i++) { assert.equal(await h.ui.send('same query'), true); await waitKnowledge(h.ui); }
+    assert.equal(h.trace.searches, 10); assert.equal(h.trace.models, 10); assert.equal(h.ui.snapshot().requestCount, 10);
+    assert.equal(await h.ui.send('same query'), false);
+    assert.equal(h.trace.searches, 10); assert.equal(h.trace.models, 10);
+    assert.match(h.ui.snapshot().message, /已用完 10 次/); assert.equal(h.ui.snapshot().busy, false);
+    assert.equal(h.ui.snapshot().citations.length, 1);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge answer blocks unconsented use and enable never calls the model', async () => {
+  const denied = liveKnowledgeHarness(); await denied.start(false);
+  assert.notEqual(denied.ui.snapshot().lifecycle, ShuviRuntimeState.READY);
+  assert.equal(denied.ui.snapshot().consent, false);
+  assert.equal(denied.trace.searches, 0); assert.equal(denied.trace.models, 0);
+  assert.equal(await denied.ui.send('same query'), false);
+  const h = liveKnowledgeHarness(); await h.start();
+  try {
+    assert.equal(h.ui.snapshot().consent, true);
+    assert.equal(h.trace.searches, 0); assert.equal(h.trace.models, 0);
+    assert.equal(h.trace.answerOpened, 1);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge retrieval precedes the model and empty results never call it', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ searchGate: gate }); await h.start();
+  try {
+    const first = h.ui.send('same query');
+    assert.equal(await h.ui.send('duplicate query'), false);
+    await first;
+    for (let i = 0; i < 200 && h.trace.searches === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 0);
+    gate.resolve(); await waitKnowledge(h.ui);
+    assert.equal(h.trace.models, 1); assert.equal(h.ui.snapshot().stage, 'complete');
+  } finally { await h.ui.stop(); }
+  const empty = liveKnowledgeHarness({ empty: true }); await empty.start();
+  try {
+    await empty.ui.send('same query'); await waitKnowledge(empty.ui);
+    assert.equal(empty.trace.searches, 1); assert.equal(empty.trace.models, 0);
+    assert.equal(empty.ui.snapshot().stage, 'empty'); assert.equal(empty.ui.snapshot().citations.length, 0);
+  } finally { await empty.ui.stop(); }
+});
+test('knowledge tag-only, invalid evidence and retrieval failure never call the model', async () => {
+  for (const options of [{tagOnly:true},{badEvidence:true},{searchFail:true}]) {
+    const h = liveKnowledgeHarness(options); await h.start();
+    try {
+      await h.ui.send('same query'); await waitKnowledge(h.ui);
+      assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 0);
+      assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+      assert.equal(h.ui.snapshot().answer, '');
+    } finally { await h.ui.stop(); }
+  }
+});
+test('knowledge answer sends only the question, short titles and excerpts under PERSONAL', async () => {
+  const h = liveKnowledgeHarness({ twoCitations: true }); await h.start();
+  try {
+    await h.ui.send('本机问题'); await waitKnowledge(h.ui);
+    assert.equal(h.trace.models, 1);
+    const body = h.trace.bodies[0]; assert.equal(body.messages.length, 2);
+    const user = body.messages[1].content;
+    assert.match(user, /本机问题/); assert.match(user, /\[1\]/); assert.match(user, /\[2\]/);
+    assert.match(user, /本机笔记/); assert.match(user, /第二条本机片段/);
+    for (const forbidden of ['internal-evidence-1','internal-evidence-2','upd-internal-document',
+      'generation-internal','sourceHash','documentId','evidenceId','/data/','shuvi_','native://']) {
+      assert(!user.includes(forbidden), 'prompt leaked ' + forbidden);
+    }
+    assert.equal(body.response_format.type, 'json_object');
+    const payload = JSON.parse(h.answerBackend.value.payloadJson);
+    assert.equal(payload.records[0].checkpoint.envelope.privacyClass, contracts.PrivacyClass.PERSONAL);
+  } finally { await h.ui.stop(); }
+});
+test('ordinary chat remains PUBLIC while knowledge answer planning requires PERSONAL', async () => {
+  assert.equal(chatAssembly.chatFrontendConfig().privacyClass, contracts.PrivacyClass.PUBLIC);
+  const chatPlanner = new chatAssembly.ChatPlanner();
+  const personal = new runtime.PlanningRequest();
+  personal.envelope.taskId = 'task-personal'; personal.envelope.userIntent = 'question';
+  personal.envelope.privacyClass = contracts.PrivacyClass.PERSONAL;
+  assert.equal((await chatPlanner.plan(personal)).status, runtime.PlanningStatus.REJECTED);
+  const publicRequest = new runtime.PlanningRequest();
+  publicRequest.envelope.taskId = 'task-public'; publicRequest.envelope.userIntent = 'question';
+  publicRequest.envelope.privacyClass = contracts.PrivacyClass.PUBLIC;
+  assert.equal((await chatPlanner.plan(publicRequest)).status, runtime.PlanningStatus.READY);
+  const answerPlanner = new knowledgeAnswerSupport.KnowledgeAnswerPlanner();
+  assert.equal((await answerPlanner.plan(personal)).status, runtime.PlanningStatus.READY);
+  assert.equal((await answerPlanner.plan(publicRequest)).status, runtime.PlanningStatus.REJECTED);
+});
+test('knowledge answer rejects missing, out-of-range or duplicate citations', async () => {
+  const cases = [
+    '{"answer":"回答 [2]","citations":[2]}',
+    '{"answer":"回答 [0] [1]","citations":[1]}',
+    '{"answer":"回答 [-1] [1]","citations":[1]}',
+    '{"answer":"回答 [1.5] [1]","citations":[1]}',
+    '{"answer":"回答 [1]","citations":[]}',
+    '{"answer":"没有引用","citations":[1]}',
+    '{"answer":"回答 [1]","citations":[1,1]}',
+    '{"answer":"回答 [1]","citations":[1,2]}'
+  ];
+  for (const modelText of cases) {
+    const h = liveKnowledgeHarness({ modelText }); await h.start();
+    try {
+      await h.ui.send('same query'); await waitKnowledge(h.ui);
+      assert.equal(h.trace.models, 1); assert.equal(h.ui.snapshot().stage, 'answerFailed');
+      assert.equal(h.ui.snapshot().answer, ''); assert.equal(h.ui.snapshot().citations.length, 1);
+    } finally { await h.ui.stop(); }
+  }
+  const valid = liveKnowledgeHarness(); await valid.start();
+  try {
+    await valid.ui.send('same query'); await waitKnowledge(valid.ui);
+    assert.equal(valid.ui.snapshot().stage, 'complete');
+  } finally { await valid.ui.stop(); }
+});
+test('knowledge answer treats a no-citation insufficiency as a non-success state', async () => {
+  const h = liveKnowledgeHarness({ modelText: '{"answer":"资料中没有足够依据","citations":[]}' }); await h.start();
+  try {
+    await h.ui.send('same query'); await waitKnowledge(h.ui);
+    assert.equal(h.trace.models, 1);
+    assert.equal(h.ui.snapshot().stage, 'insufficient');
+    assert.equal(h.ui.snapshot().answer, '');
+    assert.equal(h.ui.snapshot().citations.length, 1);
+    assert.match(h.ui.snapshot().message, /资料中没有足够依据/);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge model failure keeps citations and retry answers without another retrieval', async () => {
+  const h = liveKnowledgeHarness({ failFirst: true }); await h.start();
+  try {
+    await h.ui.send('same query'); await waitKnowledge(h.ui);
+    assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 1);
+    assert.equal(h.ui.snapshot().stage, 'answerFailed');
+    assert.equal(h.ui.snapshot().answer, ''); assert.equal(h.ui.snapshot().citations.length, 1);
+    await h.ui.retryAnswer(); await waitKnowledge(h.ui);
+    assert.equal(h.trace.searches, 1); assert.equal(h.trace.models, 2);
+    assert.equal(h.ui.snapshot().stage, 'complete'); assert.match(h.ui.snapshot().answer, /\[1\]/);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge background stops the model, clears consent and ignores late results', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ modelGate: gate }); await h.start();
+  try {
+    await h.ui.send('same query'); await waitKnowledgeModel(h.ui);
+    assert.equal(h.trace.models, 1);
+    await h.ui.onBackground();
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.STOPPED);
+    assert.equal(h.ui.snapshot().consent, false); assert.equal(h.ui.snapshot().answer, '');
+    assert.equal(h.ui.snapshot().citations.length, 1);
+    assert(h.trace.modelCancelled >= 1);
+    gate.resolve(knowledgeModelResponse('{"answer":"迟到 [1]","citations":[1]}'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.ui.snapshot().answer, ''); assert.equal(h.trace.models, 1);
+    assert.equal(h.trace.answerClosed, 1); assert.equal(h.trace.released, 1);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge cancel during the model keeps citations and never re-searches', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness({ modelGate: gate }); await h.start();
+  try {
+    await h.ui.send('same query'); await waitKnowledgeModel(h.ui);
+    await h.ui.cancelCurrent();
+    assert.equal(h.ui.snapshot().stage, 'answerFailed');
+    assert.equal(h.ui.snapshot().citations.length, 1); assert.equal(h.ui.snapshot().answer, '');
+    assert.equal(h.trace.searches, 1);
+    gate.resolve(knowledgeModelResponse('{"answer":"迟到 [1]","citations":[1]}'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.ui.snapshot().answer, '');
+  } finally { await h.ui.stop(); }
+});
+test('knowledge answer persistence failure never displays success', async () => {
+  const before = liveKnowledgeHarness(); await before.start();
+  try {
+    before.answerBackend.fail = true;
+    await before.ui.send('same query');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(before.ui.snapshot().answer, '');
+    assert.notEqual(before.ui.snapshot().stage, 'complete');
+    assert.equal(before.trace.models, 0);
+  } finally { await before.ui.stop(); }
+  const after = liveKnowledgeHarness({ failAnswerWriteAfterModel: true }); await after.start();
+  try {
+    await after.ui.send('same query');
+    for (let i = 0; i < 200 && after.ui.snapshot().busy; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(after.ui.snapshot().busy, false);
+    assert.equal(after.ui.snapshot().stage, 'answerFailed');
+    assert.match(after.ui.snapshot().message, /未能可靠保存/);
+    assert.equal(after.ui.snapshot().answer, '');
+    assert.equal(after.ui.snapshot().citations.length, 1);
+    assert.equal(after.trace.models, 1);
+  } finally { await after.ui.stop(); }
+});
+test('knowledge tool outcome persistence rejection ends retrieval immediately without a model call', async () => {
+  const h = liveKnowledgeHarness({ failToolOutcome: true }); await h.start();
+  try {
+    await h.ui.send('same query');
+    for (let i = 0; i < 200 && h.ui.snapshot().busy; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(h.ui.snapshot().busy, false);
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    assert.match(h.ui.snapshot().message, /未能可靠保存/);
+    assert.equal(h.trace.models, 0);
+  } finally { await h.ui.stop(); }
+});
+test('knowledge stop failure enters BLOCKED and cannot restart', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  h.assemblyPort.release = async () => { throw Error('private close failure'); };
+  await h.ui.stop();
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.BLOCKED);
+  const key = new TextEncoder().encode('test-only-key');
+  await h.ui.start(h.toolFactory, h.answerFactory, key, true);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.BLOCKED);
+  assert(key.every(value => value === 0));
+});
+test('knowledge session consumes the key, clears consent on stop and cannot be reused', async () => {
+  const h = liveKnowledgeHarness(); const key = new TextEncoder().encode('test-only-key');
+  await h.ui.start(h.toolFactory, h.answerFactory, key, true);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY, h.ui.snapshot().message);
+  assert(key.every(value => value === 0));
+  assert.equal(h.ui.snapshot().consent, true);
+  assert(!JSON.stringify(h.ui.snapshot()).includes('test-only-key'));
+  await h.ui.send('same query'); await waitKnowledge(h.ui);
+  await h.ui.stop();
+  assert.equal(h.ui.snapshot().consent, false);
+  assert.equal(h.trace.answerClosed, 1); assert.equal(h.trace.released, 1);
+  const before = h.trace.models;
+  assert.equal(await h.ui.send('another query'), false); assert.equal(h.trace.models, before);
+});
+test('knowledge stop after retrieval but before model submission prevents the model call', async () => {
+  const h = liveKnowledgeHarness(); await h.start();
+  let submitStarted = false; let release;
+  const original = h.ui.answer.submit.bind(h.ui.answer);
+  h.ui.answer.submit = async (request) => {
+    submitStarted = true;
+    await new Promise(resolve => { release = resolve; });
+    return original(request);
+  };
+  try {
+    await h.ui.send('same query');
+    for (let i = 0; i < 200 && !submitStarted; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(submitStarted, true);
+    await h.ui.stop();
+    if (release) release();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(h.trace.models, 0);
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.STOPPED);
+  } finally { if (release) release(); await h.ui.stop(); }
+});
+test('knowledge answer resource uses its own encrypted database and reopens retained evidence', async () => {
+  nativeModules['@ohos.data.relationalStore'].RdbPredicates = class {
+    equalTo(key, value) { this[key] = value; return this; } and() { return this; }
+  };
+  nativeModules['@ohos.data.relationalStore'].ConflictResolution = { ON_CONFLICT_IGNORE: 1 };
+  const h = rdbHarness();
+  h.handle.update = async (values, predicate) => {
+    if (!h.envelope || h.envelope.revision !== predicate.revision) return 0;
+    h.envelope = { revision: values.revision, schemaVersion: values.schema_version,
+      payloadJson: values.payload_json, payloadDigest: values.payload_digest }; return 1;
+  };
+  h.handle.insert = async (_table, values) => {
+    if (h.envelope) return -1;
+    h.envelope = { revision: values.revision, schemaVersion: values.schema_version,
+      payloadJson: values.payload_json, payloadDigest: values.payload_digest }; return 1;
+  };
+  const resource = new KnowledgeAnswerExecutionResource(h.opener, new AgentHostDigest()); await resource.open();
+  assert.equal(h.opens[0].name, 'shuvi_knowledge_answer_v1.db'); assert.equal(h.opens[0].encrypt, true);
+  const source = liveKnowledgeHarness(); await source.start();
+  try {
+    await source.ui.send('same query'); await waitKnowledge(source.ui);
+    h.envelope = structuredClone(source.answerBackend.value);
+    await resource.close(); await resource.open();
+    const row = JSON.parse(h.envelope.payloadJson).records[0];
+    const reopened = await resource.loadCheckpoint(row.checkpoint.snapshot.taskId);
+    assert.equal(reopened.snapshot.status, contracts.AgentTaskStatus.COMPLETED);
+    assert.equal(reopened.envelope.privacyClass, contracts.PrivacyClass.PERSONAL);
+  } finally { await source.ui.stop(); await resource.close(); }
+});
+test('knowledge prompt excludes internal identifiers and fails closed on invalid evidence', () => {
+  const base = knowledgeCitation();
+  const prompt = knowledgeAnswerSupport.buildKnowledgePrompt('问题', [base]);
+  assert(prompt); assert.match(prompt, /问题/); assert.match(prompt, /\[1\]/); assert.match(prompt, /个人知识库片段/);
+  for (const forbidden of ['internal-evidence-1','upd-internal-document','generation-internal','sourceHash',
+    'documentId','evidenceId']) { assert(!prompt.includes(forbidden)); }
+  assert.equal(knowledgeAnswerSupport.buildKnowledgePrompt('问题', [{...base, excerpt:'x'.repeat(801)}]), undefined);
+  assert.equal(knowledgeAnswerSupport.buildKnowledgePrompt('问题', [{...base, evidence:'Tag'}]), undefined);
+  const five = [1,2,3,4,5].map(id => ({...base, citationId:id, evidenceId:'e'+id, excerpt:'x'.repeat(800)}));
+  assert.equal(knowledgeAnswerSupport.buildKnowledgePrompt('问题', five), undefined);
+  const bounded = [1,2,3,4,5].map(id => ({...base, citationId:id, evidenceId:'e'+id, excerpt:'x'.repeat(640)}));
+  assert(knowledgeAnswerSupport.buildKnowledgePrompt('问题', bounded));
+});
+test('knowledge answer parser enforces schema, citation bounds and markers', () => {
+  const valid = { schemaVersion:'1.0', kind:'knowledgeAnswer', text:'回答 [1]', citationIds:[1], inputTokens:100, outputTokens:20 };
+  assert(knowledgeAnswerSupport.parseKnowledgeAnswer(JSON.stringify(valid),1));
+  for (const bad of [
+    {...valid, schemaVersion:'2.0'}, {...valid, kind:'other'}, {...valid, text:''}, {...valid, text:'没有引用'},
+    {...valid, citationIds:[]}, {...valid, citationIds:[2]}, {...valid, citationIds:[1,1]},
+    {...valid, inputTokens:8193}, {...valid, outputTokens:1025}, {...valid, text:'回答 [2]'},
+    {...valid, text:'回答 [0] [1]'}, {...valid, text:'回答 [-1] [1]'}, {...valid, text:'回答 [1.5] [1]'}
+  ]) assert.equal(knowledgeAnswerSupport.parseKnowledgeAnswer(JSON.stringify(bad),1), undefined);
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeAnswer(JSON.stringify(valid),0), undefined);
+  assert(knowledgeAnswerSupport.parseKnowledgeModelOutput('{"answer":"回答 [1]","citations":[1]}',1));
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeModelOutput('```json\n{"answer":"回答 [1]","citations":[1]}\n```',1), undefined);
+  const context = new knowledgeAnswerSupport.KnowledgeAnswerContext();
+  assert.match(context.systemPrompt(), /不要用方括号/);
+  const insufficient = { schemaVersion:'1.0', kind:'knowledgeInsufficient', text:'资料中没有足够依据', citationIds:[], inputTokens:10, outputTokens:5 };
+  assert(knowledgeAnswerSupport.parseKnowledgeInsufficient(JSON.stringify(insufficient)));
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeInsufficient(JSON.stringify({...insufficient, citationIds:[1]})), undefined);
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeInsufficient(JSON.stringify({...insufficient, text:'其他'})), undefined);
+  assert(knowledgeAnswerSupport.parseKnowledgeModelInsufficient('{"answer":"资料中没有足够依据","citations":[]}'));
+  assert.equal(knowledgeAnswerSupport.parseKnowledgeModelInsufficient('{"answer":"资料中没有足够依据","citations":[1]}'), undefined);
+});
+
+const semanticRagAdapterModule = load(path.join(root,
+  'entry/src/main/ets/knowledge/application/KnowledgeSemanticRuntimeSearchAdapter.ets'), {
+  './KnowledgeQuerySession': { KnowledgeQuerySession: class {} }
+});
+function runtimeRagResult() {
+  return { schemaVersion:'1.0', provider:'shuvi-local-knowledge', query:'same query', route:'local-rag',
+    citations:[knowledgeCitation()] };
+}
+function runtimeRagPort(options = {}) {
+  const trace = { opened:0, closed:0, searched:0, cancel:undefined };
+  return { trace, async open() { trace.opened++; }, async close() { trace.closed++; },
+    async readiness() { return { ready:!options.notReady, code:options.notReady?'EmbeddingSettingsRequired':'Ready',
+      message:options.notReady?'Embedding 未就绪':'知识库 RAG 已就绪。' }; },
+    async search(request, cancel) {
+      trace.searched++; trace.cancel = cancel;
+      if (options.gate) await options.gate.promise;
+      cancel.check(); const result = runtimeRagResult(); result.query = request.query; return result;
+    } };
+}
+test('prepared RAG enables only after readiness, retrieves before one PERSONAL answer and keeps the key private', async () => {
+  const h = liveKnowledgeHarness(); const rag = runtimeRagPort();
+  const key = new TextEncoder().encode('test-only-key');
+  await h.ui.prepareRag(rag, h.answerFactory, key);
+  try {
+    assert(key.every(value => value === 0)); assert.equal(rag.trace.opened, 0);
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(h.ui.snapshot().consent, false);
+    assert.equal(await h.ui.send('same query'), false); assert.equal(rag.trace.searched, 0); assert.equal(h.trace.models, 0);
+    const readiness = await h.ui.activateRag(); assert.equal(readiness.ready, true); assert.equal(h.ui.snapshot().consent, true);
+    assert.equal(rag.trace.opened, 1);
+    assert.equal(await h.ui.send('same query'), true); await waitKnowledge(h.ui);
+    assert.equal(rag.trace.searched, 1); assert.equal(h.trace.models, 1); assert.equal(h.ui.snapshot().stage, 'complete');
+    const prompt = h.trace.bodies[0].messages[1].content;
+    for (const forbidden of ['internal-evidence-1','upd-internal-document','generation-internal']) assert(!prompt.includes(forbidden));
+  } finally { await h.ui.stop(); }
+  assert.equal(rag.trace.closed, 1); assert.equal(h.trace.answerClosed, 1);
+});
+test('RAG readiness fails closed without disabling the prepared ordinary-chat peer session', async () => {
+  const h = liveKnowledgeHarness(); const rag = runtimeRagPort({ notReady:true });
+  await h.ui.prepareRag(rag, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    const readiness = await h.ui.activateRag(); assert.equal(readiness.ready, false);
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(h.ui.snapshot().consent, false);
+    assert.equal(await h.ui.send('same query'), false); assert.equal(rag.trace.searched, 0); assert.equal(h.trace.models, 0);
+  } finally { await h.ui.stop(); }
+});
+test('turning RAG off preserves its prepared answer session while blocking further knowledge queries', async () => {
+  const h = liveKnowledgeHarness(); const rag = runtimeRagPort();
+  await h.ui.prepareRag(rag, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); await h.ui.deactivateRag();
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(h.ui.snapshot().consent, false);
+    assert.equal(rag.trace.closed, 0); assert.equal(await h.ui.send('same query'), false);
+    await h.ui.activateRag(); assert.equal(h.ui.snapshot().consent, true);
+  } finally { await h.ui.stop(); }
+});
+test('late RAG readiness cannot re-enable consent after the session is stopped', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness(); const rag = runtimeRagPort();
+  rag.readiness = async () => { await gate.promise; return {ready:true,code:'Ready',message:'知识库 RAG 已就绪。'}; };
+  await h.ui.prepareRag(rag, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  const enabling = h.ui.activateRag(); const stopping = h.ui.stop(); gate.resolve();
+  const readiness = await enabling; await stopping;
+  assert.equal(readiness.ready, false); assert.equal(h.ui.snapshot().consent, false);
+  assert.notEqual(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY);
+});
+test('cancelling retrieval invalidates the exact RAG query and never dispatches DeepSeek', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness(); const rag = runtimeRagPort({ gate });
+  await h.ui.prepareRag(rag, h.answerFactory, new TextEncoder().encode('test-only-key')); await h.ui.activateRag();
+  try {
+    assert.equal(await h.ui.send('same query'), true);
+    for (let i = 0; i < 200 && rag.trace.searched === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    await h.ui.cancelCurrent(); assert.equal(rag.trace.cancel.invalid, true); assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+    gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(h.trace.models, 0);
+  } finally { gate.resolve(); await h.ui.stop(); }
+});
+test('semantic Runtime adapter executes local then review then embedding, filters tag-only cards and bounds evidence', async () => {
+  const order = []; let receivedCancel;
+  const direct = { key:'direct-1', kind:'Text', title:'Direct', text:'direct body', documentKey:'doc-1', generation:'gen-1',
+    current:true, reasons:[{route:'BodyDirect'}] };
+  const tagOnly = { key:'tag-1', kind:'Image', title:'Tag', text:'tag text', documentKey:'doc-2', generation:'gen-2',
+    current:true, reasons:[{route:'Tag'}] };
+  const vector = { key:'vector-1', kind:'Text', title:'Vector', text:'vector body', documentKey:'doc-3', generation:'gen-3',
+    current:true, reasons:[{route:'Tag'},{route:'Vector'}] };
+  const session = { state:{ direct:{cards:[direct],error:''}, related:{cards:[tagOnly,vector],error:''}, semanticState:'Complete' },
+    async start(query, archived, cancel) { order.push('local'); assert.equal(query,'same query'); assert.equal(archived,false); receivedCancel=cancel; },
+    async review() { order.push('review'); }, async allowSemantic(consent,cost) { order.push('embedding'); assert(consent && cost); },
+    async close() { order.push('close'); } };
+  const adapter = new semanticRagAdapterModule.KnowledgeSemanticRuntimeSearchAdapter(() => session);
+  const cancel = { invalid:false, check() { if (this.invalid) throw Error('cancelled'); } };
+  const result = await adapter.search({query:'same query',maxResults:5}, cancel);
+  assert.equal(receivedCancel, cancel); assert.deepEqual(order, ['local','review','embedding','close']);
+  assert.equal(result.route, 'local-rag'); assert.equal(result.citations.length, 2);
+  assert.equal(result.citations[0].evidence, 'BodyDirect'); assert.equal(result.citations[1].evidence, 'Vector');
+  assert(!result.citations.some(citation => citation.evidence === 'Tag'));
+});
+test('semantic Runtime adapter fails closed when the exact-query embedding step is unavailable', async () => {
+  const session = { state:{ direct:{cards:[],error:''}, related:{cards:[],error:''}, semanticState:'NoRequest' },
+    async start() {}, async review() {}, async allowSemantic() {}, async close() {} };
+  const adapter = new semanticRagAdapterModule.KnowledgeSemanticRuntimeSearchAdapter(() => session);
+  const cancel = { invalid:false, check() {} };
+  await assert.rejects(adapter.search({query:'same query',maxResults:5}, cancel), /RuntimeRagSemanticUnavailable/);
+});
+// Real composition: page session -> RAG session adapter -> semantic adapter -> KnowledgeQuerySession.
+const realRagQueryModule = load(path.join(root, 'entry/src/main/ets/knowledge/application/KnowledgeQuerySession.ets'));
+const realRagAdapterModule = load(path.join(root, 'entry/src/main/ets/knowledge/infra/KnowledgeRagSessionAdapter.ets'), {
+  './KnowledgeAssembly': { KnowledgeAssembly: class {} }
+});
+const realRagModels = load(path.join(root, 'entry/src/main/ets/knowledge/domain/UnifiedQueryModels.ets'));
+const realRagParsed = load(path.join(root, 'entry/src/main/ets/knowledge/domain/ParsedDocumentModels.ets'));
+const realRagHistoryModule = load(path.join(root, 'entry/src/main/ets/knowledge/application/EphemeralQueryHistory.ets'));
+function realRagVectorCard() {
+  const card = new realRagModels.UnifiedSearchCard(); card.key = 'text:upd-vector-doc:gen-vector-1:chunk-vector-1';
+  card.title = '向量笔记'; card.text = '向量片段说明回答必须先固定本机证据。';
+  card.documentKey = 'upd-vector-doc'; card.generation = 'gen-vector-1';
+  const reason = new realRagModels.UnifiedSearchReason(); reason.route = 'Vector'; card.reasons = [reason];
+  return card;
+}
+function realRagStack(options = {}) {
+  const trace = { acquireCalls:0, acquired:0, released:0, reviews:0, embeddings:0 }; let acquireFailures = options.acquireFailures ?? 0;
+  function createRagQuerySession() {
+    const scope = new realRagModels.UnifiedQueryScope(); scope.complete = true;
+    if (options.directText) {
+      const source = new realRagModels.UnifiedQueryTextSource();
+      source.document.id = 'upd-direct-doc'; source.document.title = '本机设计笔记';
+      const chunk = new realRagParsed.ParsedTextChunk(); chunk.id = 'chunk-direct-1'; chunk.documentKey = 'upd-direct-doc';
+      chunk.generation = 'gen-direct-1'; chunk.text = options.directText; chunk.evidence = 'Body';
+      source.chunks = [chunk]; scope.texts = [source];
+    }
+    const scopePort = { async capture() { return scope; }, async visible() { return true; } };
+    const engine = {
+      async review(question, session, epoch) {
+        trace.reviews++; const approval = new realRagModels.UnifiedQueryApproval();
+        approval.session = session; approval.epoch = epoch; approval.actual = question; return approval;
+      },
+      async approve() {}, async revoke() {},
+      async semantic(_approval, cancel) {
+        trace.embeddings++; if (options.semanticGate) await options.semanticGate.promise;
+        cancel.check(); return options.vector ? [realRagVectorCard()] : [];
+      }
+    };
+    const history = options.history ?? new realRagHistoryModule.EphemeralQueryHistory();
+    const identity = { id() { return crypto.randomUUID(); }, async hash() { return 'host-hash'; } };
+    return new realRagQueryModule.KnowledgeQuerySession(scopePort, engine, { currentConfig() { return {}; } }, history, identity);
+  }
+  const assembly = { async acquire() {
+      trace.acquireCalls++; if (options.acquireGate) await options.acquireGate.promise;
+      if (acquireFailures > 0) { acquireFailures--; throw Error('knowledge initialisation failed'); } trace.acquired++;
+    }, async release() { trace.released++; },
+    async ragReadiness() { return { ready:true, code:'Ready', message:'知识库 RAG 已就绪。' }; }, createRagQuerySession,
+    createQuerySession() { throw Error('chat RAG must not open the knowledge page history session'); } };
+  return { trace, port: new realRagAdapterModule.KnowledgeRagSessionAdapter(assembly) };
+}
+test('real RAG composition keeps a successful retrieval and dispatches one grounded DeepSeek answer', async () => {
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ directText:'休比 Runtime 设计 采用持久化执行记录。', vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    assert.equal(stack.trace.acquireCalls, 0);
+    assert.equal((await h.ui.activateRag()).ready, true);
+    assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    const view = h.ui.snapshot();
+    assert.equal(view.stage, 'complete', view.message); assert.equal(stack.trace.embeddings, 1); assert.equal(h.trace.models, 1);
+    assert.deepEqual(view.citations.map(citation => citation.evidence), ['BodyDirect', 'Vector']);
+    const prompt = h.trace.bodies[0].messages[1].content;
+    assert(prompt.includes('采用持久化执行记录') && prompt.includes('必须先固定本机证据'));
+    for (const internal of ['upd-direct-doc','gen-direct-1','chunk-direct-1','upd-vector-doc','gen-vector-1']) assert(!prompt.includes(internal));
+  } finally { await h.ui.stop(); }
+  assert.equal(stack.trace.acquired, 1); assert.equal(stack.trace.released, 1);
+});
+test('real RAG composition finishes empty without DeepSeek when nothing is citable', async () => {
+  const h = liveKnowledgeHarness(); const stack = realRagStack();
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'empty', h.ui.snapshot().message);
+    assert.equal(stack.trace.embeddings, 1); assert.equal(h.trace.models, 0);
+  } finally { await h.ui.stop(); }
+});
+test('real RAG composition still discards retrieval cancelled during the query embedding', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true, semanticGate:gate });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true);
+    for (let i = 0; i < 200 && stack.trace.embeddings === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+    assert.equal(stack.trace.embeddings, 1); await h.ui.cancelCurrent();
+    assert.equal(h.ui.snapshot().stage, 'retrievalFailed'); assert.equal(h.ui.snapshot().busy, false);
+    gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(h.trace.models, 0); assert.equal(h.ui.snapshot().stage, 'retrievalFailed');
+  } finally { gate.resolve(); await h.ui.stop(); }
+});
+test('preparing chat RAG leaves the knowledge store closed until the first activation', async () => {
+  const idle = liveKnowledgeHarness(); const untouched = realRagStack({ vector:true });
+  await idle.ui.prepareRag(untouched.port, idle.answerFactory, new TextEncoder().encode('test-only-key'));
+  assert.equal(idle.ui.snapshot().lifecycle, ShuviRuntimeState.READY, idle.ui.snapshot().message);
+  await idle.ui.stop(); assert.equal(untouched.trace.acquireCalls, 0); assert.equal(untouched.trace.released, 0);
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    assert.equal(stack.trace.acquireCalls, 0); assert.equal(await h.ui.send('Runtime 设计'), false);
+    assert.equal((await h.ui.activateRag()).ready, true); assert.equal(stack.trace.acquired, 1);
+    await h.ui.deactivateRag(); assert.equal(stack.trace.released, 0);
+    assert.equal((await h.ui.activateRag()).ready, true); assert.equal(stack.trace.acquireCalls, 1);
+  } finally { await h.ui.stop(); }
+  assert.equal(stack.trace.released, 1);
+});
+test('a knowledge store open failure keeps the session ready and the next activation retries the open', async () => {
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true, acquireFailures:1 });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    const first = await h.ui.activateRag();
+    assert.equal(first.ready, false); assert.equal(first.code, 'RagOpenFailed');
+    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(h.ui.snapshot().consent, false);
+    assert.equal(await h.ui.send('Runtime 设计'), false); assert.equal(stack.trace.embeddings, 0);
+    assert.equal((await h.ui.activateRag()).ready, true); assert.equal(stack.trace.acquireCalls, 2);
+  } finally { await h.ui.stop(); }
+  assert.equal(stack.trace.acquired, 1); assert.equal(stack.trace.released, 1);
+});
+test('stopping while the knowledge store is still opening releases the late lease and never grants consent', async () => {
+  const gate = deferred(); const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true, acquireGate:gate });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  const activating = h.ui.activateRag();
+  for (let i = 0; i < 200 && stack.trace.acquireCalls === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert.equal(stack.trace.acquireCalls, 1); assert.equal((await h.ui.activateRag()).code, 'RagOpening');
+  await h.ui.stop(); assert.equal(stack.trace.released, 0);
+  gate.resolve(); const readiness = await activating;
+  assert.equal(readiness.ready, false); assert.equal(readiness.code, 'RagSessionChanged');
+  assert.equal(stack.trace.acquired, 1); assert.equal(stack.trace.released, 1);
+  assert.equal(h.ui.snapshot().consent, false); assert.notEqual(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY);
+});
+test('chat RAG counts every DeepSeek attempt and refuses retries and new questions before retrieval at the limit', async () => {
+  const h = liveKnowledgeHarness({ modelStatus:401 }); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(h.ui.snapshot().requestCount, 0); assert.equal(h.ui.snapshot().maxRequests, 10);
+    assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'answerFailed', h.ui.snapshot().message); assert.equal(h.ui.snapshot().requestCount, 1);
+    for (let attempt = 2; attempt <= 10; attempt++) {
+      assert.equal(knowledgePresentation.knowledgeRetryAvailable(h.ui.snapshot()), true, 'attempt ' + attempt);
+      await h.ui.retryAnswer(); await waitKnowledge(h.ui);
+      assert.equal(h.ui.snapshot().stage, 'answerFailed'); assert.equal(h.ui.snapshot().requestCount, attempt);
+    }
+    assert.equal(h.trace.models, 10); assert.equal(knowledgePresentation.knowledgeRetryAvailable(h.ui.snapshot()), false);
+    await h.ui.retryAnswer(); assert.equal(h.trace.models, 10); assert.match(h.ui.snapshot().message, /已用完 10 次/);
+    assert.equal(await h.ui.send('Runtime 设计'), false);
+    assert.equal(stack.trace.embeddings, 1); assert.equal(h.trace.models, 10);
+    assert.match(h.ui.snapshot().message, /未调用 Embedding/); assert.match(h.ui.snapshot().message, /停止真实对话/);
+  } finally { await h.ui.stop(); }
+  const fresh = liveKnowledgeHarness(); const again = realRagStack({ vector:true });
+  await fresh.ui.prepareRag(again.port, fresh.answerFactory, new TextEncoder().encode('test-only-key'));
+  try { assert.equal(fresh.ui.snapshot().requestCount, 0); } finally { await fresh.ui.stop(); }
+});
+test('a stopped RAG session tells the user how to restart instead of a bare not-ready message', async () => {
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  await h.ui.stop();
+  const readiness = await h.ui.activateRag();
+  assert.equal(readiness.ready, false); assert.equal(readiness.code, 'RagSessionUnavailable');
+  assert.match(readiness.message, /停止真实对话/); assert.match(readiness.message, /重新输入 DeepSeek Key/);
+  assert.equal(await h.ui.send('Runtime 设计'), false); assert.equal(stack.trace.embeddings, 0);
+});
+test('chat RAG uses the history-free query session and leaves the knowledge page history untouched', async () => {
+  const pages = []; const recording = { async append(page) { pages.push(page); }, async list() { return pages; } };
+  const recordingStack = realRagStack({ vector:true, history:recording });
+  await recordingStack.port.open();
+  const result = await recordingStack.port.search({ query:'Runtime 设计', maxResults:5 }, new realRagParsed.ParsedCancellation());
+  await recordingStack.port.close();
+  assert.equal(result.citations.length, 1); assert(pages.length > 0, 'the query session must write history when given a page history port');
+  const h = liveKnowledgeHarness(); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'complete', h.ui.snapshot().message);
+  } finally { await h.ui.stop(); }
+  const ephemeral = new realRagHistoryModule.EphemeralQueryHistory();
+  await ephemeral.append({ question:'Runtime 设计' }); assert.deepEqual(await ephemeral.list(0, 10), []);
+  const assemblySource = fs.readFileSync(path.join(root, 'entry/src/main/ets/knowledge/infra/KnowledgeAssembly.ets'), 'utf8');
+  const ragFactory = assemblySource.match(/createRagQuerySession\(\): KnowledgeQuerySession \{([\s\S]*?)\n  \}/);
+  assert(ragFactory, 'KnowledgeAssembly must expose createRagQuerySession');
+  assert(ragFactory[1].includes('new EphemeralQueryHistory()') && !ragFactory[1].includes('unifiedHistory'));
+});
+const knowledgePresentation = load(path.join(services, 'RuntimeKnowledgePresentation.ets'));
+test('knowledge panel wording covers both RAG phases and only offers retry when the session would accept it', () => {
+  const { RuntimeKnowledgeView } = load(path.join(services, 'RuntimeKnowledgeSession.ets'));
+  const view = (fields) => Object.assign(new RuntimeKnowledgeView(), fields);
+  const two = [knowledgeCitation(1), knowledgeCitation(2)];
+  const cases = [
+    [{ stage:'idle' }, '未开始', '未开始'],
+    [{ stage:'retrieving', busy:true }, '检索中', '等待本机检索完成'],
+    [{ stage:'answering', busy:true, citations:two }, '已完成 · 2 条本机片段', 'DeepSeek 整理中'],
+    [{ stage:'complete', citations:two, answer:'回答 [1]', answerSource:'deepseek' }, '已完成 · 2 条本机片段', '已完成'],
+    [{ stage:'complete', citations:two, answer:'已找到 2 条', answerSource:'local' }, '已完成 · 2 条本机片段', '未调用 DeepSeek'],
+    [{ stage:'answerFailed', citations:two }, '已完成 · 2 条本机片段', '未完成，可仅重试回答'],
+    [{ stage:'insufficient', citations:two }, '已完成 · 2 条本机片段', '资料中没有足够依据'],
+    [{ stage:'empty' }, '没有可引用的片段', '未调用 DeepSeek'],
+    [{ stage:'retrievalFailed' }, '未完成', '未调用 DeepSeek'],
+    [{ stage:'stopped', citations:two, answer:'回答 [1]', answerSource:'deepseek' }, '已完成 · 2 条本机片段', '已完成'],
+    [{ stage:'stopped' }, '已停止', '已停止']
+  ];
+  for (const [fields, retrieval, answer] of cases) {
+    assert.equal(knowledgePresentation.knowledgeRetrievalStage(view(fields)), retrieval, fields.stage);
+    assert.equal(knowledgePresentation.knowledgeAnswerStage(view(fields)), answer, fields.stage);
+  }
+  const retryable = { stage:'answerFailed', lifecycle:ShuviRuntimeState.READY, consent:true, citations:two };
+  assert.equal(knowledgePresentation.knowledgeRetryAvailable(view(retryable)), true);
+  for (const blocked of [{ busy:true }, { consent:false }, { citations:[] }, { stage:'insufficient' },
+    { lifecycle:ShuviRuntimeState.STOPPED }, { requestCount:10 }]) {
+    assert.equal(knowledgePresentation.knowledgeRetryAvailable(view({ ...retryable, ...blocked })), false, JSON.stringify(blocked));
+  }
+  assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view({ answer:'回答 [1]', answerSource:'deepseek' })), true);
+  assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view({ answer:'已找到 1 条', answerSource:'local' })), false);
+  assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view({ answer:'', answerSource:'deepseek' })), false);
+  assert.equal(knowledgePresentation.knowledgeRetryAvailable(view({ ...retryable, requestCount:9 })), true);
+  assert.equal(knowledgePresentation.knowledgeRequestUsage(view({ requestCount:3 })), '本次会话 DeepSeek 回答 3/10 次（含重试）');
+});
+test('real RAG composition offers answer-only retry after a model failure and never re-runs retrieval', async () => {
+  const h = liveKnowledgeHarness({ failFirst:true }); const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    let view = h.ui.snapshot();
+    assert.equal(view.stage, 'answerFailed', view.message); assert.equal(view.citations.length, 1);
+    assert.equal(knowledgePresentation.knowledgeRetryAvailable(view), true);
+    assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view), false);
+    await h.ui.retryAnswer(); await waitKnowledge(h.ui); view = h.ui.snapshot();
+    assert.equal(view.stage, 'complete', view.message); assert.equal(view.answerSource, 'deepseek');
+    assert.equal(knowledgePresentation.knowledgeAnswerIsModel(view), true);
+    assert.equal(knowledgePresentation.knowledgeRetryAvailable(view), false);
+    assert.equal(h.trace.models, 2); assert.equal(stack.trace.embeddings, 1);
+    assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    assert.equal(h.ui.snapshot().answerSource, 'deepseek'); assert.equal(stack.trace.embeddings, 2);
+    h.ui.clearConversation(); assert.equal(h.ui.snapshot().answerSource, ''); assert.equal(h.ui.snapshot().answer, '');
+  } finally { await h.ui.stop(); }
+});
+test('real RAG composition shows insufficient evidence as a non-success without retry or model label', async () => {
+  const h = liveKnowledgeHarness({ modelText:'{"answer":"资料中没有足够依据","citations":[]}' });
+  const stack = realRagStack({ vector:true });
+  await h.ui.prepareRag(stack.port, h.answerFactory, new TextEncoder().encode('test-only-key'));
+  try {
+    await h.ui.activateRag(); assert.equal(await h.ui.send('Runtime 设计'), true); await waitKnowledge(h.ui);
+    const view = h.ui.snapshot();
+    assert.equal(view.stage, 'insufficient', view.message); assert.equal(view.answer, ''); assert.equal(view.answerSource, '');
+    assert.equal(view.citations.length, 1); assert.equal(knowledgePresentation.knowledgeRetryAvailable(view), false);
+    assert.equal(knowledgePresentation.knowledgeAnswerStage(view), '资料中没有足够依据');
+  } finally { await h.ui.stop(); }
+});
+// The coordinator composes the calendar-capable assistant session; these stubs keep native calendar/RDB kits out of host tests.
+function coordinatorAssistantStubs(trace = {}) {
+  const ChatPurpose = { PUBLIC_CHAT:0, CALENDAR_DRAFT:1, ASSISTANT:2 };
+  return {
+    './ChatRuntimeAssembly': { ChatPurpose, ChatRuntimeFactory:class {
+      constructor(opener, debug, context, purpose) { Object.assign(this, {opener, debug, context, purpose}); } } },
+    '../calendar/CalendarRuntimeAssembly': { CalendarRuntimeFactory:class {
+      constructor(opener, tool, debug) { Object.assign(this, {opener, tool, debug}); trace.calendarFactories = (trace.calendarFactories ?? 0) + 1; } } },
+    '../calendar/CalendarNativeTool': { CalendarNativeTool:class {} },
+    './AgentRdbResources': { NativeAgentRdbOpen:class { constructor(context) { this.context = context; } } },
+    ChatPurpose
+  };
+}
+test('assistant coordinator consumes one caller key and gives isolated copies to the calendar assistant and PERSONAL RAG', async () => {
+  const trace = { chatKey:undefined, ragKey:undefined, chatStopped:0, ragStopped:0 }; let chatState = ShuviRuntimeState.IDLE;
+  const assistantContext = {};
+  const fakeKnowledgeSession = { answerContext:{},
+    async prepareRag(_search, _factory, key) { trace.ragKey = key.slice(); key.fill(0); },
+    answerOutcomeRejected() {}, async activateRag() { return {ready:true}; }, async deactivateRag() {},
+    snapshot() { return {lifecycle:ShuviRuntimeState.IDLE}; }, async stop() { trace.ragStopped++; } };
+  const { ChatPurpose, ...stubs } = coordinatorAssistantStubs(trace);
+  const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
+    ...stubs,
+    './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {kind:'answer'}; } },
+    './RuntimeChatService': { RuntimeChatService:{session:{ context:assistantContext,
+      async start(factory, calendarFactory, key) {
+        trace.chatFactory = factory; trace.calendarFactory = calendarFactory;
+        trace.chatKey = key.slice(); key.fill(0); chatState=ShuviRuntimeState.READY; },
+      snapshot() { return {lifecycle:chatState}; }, async stop() { trace.chatStopped++; }
+    }}},
+    './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:fakeKnowledgeSession} },
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
+    '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class { constructor(assembly) { this.assembly=assembly; } } }
+  });
+  const key = new TextEncoder().encode('one-session-key');
+  const hostContext = {};
+  await coordinator.RuntimeAssistantCoordinator.start(hostContext, true, key);
+  assert(key.every(value => value === 0)); assert.deepEqual(trace.chatKey, trace.ragKey);
+  assert.notEqual(trace.chatKey, trace.ragKey); assert.equal(new TextDecoder().decode(trace.chatKey), 'one-session-key');
+  assert.equal(trace.chatFactory.purpose, ChatPurpose.ASSISTANT); assert.equal(trace.chatFactory.context, assistantContext);
+  assert.equal(trace.chatFactory.debug, true); assert.equal(trace.calendarFactories, 1);
+  assert.equal(trace.calendarFactory.opener, trace.chatFactory.opener); assert.equal(trace.chatFactory.opener.context, hostContext);
+  await coordinator.RuntimeAssistantCoordinator.stop(); assert.equal(trace.chatStopped,1); assert.equal(trace.ragStopped,1);
+});
+test('assistant coordinator does not retain or prepare a RAG key when assistant startup fails', async () => {
+  let prepared = 0; const fakeKnowledgeSession = { answerContext:{}, snapshot() { return {lifecycle:ShuviRuntimeState.IDLE}; },
+    async prepareRag() { prepared++; }, answerOutcomeRejected() {}, async stop() {} };
+  const { ChatPurpose: _purpose, ...stubs } = coordinatorAssistantStubs();
+  const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
+    ...stubs,
+    './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {}; } },
+    './RuntimeChatService': { RuntimeChatService:{session:{ context:{}, async start(_factory,_calendar,key) { key.fill(0); },
+      snapshot() { return {lifecycle:ShuviRuntimeState.FAILED}; }, async stop() {} }}},
+    './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:fakeKnowledgeSession} },
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
+    '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class {} }
+  });
+  const key = new TextEncoder().encode('rejected-session-key');
+  await coordinator.RuntimeAssistantCoordinator.start({}, true, key);
+  assert(key.every(value => value === 0)); assert.equal(prepared, 0);
+});
+test('assistant coordinator rejects duplicate start without rotating the prepared RAG key', async () => {
+  let chatStarts = 0; let ragPrepares = 0; let ragStops = 0;
+  const { ChatPurpose: _purpose, ...stubs } = coordinatorAssistantStubs();
+  const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
+    ...stubs,
+    './RuntimeChatService': { RuntimeChatService:{session:{ context:{}, snapshot() { return {lifecycle:ShuviRuntimeState.READY}; },
+      async start() { chatStarts++; }, async stop() {} }}},
+    './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:{ answerContext:{},
+      snapshot() { return {lifecycle:ShuviRuntimeState.READY}; }, async prepareRag() { ragPrepares++; },
+      answerOutcomeRejected() {}, async stop() { ragStops++; } }}},
+    './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {}; } },
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
+    '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class {} }
+  });
+  const key = new TextEncoder().encode('duplicate-key');
+  await coordinator.RuntimeAssistantCoordinator.start({}, true, key);
+  assert(key.every(value => value === 0)); assert.equal(chatStarts,0); assert.equal(ragPrepares,0); assert.equal(ragStops,0);
+});
+
 
 for (const kind of ['execution', 'memory']) {
   test(`RDB ${kind} insert is awaited and its rejection is propagated`, async () => {
@@ -1847,3 +2835,948 @@ for (const kind of ['execution', 'memory']) {
     }
   });
 }
+
+function calendarModelReply(change = {}) {
+  return JSON.stringify({schemaVersion:'1.0', kind:'draft', draft: {
+    title:'项目讨论', startAt:'2099-10-27T15:00:00+08:00', endAt:'2099-10-27T16:00:00+08:00',
+    timeZone:'Asia/Shanghai', reminderMinutes:10, ...change
+  }});
+}
+test('calendar proposal rejects untrusted, missing, rolled-over, stale and out-of-scope fields', () => {
+  const parse = raw => calendarContract.parseCalendarProposal(raw, Date.parse('2026-10-26T10:00:00+08:00'));
+  assert.equal(parse(calendarModelReply()).draft.title, '项目讨论');
+  for (const raw of ['null', '[]', '{}', '```json\n'+calendarModelReply()+'\n```',
+    calendarModelReply({timeZone:'UTC'}), calendarModelReply({startAt:'2099-02-30T15:00:00+08:00'}),
+    calendarModelReply({reminderMinutes:undefined}), calendarModelReply({title:''}),
+    calendarModelReply({reminderMinutes:'10'}), calendarModelReply({repeat:'daily'}),
+    calendarModelReply({startAt:'2026-10-26T10:05:00+08:00'}),
+    calendarModelReply({endAt:'2099-10-27T14:00:00+08:00'})]) assert.equal(parse(raw).draft, undefined, raw);
+  const clarify = JSON.stringify({schemaVersion:'1.0', kind:'clarify', message:'请补充结束时间'});
+  assert.match(parse(clarify).message, /需要补充/); assert.equal(parse(clarify).draft, undefined);
+  assert.equal(parse(JSON.stringify({...JSON.parse(clarify), draft:JSON.parse(calendarModelReply()).draft})).draft, undefined);
+});
+test('calendar context binds exact approved description and reference time without history', () => {
+  const context = new calendarContract.CalendarDraftContext();
+  assert.equal(context.promptFor('明天开会'), undefined);
+  context.bind('明天开会', Date.parse('2026-10-26T23:58:00+08:00'));
+  assert.match(context.promptFor('明天开会'), /2026-10-26T23:58:00\+08:00/);
+  assert.equal(context.promptFor('更改描述'), undefined);
+  context.clear(); assert.equal(context.promptFor('明天开会'), undefined);
+});
+test('calendar Runtime requires per-request approval and PERSONAL scope, returns only a proposal', async () => {
+  const h = chatHarness({calendar:true, text:calendarModelReply()});
+  await h.ui.generate('安排项目讨论', true); assert.equal(h.calls(), 0);
+  await h.ui.start(h.factory, new TextEncoder().encode('test-only-key'));
+  await h.ui.generate('安排项目讨论', false); assert.equal(h.calls(), 0);
+  await h.ui.generate('安排项目讨论', true); await waitChat(h.ui);
+  assert.equal(h.calls(), 1); assert.equal(h.proposals.length, 1);
+  assert.equal(h.proposals[0].title, '项目讨论');
+  const record = JSON.parse(h.journalBackend.value.payloadJson).records[0];
+  assert.equal(record.checkpoint.envelope.privacyClass, contracts.PrivacyClass.PERSONAL);
+  assert.equal(record.checkpoint.workflow.steps[0].kind, contracts.WorkflowStepKind.LLM);
+  assert.match(h.requests[0].messages[0].content, /不能臆造/);
+  assert.match(h.requests[0].messages[1].content, /参考当前时间/);
+  assert.equal(h.requests[0].tools, undefined);
+  assert.equal(h.ui.context.promptFor('安排项目讨论'), undefined);
+  assert.equal(chatAssembly.chatFrontendConfig().privacyClass, contracts.PrivacyClass.PUBLIC);
+  assert.throws(() => new chatAssembly.ChatRuntimeFactory({},true,undefined,chatAssembly.ChatPurpose.CALENDAR_DRAFT).create(), /CONTEXT_REQUIRED/);
+  await h.ui.stop();
+});
+test('calendar model clarification, failed request and malformed result never publish a draft', async () => {
+  for (const opts of [{text:JSON.stringify({schemaVersion:'1.0',kind:'clarify',message:'何时结束？'})},
+    {status:401}, {text:'已创建日程'}, {text:calendarModelReply({reminderMinutes:undefined})}, {finish:'length'}]) {
+    const h = chatHarness({calendar:true,...opts});
+    await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+    await h.ui.generate('明天开会',true); await waitChat(h.ui);
+    assert.equal(h.calls(),1); assert.equal(h.proposals.length,0);
+    assert.notEqual(h.ui.snapshot().message,''); await h.ui.stop();
+  }
+});
+test('calendar stop, background and detach revoke draft delivery even when HTTP resolves late', async () => {
+  for (const action of ['stop','background','detach']) {
+    const gate=deferred(); const h=chatHarness({calendar:true,gate});
+    await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+    await h.ui.generate('安排项目讨论',true); assert.equal(h.calls(),1);
+    if(action==='stop') await h.ui.stop();
+    else if(action==='background') await h.controller.onBackground();
+    else { h.ui.detach(); await h.controller.stop(); }
+    gate.resolve(response({model:'deepseek-flash',choices:[{index:0,message:{role:'assistant',content:calendarModelReply()},finish_reason:'stop'}]}));
+    await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(h.proposals.length,0); assert.equal(h.ui.snapshot().busy,false); assert.equal(h.cancelled(),1);
+  }
+});
+test('calendar storage failure blocks request; separate database is encrypted', async () => {
+  const h=chatHarness({calendar:true,text:calendarModelReply()});
+  await h.ui.start(h.factory,new TextEncoder().encode('test-only-key')); h.journalBackend.fail=true;
+  await h.ui.generate('安排项目讨论',true); await waitChat(h.ui);
+  assert.equal(h.calls(),0); assert.equal(h.proposals.length,0);
+  await assert.rejects(h.ui.stop(),/SHUTDOWN_FAILED/);
+  const db=writableRdb();
+  const {ChatExecutionResource}=load(path.join(services,'ChatExecutionStore.ets'));
+  const resource=new ChatExecutionResource(db.opener,new AgentHostDigest(),true); await resource.open();
+  assert.equal(db.opens[0].name,'shuvi_calendar_draft_execution_v1.db'); assert.equal(db.opens[0].encrypt,true);
+  await resource.close();
+});
+test('calendar Runtime proposal cannot write until separate user confirmation and native permission', async () => {
+  const {CalendarProbeSession} = load(path.join(services,'../calendar/CalendarProbeSession.ets'));
+  for (const action of ['confirm','cancel','deny']) {
+    let writes=0; let authorizations=0; let view;
+    const records=[];
+    const port={async authorize(){authorizations++; if(action==='deny') throw new Error('permission denied');},
+      async prepare(){},async add(){writes++;return 42;},
+      async read(){return {eventId:42,matches:true,reminderConfigured:true};}};
+    const store={async load(){return records[0];},async list(){return records;},async save(record){
+      const idx=records.findIndex(item=>item.operationId===record.operationId);
+      if(idx<0) records.push(structuredClone(record)); else records[idx]=structuredClone(record);
+    }};
+    const calendar=new CalendarProbeSession(port,store,()=> 'shuvi-calendar-test-draft',Date.now);
+    calendar.attach(next=>{view=next;}); await new Promise(resolve=>setImmediate(resolve));
+    const h=chatHarness({calendar:true,text:calendarModelReply()});
+    h.ui.attach(()=>{},draft=>calendar.preview(draft));
+    await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+    await h.ui.generate('2099年10月27日15点到16点项目讨论，提前10分钟提醒',true); await waitChat(h.ui);
+    assert.equal(view.phase,'confirm'); assert.equal(writes,0); assert.equal(authorizations,0);
+    await h.ui.stop();
+    if(action==='cancel') calendar.cancelDraft();
+    await calendar.confirm();
+    assert.equal(writes,action==='confirm'?1:0);
+    assert.equal(authorizations,action==='cancel'?0:1);
+    if(action==='confirm') { assert.equal(view.eventId,42); assert.equal(view.records[0].verified,true); }
+    calendar.detach();
+  }
+});
+test('calendar confirmation and new-draft panel changes reuse the enabled session without another key', async () => {
+  const h=chatHarness({calendar:true,text:calendarModelReply()});
+  await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+  await h.ui.generate('第一条日程',true); await waitChat(h.ui);
+  assert.equal(h.proposals.length,1);
+  h.ui.detachView(); // Confirmation, result/history, then new draft on the same page.
+  assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY); assert.equal(h.closed(),0);
+  h.ui.attach(()=>{},draft=>h.proposals.push(draft));
+  await h.ui.generate('第二条日程',true); await waitChat(h.ui);
+  assert.equal(h.calls(),2); assert.equal(h.proposals.length,2); assert.equal(h.closed(),0);
+  h.ui.detach(); await h.controller.stop(); // Actual calendar page exit owns cleanup.
+  assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.STOPPED); assert.equal(h.closed(),1);
+  await h.ui.generate('离页后不能发送',true); assert.equal(h.calls(),2);
+});
+test('calendar cancellation revokes the current proposal while preserving the session for another request', async () => {
+  const gate=deferred(); const h=chatHarness({calendar:true,gate});
+  await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+  await h.ui.generate('取消这一条',true); await h.ui.cancel();
+  assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY); assert.equal(h.closed(),0);
+  assert.equal(h.ui.snapshot().busy,false); assert.equal(h.proposals.length,0);
+  gate.resolve(response({model:'deepseek-flash',choices:[{index:0,message:{role:'assistant',content:calendarModelReply()},finish_reason:'stop'}]}));
+  await new Promise(resolve=>setTimeout(resolve,10)); assert.equal(h.proposals.length,0);
+  await h.ui.generate('重新描述另一条',true); await waitChat(h.ui);
+  assert.equal(h.calls(),2); assert.equal(h.proposals.length,1); await h.ui.stop();
+});
+test('removing a busy calendar draft panel still stops the unfinished request', async () => {
+  const gate=deferred(); const h=chatHarness({calendar:true,gate});
+  await h.ui.start(h.factory,new TextEncoder().encode('test-only-key'));
+  await h.ui.generate('未完成的描述',true); h.ui.detachView(); await h.controller.stop();
+  assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.STOPPED);
+  assert.equal(h.cancelled(),1); assert.equal(h.proposals.length,0); assert.equal(h.closed(),1);
+});
+
+function assistantHarness(options = {}) {
+  const h = chatHarness({assistant:true, text:calendarModelReply(), ...options});
+  const db = options.db || writableRdb(); const records = options.records || [];
+  const trace = {permissions:0, writes:0, reads:0};
+  const {CalendarProbeSession} = load(path.join(services,'../calendar/CalendarProbeSession.ets'));
+  const probe = new CalendarProbeSession({
+    async authorize() { trace.permissions++; if(options.deny) throw Error('permission denied'); if(options.permissionGate) await options.permissionGate.promise; },
+    async prepare() {},
+    async add(record) { trace.writes++; if(options.writeGate) await options.writeGate.promise; return records.length + 100; },
+    async read(record) { trace.reads++; return {eventId:record.eventId,matches:!options.mismatch,reminderConfigured:true}; }
+  }, {
+    async load(){return records.at(-1);}, async list(){return structuredClone(records);},
+    async save(record){ const idx = records.findIndex(item=>item.operationId===record.operationId);
+      if(idx<0) records.push(structuredClone(record)); else records[idx]=structuredClone(record); }
+  }, ()=>'shuvi-calendar-must-use-runtime-id', Date.now);
+  const {CalendarRuntimeFactory} = load(path.join(services,'../calendar/CalendarRuntimeAssembly.ets'));
+  const factory = new CalendarRuntimeFactory(db.opener, {
+    create(draft,id,cancelled){return probe.executeAuthorized(draft,id,cancelled);}, cancel(){probe.stop();}
+  }, true);
+  h.ui.calendar.onForeground();
+  return {...h, db, records, trace, probe, calendarFactory:factory,
+    async start(){await h.ui.start(h.factory,factory,new TextEncoder().encode('test-only-key'));}};
+}
+async function waitCalendarCard(ui) {
+  for(let i=0;i<200 && ui.snapshot().busy && !ui.snapshot().preview;i++) await new Promise(resolve=>setTimeout(resolve,2));
+  assert.equal(ui.snapshot().calendarStage,'authorization',JSON.stringify(ui.snapshot()));
+}
+
+test('assistant uses real Runtime policy/grant and native tool; confirmation writes once and returns verified result', async () => {
+  const h=assistantHarness(); await h.start();
+  try {
+    assert.equal(h.ui.snapshot().lifecycle,ShuviRuntimeState.READY);
+    await h.ui.send('2099年10月27日15到16点项目讨论，提前10分钟提醒');
+    await waitCalendarCard(h.ui);
+    assert.equal(h.trace.writes,0); assert.equal(h.trace.permissions,0);
+    const preview=h.ui.snapshot().preview; assert.equal(preview.draft.title,'项目讨论');
+    await Promise.all([h.ui.decide(true),h.ui.decide(true)]); await waitChat(h.ui);
+    assert.equal(h.trace.writes,1); assert.equal(h.trace.reads,1); assert.equal(h.ui.snapshot().succeeded,true);
+    assert.match(h.ui.snapshot().reply,/已创建日程并读回核对/);
+    assert.equal(h.records[0].operationId,preview.operationId); assert.equal(h.records[0].verified,true);
+    const stored=JSON.stringify(JSON.parse(h.db.envelope.payloadJson));
+    assert(stored.includes(preview.operationId)); assert(stored.includes('shuvi.calendar.create'));
+    assert.equal(h.db.opens[0].encrypt,true); assert.equal(h.db.opens[0].name,'shuvi_calendar_runtime_v1.db');
+  } finally { await h.ui.stop(); }
+});
+
+test('assistant normal answers, clarification and malformed replies never create tools; session is reused', async () => {
+  const texts=[JSON.stringify({schemaVersion:'1.0',kind:'answer',message:'普通回答'}),
+    JSON.stringify({schemaVersion:'1.0',kind:'clarify',message:'何时结束？'}),calendarModelReply(), '已创建日程'];
+  const h=assistantHarness({texts}); await h.start();
+  try {
+    await h.ui.send('解释日历'); await waitChat(h.ui); assert.equal(h.ui.snapshot().reply,'普通回答');
+    assert.equal(h.trace.writes,0); assert.equal(h.db.envelope,undefined);
+    await h.ui.send('2099年10月27日下午3点项目讨论，提前10分钟提醒'); await waitChat(h.ui);
+    assert.equal(h.ui.snapshot().reply,'何时结束？');
+    await h.ui.send('4点结束'); await waitCalendarCard(h.ui);
+    assert.match(h.requests[2].messages[1].content,/2099年10月27日/);
+    await h.ui.decide(false); await waitChat(h.ui); assert.equal(h.trace.permissions,0);
+    await h.ui.send('再次试试'); await waitChat(h.ui); assert.match(h.ui.snapshot().reply,/格式未通过/);
+    assert.equal(h.calls(),4); assert.equal(h.closed(),0); assert.equal(h.trace.writes,0);
+  } finally {await h.ui.stop();}
+});
+
+test('assistant denial and cancellation preserve enabled model session; another calendar needs fresh confirmation', async () => {
+  const h=assistantHarness({texts:[calendarModelReply(),calendarModelReply({title:'另一条日程'})]}); await h.start();
+  try {
+    await h.ui.send('第一条'); await waitCalendarCard(h.ui); const first=h.ui.snapshot().preview;
+    await h.ui.decide(false); await waitChat(h.ui); assert.equal(h.trace.writes,0);
+    assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY);
+    await h.ui.send('另一条'); await waitCalendarCard(h.ui);
+    assert.notEqual(h.ui.snapshot().preview.operationId,first.operationId);
+    await h.ui.decide(true); await waitChat(h.ui);
+    assert.equal(h.trace.writes,1); assert.equal(h.calls(),2); assert.equal(h.closed(),0);
+  } finally {await h.ui.stop();}
+});
+
+test('assistant system permission refusal and mismatched readback never claim successful calendar creation', async () => {
+  for(const options of [{deny:true},{mismatch:true}]) {
+    const h=assistantHarness(options); await h.start();
+    try {
+      await h.ui.send('日程安排'); await waitCalendarCard(h.ui); await h.ui.decide(true); await waitChat(h.ui);
+      assert.equal(h.ui.snapshot().succeeded,false); assert.equal(h.trace.writes,options.deny?0:1);
+      if(options.mismatch) assert.equal(h.records[0].verified,false);
+    } finally {await h.ui.stop();}
+  }
+});
+
+test('assistant cancellation during permission wait prevents native write and ignores late completion', async () => {
+  const gate=deferred(); const h=assistantHarness({permissionGate:gate}); await h.start();
+  try {
+    await h.ui.send('日程安排'); await waitCalendarCard(h.ui); await h.ui.decide(true);
+    for(let i=0;i<100 && !h.trace.permissions;i++) await new Promise(r=>setTimeout(r,1));
+    await h.ui.cancel(); const reply=h.ui.snapshot().reply;
+    gate.resolve(); await new Promise(r=>setTimeout(r,10));
+    assert.equal(h.trace.writes,0); assert.equal(h.ui.snapshot().reply,reply);
+    assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY);
+  } finally {gate.resolve();await h.ui.stop();}
+});
+
+test('assistant lost UI after native write retains late event id and never repeats creation after restart', async () => {
+  const gate=deferred(); const h=assistantHarness({writeGate:gate}); await h.start();
+  await h.ui.send('日程安排'); await waitCalendarCard(h.ui); await h.ui.decide(true);
+  for(let i=0;i<100 && !h.trace.writes;i++) await new Promise(r=>setTimeout(r,1));
+  assert.equal(h.trace.writes,1); await h.ui.stop(); gate.resolve(); await new Promise(r=>setTimeout(r,10));
+  assert(h.records[0].eventId>0); assert.equal(h.records[0].verified,false);
+  const next=assistantHarness({db:h.db,records:h.records}); await next.start();
+  try {
+    await next.ui.send('相同日程'); await waitCalendarCard(next.ui); await next.ui.decide(true); await waitChat(next.ui);
+    assert.equal(next.trace.writes,0); assert.equal(next.ui.snapshot().succeeded,false);
+  } finally {await next.ui.stop();}
+});
+
+test('assistant journal failure blocks tools before calendar permission and write', async () => {
+  const h=assistantHarness(); await h.start(); h.db.failWrites=true;
+  await h.ui.send('日程安排'); await waitChat(h.ui);
+  assert.equal(h.trace.permissions,0); assert.equal(h.trace.writes,0); assert.equal(h.ui.snapshot().succeeded,false);
+  await h.ui.stop();
+});
+
+test('native calendar verifier rejects altered and expired grants and consumes the valid invocation only once', async () => {
+  const {CalendarExecutionResource}=load(path.join(services,'../calendar/CalendarExecutionResource.ets'));
+  const original=CalendarExecutionResource.prototype.verify; let checked=0;
+  CalendarExecutionResource.prototype.verify=function(invocation) {
+    for(const delta of [{authorizationGrantId:'forged'},{operationId:'shuvi-calendar-other'},
+      {argumentsDigest:'changed'},{schemaDigest:'changed'},{toolIdentityVersion:'2'},{taskId:'other'}]) {
+      assert.equal(original.call(this,{...invocation,...delta}),false);
+    }
+    const clock=Date.now;
+    try {Date.now=()=>clock()+120000;assert.equal(original.call(this,invocation),false);} finally {Date.now=clock;}
+    assert.equal(original.call(this,invocation),true);
+    assert.equal(original.call(this,invocation),false);checked++;return true;
+  };
+  const h=assistantHarness();
+  try {
+    await h.start();await h.ui.send('完整日程');await waitCalendarCard(h.ui);await h.ui.decide(true);await waitChat(h.ui);
+    assert.equal(checked,1);assert.equal(h.trace.writes,1);assert.equal(h.ui.snapshot().succeeded,true);
+  } finally {CalendarExecutionResource.prototype.verify=original;await h.ui.stop();}
+});
+
+test('calendar confirmation snapshot cannot mutate the authorized draft; duplicate request is not written again', async () => {
+  const h=assistantHarness();await h.start();
+  try {
+    await h.ui.send('完整日程');await waitCalendarCard(h.ui);
+    const snapshot=h.ui.snapshot();snapshot.preview.draft.title='篡改标题';snapshot.preview.operationId='shuvi-calendar-forged';
+    await h.ui.decide(true);await waitChat(h.ui);assert.equal(h.records[0].draft.title,'项目讨论');
+    await h.ui.send('同一日程');await waitCalendarCard(h.ui);await h.ui.decide(true);await waitChat(h.ui);
+    assert.equal(h.trace.writes,1);assert.equal(h.ui.snapshot().succeeded,false);assert.match(h.ui.snapshot().reply,/已有同标题/);
+  } finally {await h.ui.stop();}
+});
+
+test('expired calendar confirmation cannot dispatch a tool, and new conversation forgets clarification context', async () => {
+  const h=assistantHarness({texts:[JSON.stringify({schemaVersion:'1.0',kind:'clarify',message:'补充结束时间'}),calendarModelReply()]});
+  await h.start();
+  try {
+    await h.ui.send('待澄清的日程');await waitChat(h.ui);h.ui.clearConversation();
+    await h.ui.send('新的完整安排');await waitCalendarCard(h.ui);
+    assert(!h.requests[1].messages[1].content.includes('待澄清的日程'));
+    const clock=Date.now;
+    try {Date.now=()=>clock()+130000;await h.ui.decide(true);} finally {Date.now=clock;}
+    assert.equal(h.trace.permissions,0);assert.equal(h.trace.writes,0);assert.equal(h.ui.snapshot().busy,false);
+  } finally {await h.ui.stop();}
+});
+
+test('assistant cancelling model generation does not prompt for another key and discards a late draft', async () => {
+  const gate=deferred();const h=assistantHarness({gate});await h.start();
+  try {
+    await h.ui.send('停止生成');await h.ui.cancel();assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY);
+    gate.resolve(response({model:'deepseek-flash',choices:[{index:0,message:{role:'assistant',content:calendarModelReply()},finish_reason:'stop'}]}));
+    await new Promise(r=>setTimeout(r,10));assert.equal(h.ui.snapshot().preview,undefined);assert.equal(h.trace.writes,0);
+    await h.ui.send('重新安排');await waitCalendarCard(h.ui);assert.equal(h.calls(),2);assert.equal(h.closed(),0);
+  } finally {await h.ui.stop();}
+});
+
+test('assistant malformed model drafts and provider failures are terminal without native permission requests', async () => {
+  for(const opts of [{text:calendarModelReply({reminderMinutes:'10'})},{text:calendarModelReply({timeZone:'UTC'})},
+    {text:calendarModelReply({startAt:'2099-02-30T15:00:00+08:00'})},{status:401},{finish:'length'}]) {
+    const h=assistantHarness(opts);await h.start();
+    try {await h.ui.send('日程');await waitChat(h.ui);assert.equal(h.trace.permissions,0);assert.equal(h.trace.writes,0);assert.equal(h.ui.snapshot().succeeded,false);}
+    finally {await h.ui.stop();}
+  }
+});
+
+test('return to edit declines the old Runtime policy, restores absolute schedule text and requires a fresh confirmation', async () => {
+  const h=assistantHarness({texts:[calendarModelReply(),calendarModelReply({title:'修改后的讨论',reminderMinutes:20})]});await h.start();
+  try {
+    await h.ui.send('安排讨论');await waitCalendarCard(h.ui);const oldPreview=h.ui.snapshot().preview;
+    const text=await h.ui.revise();
+    assert.match(text,/项目讨论/);assert.match(text,/2099-10-27 15:00/);assert.match(text,/2099-10-27 16:00/);assert.match(text,/提前 10 分钟/);
+    assert.equal(h.ui.snapshot().busy,false);assert.match(h.ui.snapshot().reply,/原草稿已撤销/);
+    assert.equal(h.trace.permissions,0);assert.equal(h.trace.writes,0);assert.equal(h.calls(),1);assert.equal(h.closed(),0);
+    assert.equal(h.controller.lifecycleState(),ShuviRuntimeState.READY);
+    assert.equal(await h.ui.decide(true),false);assert.equal(h.trace.writes,0);
+    await h.ui.send(text.replace('项目讨论','修改后的讨论').replace('10 分钟','20 分钟'));await waitCalendarCard(h.ui);
+    assert.notEqual(h.ui.snapshot().preview.operationId,oldPreview.operationId);
+    assert.equal(h.ui.snapshot().preview.draft.reminderMinutes,20);assert.equal(h.trace.writes,0);
+    await h.ui.decide(true);await waitChat(h.ui);
+    assert.equal(h.trace.writes,1);assert.equal(h.records[0].draft.title,'修改后的讨论');assert.equal(h.calls(),2);
+  } finally {await h.ui.stop();}
+});
+
+test('return to edit cannot race confirmation or repeat dismissal', async () => {
+  const h=assistantHarness();await h.start();
+  try {
+    await h.ui.send('安排讨论');await waitCalendarCard(h.ui);
+    const [text,second,confirmed]=await Promise.all([h.ui.revise(),h.ui.revise(),h.ui.decide(true)]);
+    assert.equal(typeof text,'string');assert.equal(second,undefined);assert.equal(confirmed,false);assert.equal(h.trace.writes,0);
+    assert.equal(await h.ui.revise(),undefined);
+  } finally {await h.ui.stop();}
+});
+
+test('edit is unavailable after write dispatch and concurrent stop waits for actual model cleanup', async () => {
+  const gate=deferred();const h=assistantHarness({writeGate:gate});await h.start();
+  try {
+    await h.ui.send('安排讨论');await waitCalendarCard(h.ui);await h.ui.decide(true);
+    assert.equal(await h.ui.revise(),undefined);
+    const closeGate=deferred();const originalStop=h.ui.calendar.stop.bind(h.ui.calendar);
+    h.ui.calendar.stop=async()=>{await closeGate.promise;return originalStop();};
+    const first=h.ui.stop();let secondDone=false;const second=h.ui.stop().then(()=>{secondDone=true;});
+    await new Promise(r=>setTimeout(r,5));assert.equal(secondDone,false);assert.equal(h.ui.snapshot().lifecycle,ShuviRuntimeState.STOPPING);
+    assert.doesNotMatch(h.ui.snapshot().message,/已就绪/);assert.equal(h.closed(),0);
+    closeGate.resolve();await Promise.all([first,second]);assert.equal(h.closed(),1);assert.equal(h.ui.snapshot().lifecycle,ShuviRuntimeState.STOPPED);
+    assert.doesNotMatch(h.ui.snapshot().message,/已就绪/);
+  } finally {gate.resolve();await h.ui.stop();}
+});
+
+// Route 2: session-key direct vision answer. Real protocol/validation; network and image decode are injected.
+const visionProtocol = load(path.join(services, 'VisionChatProtocol.ets'));
+const visionSupport = load(path.join(services, 'VisionAnswerTaskSupport.ets'));
+const visionPorts = load(path.join(services, 'VisionImagePorts.ets'));
+const visionStore = load(path.join(services, 'KnowledgeAnswerExecutionStore.ets'));
+const visionAssembly = load(path.join(services, 'VisionAnswerRuntimeAssembly.ets'));
+const { RuntimeVisionSession } = load(path.join(services, 'RuntimeVisionSession.ets'));
+
+function visionImage(overrides = {}) {
+  return Object.assign(new visionProtocol.VisionChatImage(), {
+    mime: 'image/jpeg', width: 1024, height: 768, sha256: 'a'.repeat(64), bytes: new Uint8Array([1, 2, 3, 4])
+  }, overrides);
+}
+function visionRequest(overrides = {}) {
+  return Object.assign(new visionProtocol.VisionChatRequest(), {
+    modelId: 'test-model', systemPrompt: '只依据图片回答并输出 JSON。', question: '图里是什么？', image: visionImage()
+  }, overrides);
+}
+function visionResponse(text, overrides = {}) {
+  return { statusCode: 200, body: JSON.stringify({ object: 'chat.completion', model: 'test-model',
+    choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 }, ...overrides }) };
+}
+function visionResult(text, overrides = {}) {
+  return Object.assign(new visionProtocol.VisionChatResult(), {
+    outputText: text, inputTokens: 100, outputTokens: 20, finishReason: 'stop', modelId: 'test-model'
+  }, overrides);
+}
+function visionPolicy() {
+  const policy = new visionStore.AnswerExecutionPolicy();
+  policy.schema = 'shuvi-vision-answer-1.0'; policy.storeName = 'shuvi_vision_answer_v1.db';
+  policy.memoryStoreName = 'shuvi_vision_answer_unused_memory_v1.db'; policy.stepId = visionSupport.VISION_ANSWER_STEP_ID;
+  return policy;
+}
+
+test('vision payload sends only the question and sanitized image with strict JSON mode', () => {
+  const body = visionProtocol.buildVisionChatBody(visionRequest({
+    systemPrompt: new visionSupport.VisionAnswerContext().systemPrompt()
+  }), 'AQID');
+  assert(body); const parsed = JSON.parse(body);
+  assert.equal(parsed.model, 'test-model'); assert.deepEqual(parsed.thinking, { type: 'disabled' });
+  assert.equal(parsed.stream, false); assert.deepEqual(parsed.response_format, { type: 'json_object' });
+  assert.equal(parsed.max_tokens, visionProtocol.VISION_CHAT_MAX_OUTPUT_TOKENS);
+  assert.equal(parsed.messages[0].role, 'system'); assert.match(parsed.messages[0].content, /不可信数据/);
+  const parts = parsed.messages[1].content;
+  assert.equal(parts.length, 2); assert.equal(parts[0].type, 'text'); assert.match(parts[0].text, /图里是什么/);
+  assert.equal(parts[1].type, 'image_url'); assert.equal(parts[1].image_url.url, 'data:image/jpeg;base64,AQID');
+  assert(!body.includes('screen.jpg')); assert(!body.includes('file://')); assert(!body.includes('evidenceId'));
+  for (const bad of [
+    visionRequest({ modelId: 'https://other' }), visionRequest({ question: '' }), visionRequest({ question: 'x'.repeat(501) }),
+    visionRequest({ image: visionImage({ mime: 'image/gif' }) }), visionRequest({ image: visionImage({ bytes: new Uint8Array(0) }) }),
+    visionRequest({ maxOutputTokens: 0 }), visionRequest({ timeoutMs: 0 })
+  ]) assert.equal(visionProtocol.buildVisionChatBody(bad, 'AQID'), undefined);
+  assert.equal(visionProtocol.buildVisionChatBody(visionRequest(), 'not base64!'), undefined);
+});
+
+test('vision response parser enforces model, finish, usage and no tools', () => {
+  const ok = visionProtocol.parseVisionChatResponse(200, visionResponse('{"answer":"图中有文字 [1]","citations":[1]}').body, 'test-model');
+  assert.equal(ok.outputText, '{"answer":"图中有文字 [1]","citations":[1]}');
+  assert.equal(ok.inputTokens, 100); assert.equal(ok.outputTokens, 20);
+  const normal = JSON.parse(visionResponse('{}').body);
+  for (const body of ['{', 'null', '[]',
+    JSON.stringify({ ...normal, model: 'other' }), JSON.stringify({ ...normal, object: 'chat.completion.chunk' }),
+    JSON.stringify({ ...normal, choices: [] }), JSON.stringify({ ...normal, choices: [{ index: 0, message: { role: 'assistant', content: '' }, finish_reason: 'stop' }] }),
+    JSON.stringify({ ...normal, choices: [{ index: 0, message: { role: 'assistant', content: '{}' }, finish_reason: 'length' }] }),
+    JSON.stringify({ ...normal, choices: [{ index: 0, message: { role: 'assistant', content: '{}', tool_calls: [] }, finish_reason: 'stop' }] }),
+    JSON.stringify({ ...normal, usage: null }), JSON.stringify({ ...normal, usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 99 } })
+  ]) assert.throws(() => visionProtocol.parseVisionChatResponse(200, body, 'test-model'));
+  assert.throws(() => visionProtocol.parseVisionChatResponse(401, 'private body', 'test-model'),
+    error => error.code === 'AUTHENTICATION' && !error.message.includes('private'));
+});
+
+test('vision context freezes only bounded sanitized image evidence and fails closed', () => {
+  const context = new visionSupport.VisionAnswerContext();
+  assert(context.freeze('图里有什么？', visionImage()));
+  const snapshot = context.snapshotFor('图里有什么？');
+  assert(snapshot); assert.equal(snapshot.image.mime, 'image/jpeg'); assert.equal(snapshot.image.bytes.length, 4);
+  assert.equal(context.snapshotFor('另一个问题'), undefined);
+  context.clear(); assert.equal(context.snapshotFor('图里有什么？'), undefined);
+  const bad = new visionSupport.VisionAnswerContext();
+  for (const image of [visionImage({ mime: 'image/gif' }), visionImage({ bytes: new Uint8Array(0) }),
+    visionImage({ sha256: 'bad' }), visionImage({ width: 0 }), visionImage({ width: 8193 })]) {
+    assert.equal(bad.freeze('问题', image), false);
+  }
+  assert.match(context.systemPrompt(), /不可信数据/); assert.match(context.systemPrompt(), /资料中没有足够依据/);
+});
+
+function visionJournalBackend() {
+  const h = { value: undefined, fail: false };
+  h.port = { async initialize() {}, async load() { return h.value; }, async compareAndSet(rev, next) {
+    if (h.fail || rev !== (h.value?.revision || 0)) return false;
+    h.value = structuredClone(next); return true;
+  } }; return h;
+}
+function liveVisionHarness(options = {}) {
+  const backend = visionJournalBackend(); const trace = { requests: [], prepares: 0, cancels: 0,
+    opened: 0, closed: 0, rejected: 0 };
+  let journal;
+  const prepared = new visionPorts.VisionPreparedImage();
+  prepared.displayName = 'screen.jpg'; prepared.image = visionImage();
+  const preparer = { async prepare(uri, displayName) {
+    trace.prepares++;
+    if (options.prepareFail) throw new visionPorts.VisionImageFailure('IMAGE_HEADER_INVALID');
+    assert.equal(uri, 'file:///user/screen.jpg'); assert.equal(displayName, 'screen.jpg');
+    return prepared;
+  } };
+  class Resource {
+    closed = false;
+    async open() {
+      trace.opened++; journal = new visionStore.KnowledgeAnswerExecutionStore(backend.port, new AgentHostDigest(), visionPolicy());
+      await journal.open();
+    }
+    async close() { if (!this.closed) trace.closed++; this.closed = true; }
+    saveCheckpoint(...args) { return journal.saveCheckpoint(...args); }
+    loadCheckpoint(...args) { return journal.loadCheckpoint(...args); }
+    beforeDispatch(...args) { return journal.beforeDispatch(...args); }
+    async recordOutcome(...args) {
+      try {
+        if (options.failOutcome) { backend.fail = true; }
+        const result = await journal.recordOutcome(...args);
+        if (!result.accepted && !result.duplicate) { trace.rejected++; this.onOutcomeRejected(args[0]); }
+        return result;
+      } catch (error) { this.onOutcomeRejected(args[0]); throw error; }
+    }
+    recordDispatchRejected(...args) { return journal.recordDispatchRejected(...args); }
+    normalizeRecoveredOperation(...args) { return journal.normalizeRecoveredOperation(...args); }
+    recordReconciliation(...args) { return journal.recordReconciliation(...args); }
+  }
+  const transport = {
+    start(request, cancellation) {
+      trace.requests.push(request);
+      if (options.gate) return { result: options.gate.promise, cancel() { trace.cancels++; } };
+      const text = options.texts ? options.texts[Math.min(trace.requests.length - 1, options.texts.length - 1)] :
+        (options.text || '{"answer":"图中写着 Runtime [1]","citations":[1]}');
+      const result = options.fail ? Promise.reject(new Error('private provider failure')) : Promise.resolve(visionResult(text));
+      return { result, cancel() { trace.cancels++; } };
+    }
+  };
+  const assembly = load(path.join(services, 'VisionAnswerRuntimeAssembly.ets'), {
+    './KnowledgeAnswerExecutionStore': { ...visionStore, KnowledgeAnswerExecutionResource: Resource }
+  });
+  const ui = new RuntimeVisionSession(preparer); ui.onForeground();
+  const factory = new assembly.VisionAnswerRuntimeFactory({}, true, ui.answerContext, 'test-model',
+    (taskId) => ui.answerOutcomeRejected(taskId), transport);
+  return { ui, factory, trace, prepared, backend, gate: options.gate, async start(consent = true) {
+    const key = new TextEncoder().encode('test-only-key');
+    await ui.start(factory, key, consent);
+    if (consent) assert.equal(ui.snapshot().lifecycle, ShuviRuntimeState.READY, ui.snapshot().message);
+    assert(key.every(value => value === 0), 'vision session must consume the key');
+  }, async attach() {
+    assert.equal(await ui.attachImage('file:///user/screen.jpg', 'screen.jpg'), true);
+    assert.equal(ui.snapshot().imageReady, true);
+  } };
+}
+async function waitVision(ui, predicate = view => !view.busy) {
+  for (let i = 0; i < 300; i++) { if (predicate(ui.snapshot())) return; await new Promise(resolve => setTimeout(resolve, 2)); }
+  assert.fail('Vision state did not arrive: ' + JSON.stringify(ui.snapshot()));
+}
+test('vision session sends one image question only after consent and attachment', async () => {
+  const h = liveVisionHarness(); assert.equal(await h.ui.start(h.factory, new TextEncoder().encode('key'), false), undefined);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.IDLE); assert.equal(h.trace.requests.length, 0);
+  await h.start(); await h.attach();
+  assert.equal(h.ui.snapshot().imageName, 'screen.jpg'); assert.equal(h.ui.snapshot().imageBytes, 4);
+  assert.equal(h.ui.snapshot().pricingState, 'unverified'); assert.equal(h.ui.snapshot().maxRequests, 10);
+  assert.equal(await h.ui.send('图里写着什么？'), true); await waitVision(h.ui);
+  const view = h.ui.snapshot();
+  assert.equal(view.stage, 'complete', JSON.stringify(view)); assert.equal(view.answer, '图中写着 Runtime [1]');
+  assert.equal(h.trace.requests.length, 1); assert.equal(h.trace.requests[0].image.bytes.length, 4);
+  assert.equal(h.trace.requests[0].question, '图里写着什么？');
+  assert(!JSON.stringify(h.trace.requests[0]).includes('screen.jpg'));
+  await h.ui.stop();
+  assert.equal(h.ui.snapshot().imageReady, false); assert.equal(h.ui.snapshot().answer, '图中写着 Runtime [1]');
+  assert.equal(h.prepared.image.bytes.every(value => value === 0), true);
+});
+
+test('vision session keeps the image for retry and maps insufficient/invalid output to non-success', async () => {
+  const invalid = liveVisionHarness({ text: '{"answer":"没有引用","citations":[1]}' }); await invalid.start(); await invalid.attach();
+  await invalid.ui.send('问题'); await waitVision(invalid.ui);
+  assert.equal(invalid.ui.snapshot().stage, 'answerFailed'); assert.equal(invalid.ui.snapshot().imageReady, true);
+  assert.equal(invalid.trace.prepares, 1);
+  await invalid.ui.stop();
+
+  const insufficient = liveVisionHarness({ text: '{"answer":"资料中没有足够依据","citations":[]}' });
+  await insufficient.start(); await insufficient.attach();
+  await insufficient.ui.send('问题'); await waitVision(insufficient.ui);
+  assert.equal(insufficient.ui.snapshot().stage, 'insufficient'); assert.equal(insufficient.ui.snapshot().answer, '');
+  assert.equal(insufficient.ui.snapshot().imageReady, true);
+  await insufficient.ui.stop();
+
+  const retry = liveVisionHarness({ texts: ['{"answer":"没有引用","citations":[1]}',
+    '{"answer":"重试后依据图片回答 [1]","citations":[1]}'] });
+  await retry.start(); await retry.attach();
+  await retry.ui.send('问题'); await waitVision(retry.ui);
+  assert.equal(retry.ui.snapshot().stage, 'answerFailed');
+  await retry.ui.retryAnswer(); await waitVision(retry.ui);
+  assert.equal(retry.ui.snapshot().stage, 'complete'); assert.match(retry.ui.snapshot().answer, /重试后/);
+  assert.equal(retry.trace.prepares, 1); assert.equal(retry.trace.requests.length, 2);
+  await retry.ui.stop();
+});
+
+test('vision session failure, persistence rejection and image failure never become success', async () => {
+  const failed = liveVisionHarness({ fail: true }); await failed.start(); await failed.attach();
+  await failed.ui.send('问题'); await waitVision(failed.ui);
+  assert.equal(failed.ui.snapshot().stage, 'answerFailed'); assert.equal(failed.ui.snapshot().answer, '');
+  await failed.ui.stop();
+
+  const rejected = liveVisionHarness({ failOutcome: true }); await rejected.start(); await rejected.attach();
+  await rejected.ui.send('问题'); await waitVision(rejected.ui);
+  assert.equal(rejected.ui.snapshot().stage, 'answerFailed'); assert.equal(rejected.trace.rejected, 1);
+  await rejected.ui.stop();
+
+  const badImage = liveVisionHarness({ prepareFail: true }); await badImage.start();
+  assert.equal(await badImage.ui.attachImage('file:///user/bad.png', 'bad.png'), false);
+  assert.equal(badImage.ui.snapshot().stage, 'imageFailed'); assert.equal(badImage.trace.requests.length, 0);
+  await badImage.ui.stop();
+});
+
+test('vision answer execution resource uses its own encrypted database and step', async () => {
+  const h = rdbHarness();
+  const resource = new visionStore.KnowledgeAnswerExecutionResource(h.opener, new AgentHostDigest(), visionPolicy());
+  await resource.open();
+  assert.equal(h.opens[0].name, 'shuvi_vision_answer_v1.db'); assert.equal(h.opens[0].encrypt, true);
+  await resource.close();
+});
+
+const { ArkTsVisionChatTransport } = load(path.join(services, 'VisionChatTransport.ets'));
+function visionTransportHarness(options = {}) {
+  const sent = []; let cancelled = 0; let resolves = 0;
+  const http = { start(request) {
+    sent.push(request);
+    if (options.gate) return { result: options.gate.promise, cancel() { cancelled++; } };
+    return { result: Promise.resolve(options.response || visionResponse('{"answer":"图中有文字 [1]","citations":[1]}')),
+      cancel() { cancelled++; } };
+  } };
+  const credentials = { async resolve(provider, scope) {
+    resolves++; assert.equal(provider, 'deepseek-direct'); assert.equal(scope, 'deepseek.invoke');
+    if (options.credentialError) throw new Error('private credential detail');
+    if (options.headers) return { headers: options.headers };
+    return { headers: { Authorization: 'Bearer test-only-key' } };
+  } };
+  return { sent, http, credentials, get cancelled() { return cancelled; }, get resolves() { return resolves; },
+    transport: new ArkTsVisionChatTransport(http, credentials) };
+}
+test('vision transport sends sanitized image bytes through the session HTTP boundary', async () => {
+  const h = visionTransportHarness(); const cancellation = new connectors.ProviderCancellationSource();
+  const result = await h.transport.start(visionRequest(), cancellation).result;
+  assert.equal(result.outputText, '{"answer":"图中有文字 [1]","citations":[1]}');
+  assert.equal(h.sent.length, 1); assert.equal(h.sent[0].authorization, 'Bearer test-only-key');
+  assert(h.sent[0].body.includes('data:image/jpeg;base64,AQID'));
+  assert(!h.sent[0].body.includes('screen.jpg'));
+  assert.equal(h.sent[0].maxResponseBytes, visionProtocol.VISION_CHAT_MAX_RESPONSE_BYTES);
+});
+test('vision transport rejects bad credentials and malformed responses before success', async () => {
+  for (const headers of [{}, { authorization: 'Bearer test' }, { Authorization: 'Bearer a b' },
+    { Authorization: 'Bearer test', Other: 'x' }]) {
+    const h = visionTransportHarness({ headers });
+    await assert.rejects(h.transport.start(visionRequest(), new connectors.ProviderCancellationSource()).result,
+      error => error.code === 'AUTHENTICATION');
+    assert.equal(h.sent.length, 0);
+  }
+  const bad = visionTransportHarness({ response: { statusCode: 200, body: '{"object":"other"}' } });
+  await assert.rejects(bad.transport.start(visionRequest(), new connectors.ProviderCancellationSource()).result,
+    error => error.code === 'PROVIDER');
+});
+test('vision transport cancellation is idempotent and discards a late result', async () => {
+  const gate = deferred(); const h = visionTransportHarness({ gate });
+  const cancellation = new connectors.ProviderCancellationSource();
+  const operation = h.transport.start(visionRequest(), cancellation);
+  for (let i = 0; i < 50 && h.sent.length === 0; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.sent.length, 1);
+  operation.cancel(); operation.cancel();
+  gate.resolve(visionResponse('{"answer":"late [1]","citations":[1]}'));
+  await assert.rejects(operation.result, error => error.code === 'CANCELLED');
+  assert.equal(h.cancelled, 1);
+});
+
+test('vision answer config is PERSONAL with no tools, retries or replans', () => {
+  const config = visionAssembly.visionAnswerFrontendConfig();
+  assert.equal(config.privacyClass, contracts.PrivacyClass.PERSONAL);
+  assert.equal(config.requestedBudget.maxToolCalls, 0);
+  assert.equal(config.requestedBudget.maxRetries, 0);
+  assert.equal(config.requestedBudget.maxReplans, 0);
+  assert.equal(config.requestedBudget.maxMonetaryCostMicros, 10000);
+});
+
+test('vision cancel while the transport is pending discards the late result', async () => {
+  const gate = deferred(); const h = liveVisionHarness({ gate }); await h.start(); await h.attach();
+  const sending = h.ui.send('问题');
+  for (let i = 0; i < 100 && h.trace.requests.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert.equal(h.trace.requests.length, 1);
+  await h.ui.cancelCurrent();
+  gate.resolve(visionResult('{"answer":"迟到回答 [1]","citations":[1]}'));
+  await sending; await waitVision(h.ui);
+  assert.equal(h.ui.snapshot().stage, 'answerFailed'); assert.equal(h.ui.snapshot().answer, '');
+  assert(h.trace.cancels >= 1); await h.ui.stop();
+});
+
+test('vision stop while the transport is pending clears the image and ignores the late result', async () => {
+  const gate = deferred(); const h = liveVisionHarness({ gate }); await h.start(); await h.attach();
+  const sending = h.ui.send('问题');
+  for (let i = 0; i < 100 && h.trace.requests.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert.equal(h.trace.requests.length, 1);
+  await h.ui.stop();
+  gate.resolve(visionResult('{"answer":"迟到回答 [1]","citations":[1]}'));
+  await sending;
+  const view = h.ui.snapshot();
+  assert.equal(view.lifecycle, ShuviRuntimeState.STOPPED); assert.equal(view.imageReady, false);
+  assert.equal(view.answer, '');
+});
+
+test('vision session stops after ten model requests without reporting an eleventh success', async () => {
+  const h = liveVisionHarness(); await h.start(); await h.attach();
+  for (let i = 0; i < 10; i++) {
+    assert.equal(await h.ui.send('问题 ' + i), true); await waitVision(h.ui);
+    assert.equal(h.ui.snapshot().stage, 'complete', JSON.stringify(h.ui.snapshot()));
+  }
+  assert.equal(h.trace.requests.length, 10);
+  assert.equal(await h.ui.send('第十一次'), false);
+  assert.match(h.ui.snapshot().message, /请求上限/);
+  assert.equal(h.ui.snapshot().requestCount, 10); assert.equal(h.ui.snapshot().maxRequests, 10);
+  assert.equal(h.trace.requests.length, 10);
+  await h.ui.stop();
+});
+
+test('vision start failure clears consent but preserves the selected image', async () => {
+  const prepared = new visionPorts.VisionPreparedImage();
+  prepared.displayName = 'screen.jpg'; prepared.image = visionImage();
+  const preparer = { async prepare() { return prepared; } };
+  const ui = new RuntimeVisionSession(preparer); ui.onForeground();
+  assert.equal(await ui.attachImage('file:///user/screen.jpg', 'screen.jpg'), true);
+  const key = new TextEncoder().encode('test-only-key');
+  await ui.start({ create() { throw new Error('injected-configuration-failure'); } }, key, true);
+  const view = ui.snapshot();
+  assert.equal(view.lifecycle, ShuviRuntimeState.FAILED);
+  assert.equal(view.consent, false); assert.equal(view.imageReady, true);
+  assert.equal(view.imageName, 'screen.jpg'); assert(key.every(value => value === 0));
+  await ui.stop(); assert.equal(ui.snapshot().imageReady, false);
+});
+
+// Opt-in "remember DeepSeek key": real store logic over an in-memory Asset Store shaped like the platform API.
+function deepSeekAssetKit() {
+  return { Tag:{ SECRET:1, ALIAS:2, ACCESSIBILITY:3, SYNC_TYPE:4, RETURN_TYPE:5, CONFLICT_RESOLUTION:6 },
+    ReturnType:{ ALL:0, ATTRIBUTES:1 }, Accessibility:{ DEVICE_POWERED_ON:0, DEVICE_FIRST_UNLOCKED:1, DEVICE_UNLOCKED:2 },
+    SyncType:{ NEVER:0, THIS_DEVICE:1, TRUSTED_DEVICE:2 }, ConflictResolution:{ OVERWRITE:0, THROW_ERROR:1 } };
+}
+function memoryDeepSeekAssets(asset, options = {}) {
+  const rows = new Map(); const calls = { add:0, update:0, remove:0 };
+  const alias = query => new TextDecoder().decode(query.get(asset.Tag.ALIAS));
+  return { rows, calls,
+    async query(query) {
+      if (options.queryError) throw { code: options.queryError };
+      const row = rows.get(alias(query)); if (!row) throw { code: 24000002 };
+      const copy = new Map(row);
+      if (query.get(asset.Tag.RETURN_TYPE) === asset.ReturnType.ATTRIBUTES) copy.delete(asset.Tag.SECRET);
+      else copy.set(asset.Tag.SECRET, row.get(asset.Tag.SECRET).slice());
+      return [copy];
+    },
+    async add(attributes) {
+      calls.add++; const key = alias(attributes); if (rows.has(key)) throw { code: 24000003 };
+      const row = new Map(attributes); row.set(asset.Tag.SECRET, attributes.get(asset.Tag.SECRET).slice()); rows.set(key, row);
+    },
+    async update(query, attributes) {
+      calls.update++; const row = rows.get(alias(query)); if (!row) throw { code: 24000002 };
+      row.set(asset.Tag.SECRET, attributes.get(asset.Tag.SECRET).slice());
+    },
+    async remove(query) { calls.remove++; if (!rows.delete(alias(query))) throw { code: 24000002 }; }
+  };
+}
+function loadDeepSeekKeyStore(options = {}) {
+  const asset = deepSeekAssetKit();
+  const module = load(path.join(services, 'DeepSeekCredentialStore.ets'), {
+    '@kit.AssetStoreKit': { asset }, '@kit.ArkTS': { util: { TextEncoder: Encoder } }, '@kit.BasicServicesKit': {}
+  });
+  const backend = memoryDeepSeekAssets(asset, options);
+  return { asset, backend, store: new module.DeepSeekCredentialStore(backend), ...module };
+}
+const keyBytes = text => new TextEncoder().encode(text);
+const keyText = bytes => new TextDecoder().decode(bytes);
+test('remembered DeepSeek key is stored device-unlocked and never synced, and each load is a fresh copy', async () => {
+  const { asset, backend, store, DeepSeekKeyStatus, DEEPSEEK_KEY_ALIAS } = loadDeepSeekKeyStore();
+  assert.equal(await store.status(), DeepSeekKeyStatus.Missing); assert.equal(await store.load(), undefined);
+  const key = keyBytes('sk-test-only-0001');
+  await store.save(key);
+  assert.equal(keyText(key), 'sk-test-only-0001', 'the caller keeps and later clears its own buffer');
+  assert.equal(await store.status(), DeepSeekKeyStatus.Saved);
+  const row = backend.rows.get(DEEPSEEK_KEY_ALIAS);
+  assert.equal(row.get(asset.Tag.ACCESSIBILITY), asset.Accessibility.DEVICE_UNLOCKED);
+  assert.equal(row.get(asset.Tag.SYNC_TYPE), asset.SyncType.NEVER);
+  assert.equal(row.get(asset.Tag.CONFLICT_RESOLUTION), asset.ConflictResolution.THROW_ERROR);
+  const first = await store.load(); const second = await store.load();
+  assert.equal(keyText(first), 'sk-test-only-0001'); assert.notEqual(first, second);
+  first.fill(0);
+  assert.equal(keyText(second), 'sk-test-only-0001', 'a session clearing its copy does not affect the next start');
+  assert.equal(keyText(backend.rows.get(DEEPSEEK_KEY_ALIAS).get(asset.Tag.SECRET)), 'sk-test-only-0001');
+});
+test('saving again replaces the single remembered DeepSeek key and remove clears it idempotently', async () => {
+  const { backend, store, DeepSeekKeyStatus } = loadDeepSeekKeyStore();
+  await store.save(keyBytes('sk-old-key-0001')); await store.save(keyBytes('sk-new-key-0002'));
+  assert.equal(backend.calls.add, 1); assert.equal(backend.calls.update, 1); assert.equal(backend.rows.size, 1);
+  assert.equal(keyText(await store.load()), 'sk-new-key-0002');
+  await store.remove(); assert.equal(await store.status(), DeepSeekKeyStatus.Missing); assert.equal(await store.load(), undefined);
+  await store.remove(); assert.equal(backend.calls.remove, 1);
+});
+test('remembered DeepSeek key rejects empty, spaced, control and oversized input without storing anything', async () => {
+  const { backend, store, DeepSeekKeyStatus } = loadDeepSeekKeyStore();
+  for (const bad of ['', 'sk test', 'sk-\n1', '密钥', 'x'.repeat(2049)]) {
+    await assert.rejects(store.save(keyBytes(bad)), /INVALID_KEY/);
+  }
+  assert.equal(backend.rows.size, 0); assert.equal(backend.calls.add, 0);
+  await store.save(keyBytes('x'.repeat(2048))); assert.equal(await store.status(), DeepSeekKeyStatus.Saved);
+});
+test('remembered DeepSeek key fails closed on synced, damaged or unreadable records', async () => {
+  const { asset, backend, store, DeepSeekKeyStatus, DEEPSEEK_KEY_ALIAS } = loadDeepSeekKeyStore();
+  const plant = (secret, sync) => backend.rows.set(DEEPSEEK_KEY_ALIAS, new Map([[asset.Tag.ALIAS, keyBytes(DEEPSEEK_KEY_ALIAS)],
+    [asset.Tag.SECRET, keyBytes(secret)], [asset.Tag.ACCESSIBILITY, asset.Accessibility.DEVICE_UNLOCKED], [asset.Tag.SYNC_TYPE, sync]]));
+  plant('sk-planted-0001', asset.SyncType.TRUSTED_DEVICE);
+  assert.equal(await store.status(), DeepSeekKeyStatus.Unavailable);
+  await assert.rejects(store.load(), /ATTRIBUTES/); await assert.rejects(store.save(keyBytes('sk-new-key-0003')), /ATTRIBUTES/);
+  await store.remove(); assert.equal(await store.status(), DeepSeekKeyStatus.Missing, 'a damaged record can still be deleted');
+  plant('sk bad\u0000', asset.SyncType.NEVER);
+  assert.equal(await store.status(), DeepSeekKeyStatus.Saved); assert.equal(await store.load(), undefined);
+  const failing = loadDeepSeekKeyStore({ queryError: 24000010 });
+  assert.equal(await failing.store.status(), failing.DeepSeekKeyStatus.Unavailable);
+  await assert.rejects(failing.store.load(), /QUERY/); await assert.rejects(failing.store.save(keyBytes('sk-ok-key-0004')), /QUERY/);
+});
+
+// Chat UI overhaul: in-card calendar edit, created-event summary, per-enable request limit and RAG excerpt order.
+const calendarPresentation = load(path.join(services, '../calendar/CalendarPresentation.ets'));
+const editedDraft = (...args) => calendarPresentation.calendarEditedDraft(...args);
+test('calendar card helpers format Beijing wall-clock dates, reminders and edited drafts without the device zone', () => {
+  const p = calendarPresentation;
+  assert.equal(p.calendarDateText('2026-10-28T16:00:00+08:00'), '10月28日 周三');
+  assert.equal(p.calendarWhenText({ startAt:'2026-10-28T16:00:00+08:00', endAt:'2026-10-28T17:00:00+08:00' }), '10月28日 周三 16:00–17:00');
+  assert.equal(p.calendarWhenText({ startAt:'2026-10-31T23:00:00+08:00', endAt:'2026-11-01T01:00:00+08:00' }),
+    '10月31日 周六 23:00–11月1日 周日 01:00');
+  assert.equal(p.calendarReminderText(0), '开始时提醒'); assert.equal(p.calendarReminderText(15), '提前 15 分钟提醒');
+  const draft = editedDraft('  评审会 ', '2099-10-27', '09:05', '10:00', 30);
+  assert.deepEqual(JSON.parse(JSON.stringify(draft)), { title:'评审会', startAt:'2099-10-27T09:05:00+08:00',
+    endAt:'2099-10-27T10:00:00+08:00', timeZone:'Asia/Shanghai', reminderMinutes:30 });
+  assert.equal(p.calendarTwoDigits(7), '07'); assert.equal(p.calendarTwoDigits(12), '12');
+  assert.deepEqual(p.CALENDAR_REMINDER_CHOICES, [0, 5, 10, 15, 30, 60]);
+  const summary = p.calendarCreatedSummary(draft, 105, false);
+  assert.equal(summary.title, '评审会'); assert.equal(summary.reminder, '提前 30 分钟提醒');
+  assert.equal(summary.eventId, 105); assert.equal(summary.reminderConfigured, false);
+});
+test('workbench calendar list groups by Beijing day: pending first, upcoming ascending with a limit, finished folded', () => {
+  const p = calendarPresentation;
+  const rec = (id, title, startAt, endAt, verified = true, reminderConfigured = true) => ({ schemaVersion:1,
+    operationId:'shuvi-calendar-' + id, draft:{ title, startAt, endAt, timeZone:'Asia/Shanghai', reminderMinutes:10 },
+    eventId: verified ? 100 : -1, verified, reminderConfigured });
+  const now = Date.parse('2026-10-27T20:50:00+08:00');
+  const records = [
+    rec('a', '讨论', '2026-10-26T15:00:00+08:00', '2026-10-26T16:00:00+08:00'),
+    rec('b', '项目评审会', '2026-10-28T16:00:00+08:00', '2026-10-28T17:00:00+08:00'),
+    rec('c', '项目评审会', '2026-10-28T15:00:00+08:00', '2026-10-28T16:00:00+08:00', true, false),
+    rec('d', '进行中', '2026-10-27T20:00:00+08:00', '2026-10-27T21:00:00+08:00'),
+    rec('e', '跨天', '2026-10-30T23:00:00+08:00', '2026-10-31T01:00:00+08:00'),
+    rec('f', '待核查', '2026-10-25T09:00:00+08:00', '2026-10-25T10:00:00+08:00', false, false),
+    rec('g', '昨天上午', '2026-10-26T09:00:00+08:00', '2026-10-26T10:00:00+08:00')
+  ];
+  const ids = groups => groups.map(g => g.rows.map(r => r.operationId.slice(-1)));
+  const s = p.calendarRecordSections(records, now, 3);
+  assert.deepEqual(s.groups.map(g => g.label), ['待核查', '今天 · 10月27日 周二', '明天 · 10月28日 周三']);
+  assert.deepEqual(ids(s.groups), [['f'], ['d'], ['c', 'b']], 'an ongoing event stays upcoming; a pending one is never folded');
+  assert.equal(s.groups[0].rows[0].time, '10月25日 周日 09:00–10:00'); assert.equal(s.groups[0].rows[0].status, 'pending');
+  assert.equal(s.groups[2].rows[0].time, '15:00–16:00'); assert.equal(s.groups[2].rows[0].status, 'reminder');
+  assert.equal(s.groups[2].rows[1].status, 'ok'); assert.equal(s.groups[2].rows[1].when, '10月28日 周三 16:00–17:00');
+  assert.equal(s.hiddenUpcoming, 1); assert.equal(s.pastCount, 2);
+  assert.deepEqual(s.past.map(g => g.label), ['10月26日 周一']); assert.deepEqual(ids(s.past), [['a', 'g']]);
+  const all = p.calendarRecordSections(records, now, 64);
+  assert.equal(all.hiddenUpcoming, 0); assert.equal(all.groups.at(-1).label, '10月30日 周五');
+  assert.equal(all.groups.at(-1).rows[0].time, '23:00–次日 01:00');
+  assert.equal(p.calendarRecordSections([], now, 5).groups.length, 0);
+  assert.match(p.calendarRecordStatusText('pending'), /核清前不能新建/);
+});
+test('workbench new-schedule form defaults to the next Beijing hour and keeps the duration when the start moves', () => {
+  const p = calendarPresentation;
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-10-27T20:50:00+08:00')), ['2026-10-27', '21:00', '2026-10-27', '22:00']);
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-10-27T22:10:00+08:00')), ['2026-10-28', '09:00', '2026-10-28', '10:00']);
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-12-31T23:59:00+08:00')), ['2027-01-01', '09:00', '2027-01-01', '10:00']);
+  assert.deepEqual(p.calendarDefaultSlot(Date.parse('2026-10-27T00:30:00+08:00')), ['2026-10-27', '01:00', '2026-10-27', '02:00']);
+  assert.deepEqual(p.calendarShiftedEnd('2026-10-28', '15:00', '2026-10-28', '16:30', '2026-10-28', '23:00'), ['2026-10-29', '00:30']);
+  assert.deepEqual(p.calendarShiftedEnd('2026-10-28', '15:00', '2026-10-28', '15:00', '2026-10-30', '09:00'), ['2026-10-30', '10:00'],
+    'an empty or inverted range falls back to one hour');
+  assert.deepEqual(p.calendarShiftedEnd('2026-12-31', '23:00', '2027-01-01', '01:00', '2027-01-01', '08:00'), ['2027-01-01', '10:00']);
+  const draft = p.calendarFormDraft(' 跨天 ', '2026-10-30', '23:00', '2026-10-31', '01:00', 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(draft)), { title:'跨天', startAt:'2026-10-30T23:00:00+08:00',
+    endAt:'2026-10-31T01:00:00+08:00', timeZone:'Asia/Shanghai', reminderMinutes:0 });
+  assert.equal(p.calendarTimeRange(draft), '23:00–次日 01:00');
+  assert.equal(p.calendarTimeRange({ startAt:'2026-10-30T23:00:00+08:00', endAt:'2026-11-02T01:00:00+08:00' }), '23:00–11月2日 周一 01:00');
+  const { calendarProbeDraftError } = load(path.join(services, '../calendar/CalendarProbeSession.ets'));
+  assert.equal(calendarProbeDraftError(draft, Date.parse('2026-10-27T20:50:00+08:00')), '', 'cross-day form drafts stay valid');
+});
+test('card edit resubmits a validated draft as a new confirmation without another model call and writes the edited event', async () => {
+  const texts = [calendarModelReply(), JSON.stringify({ schemaVersion:'1.0', kind:'answer', message:'普通回答' })];
+  const h = assistantHarness({ texts }); await h.start();
+  try {
+    await h.ui.send('安排讨论'); await waitCalendarCard(h.ui); const old = h.ui.snapshot().preview;
+    assert.equal(await h.ui.resubmit(editedDraft('修改后的讨论', '2099-10-27', '15:30', '16:30', 30)), '');
+    await waitCalendarCard(h.ui); const next = h.ui.snapshot().preview;
+    assert.notEqual(next.operationId, old.operationId); assert.notEqual(next.taskId, old.taskId);
+    assert.deepEqual(next.draft, { title:'修改后的讨论', startAt:'2099-10-27T15:30:00+08:00', endAt:'2099-10-27T16:30:00+08:00',
+      timeZone:'Asia/Shanghai', reminderMinutes:30 });
+    assert.match(h.ui.snapshot().reply, /已按你的修改更新日程/);
+    assert.equal(h.calls(), 1); assert.equal(h.trace.permissions, 0); assert.equal(h.trace.writes, 0); assert.equal(h.closed(), 0);
+    assert.equal(await h.ui.decide(true), true); await waitChat(h.ui);
+    assert.equal(h.trace.writes, 1); assert.equal(h.records.length, 1);
+    assert.equal(h.records[0].draft.title, '修改后的讨论'); assert.equal(h.records[0].operationId, next.operationId);
+    const view = h.ui.snapshot(); assert.equal(view.succeeded, true);
+    assert.equal(view.created.title, '修改后的讨论'); assert.equal(view.created.reminder, '提前 30 分钟提醒');
+    assert.match(view.created.when, /^10月27日 周. 15:30–16:30$/);
+    assert.equal(view.created.eventId, h.records[0].eventId); assert.equal(view.created.reminderConfigured, true);
+    await h.ui.send('普通问题'); await waitChat(h.ui);
+    assert.equal(h.ui.snapshot().reply, '普通回答'); assert.equal(h.ui.snapshot().created, undefined, 'only the verified reply carries a card');
+  } finally { await h.ui.stop(); }
+});
+test('card edit keeps the pending confirmation when the edit is unchanged, invalid or no longer pending', async () => {
+  const h = assistantHarness(); await h.start();
+  try {
+    await h.ui.send('安排讨论'); await waitCalendarCard(h.ui); const preview = h.ui.snapshot().preview;
+    assert.equal(await h.ui.resubmit(editedDraft('项目讨论', '2099-10-27', '15:00', '16:00', 10)), '内容没有变化。');
+    assert.match(await h.ui.resubmit(editedDraft('   ', '2099-10-27', '15:00', '16:00', 10)), /标题/);
+    for (const bad of [editedDraft('项目讨论', '2099-10-27', '16:00', '15:00', 10), editedDraft('项目讨论', '2001-10-27', '15:00', '16:00', 10),
+      { ...preview.draft, timeZone:'UTC' }, editedDraft('项目讨论', '2099-10-27', '15:00', '16:00', 1.5)]) {
+      assert.notEqual(await h.ui.resubmit(bad), '', JSON.stringify(bad));
+    }
+    const view = h.ui.snapshot(); assert.equal(view.calendarStage, 'authorization'); assert.equal(view.preview.operationId, preview.operationId);
+    assert.equal(h.trace.permissions, 0);
+    await h.ui.decide(true); await waitChat(h.ui); assert.equal(h.trace.writes, 1); assert.equal(h.records[0].draft.title, '项目讨论');
+    assert.equal(await h.ui.resubmit(editedDraft('另一条', '2099-10-28', '15:00', '16:00', 10)), '当前没有可修改的日程。');
+    assert.equal(h.calls(), 1); assert.equal(h.trace.writes, 1);
+  } finally { await h.ui.stop(); }
+});
+test('assistant per-enable request limit rejects the eleventh input before any model call', async () => {
+  const texts = Array.from({ length:12 }, (_, i) => JSON.stringify({ schemaVersion:'1.0', kind:'answer', message:'回答' + i }));
+  const h = assistantHarness({ texts }); await h.start();
+  try {
+    assert.equal(h.ui.snapshot().requestCount, 0); assert.equal(h.ui.snapshot().maxRequests, 10);
+    for (let i = 0; i < 10; i++) { await h.ui.send('问题' + i); await waitChat(h.ui); }
+    assert.equal(h.calls(), 10); assert.equal(h.ui.snapshot().requestCount, 10);
+    const reply = h.ui.snapshot().reply;
+    await h.ui.send('第十一个问题');
+    assert.equal(h.calls(), 10); assert.equal(h.ui.snapshot().busy, false); assert.equal(h.ui.snapshot().reply, reply);
+    assert.match(h.ui.snapshot().message, /10 次请求已用完/);
+  } finally { await h.ui.stop(); }
+});
+test('RAG excerpt selection demotes heading-only fragments behind body text without dropping them', async () => {
+  const { ragHeadingLike } = semanticRagAdapterModule;
+  for (const [text, title] of [['# 营业时间', ''], ['## 一、概述\n### 1.1 背景', ''], ['营业时间', '星河咖啡馆'], ['星河咖啡馆', '星河咖啡馆']]) {
+    assert.equal(ragHeadingLike(text, title), true, text);
+  }
+  for (const [text, title] of [['每周三闭店做设备保养。', ''], ['营业时间：9:00-21:00', ''], ['# 标题\n正文第一句。', ''], ['', ''], ['x'.repeat(41), '']]) {
+    assert.equal(ragHeadingLike(text, title), false, text);
+  }
+  const card = (key, text, route = 'BodyDirect') => ({ key, kind:'Text', title:'星河咖啡馆', text, documentKey:'doc-' + key,
+    generation:'gen', current:true, reasons:[{ route }] });
+  const headings = [card('h1', '营业时间'), card('h2', '# 设备保养'), card('h3', '星河咖啡馆')];
+  const bodies = [1, 2, 3, 4, 5].map(i => card('b' + i, '正文第' + i + '段，说明闭店安排。', 'Vector'));
+  const session = { state:{ direct:{ cards:headings, error:'' }, related:{ cards:bodies, error:'' }, semanticState:'Complete' },
+    async start() {}, async review() {}, async allowSemantic() {}, async close() {} };
+  const search = () => new semanticRagAdapterModule.KnowledgeSemanticRuntimeSearchAdapter(() => session)
+    .search({ query:'周几闭店', maxResults:5 }, { check() {} });
+  const full = await search();
+  assert.deepEqual(full.citations.map(c => c.evidenceId), ['b1', 'b2', 'b3', 'b4', 'b5']);
+  assert.deepEqual(full.citations.map(c => c.citationId), [1, 2, 3, 4, 5]);
+  session.state.related.cards = bodies.slice(0, 2);
+  const sparse = await search();
+  assert.deepEqual(sparse.citations.map(c => c.evidenceId), ['b1', 'b2', 'h1', 'h2', 'h3']);
+});
+test('RAG source chips preview the excerpt, not the shared file title', () => {
+  const chip = knowledgePresentation.knowledgeCitationChip;
+  assert.equal(chip(2, '消费满 10 杯可兑换任意一杯饮品。'), '[2] 消费满 10 杯可兑换任…');
+  assert.equal(chip(4, '> 本文档为虚构测试资料'), '[4] 本文档为虚构测试资料');
+  assert.equal(chip(5, '## 营业\n\n时间'), '[5] 营业 时间');
+  assert.equal(chip(1, '短句'), '[1] 短句');
+  assert.equal(chip(3, '😀'.repeat(13)), '[3] ' + '😀'.repeat(12) + '…', 'surrogate pairs are never split');
+});

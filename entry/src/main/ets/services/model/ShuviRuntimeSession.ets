@@ -37,6 +37,18 @@ export interface ShuviRuntimeSessionFactory {
   create(): ShuviRuntimeSessionPort;
 }
 
+export interface ShuviAuthorizationPort {
+  decide(backend: AgentApplicationBackend, previews: SearchAuthorizationPreviews,
+    prompt: AgentFrontendAuthorizationPrompt, approved: boolean): Promise<AgentFrontendCommandReceipt>;
+}
+
+class SearchAuthorizationPort implements ShuviAuthorizationPort {
+  decide(backend: AgentApplicationBackend, previews: SearchAuthorizationPreviews,
+    prompt: AgentFrontendAuthorizationPrompt, approved: boolean): Promise<AgentFrontendCommandReceipt> {
+    return decideSearchAuthorization(backend,previews,prompt,approved,Date.now());
+  }
+}
+
 export class ShuviRuntimeSession implements ShuviRuntimeSessionPort {
   private readonly backend: AgentApplicationBackend;
   private readonly resources: ShuviSessionResources;
@@ -44,6 +56,7 @@ export class ShuviRuntimeSession implements ShuviRuntimeSessionPort {
   private readonly manager: McpClientManager;
   private readonly previews: SearchAuthorizationPreviews;
   private readonly searchUsage?: SearchUsageReceipts;
+  private readonly authorization: ShuviAuthorizationPort;
   private starting?: Promise<void>;
   private stopping?: Promise<void>;
   private stopped: boolean = false;
@@ -51,10 +64,11 @@ export class ShuviRuntimeSession implements ShuviRuntimeSessionPort {
 
   constructor(backend: AgentApplicationBackend, resources: ShuviSessionResources,
     http: SessionModelHttpClient, manager: McpClientManager, previews: SearchAuthorizationPreviews,
-    searchUsage?: SearchUsageReceipts) {
+    searchUsage?: SearchUsageReceipts, authorization: ShuviAuthorizationPort = new SearchAuthorizationPort()) {
     this.backend = backend; this.resources = resources; this.http = http;
     this.manager = manager; this.previews = previews;
     this.searchUsage = searchUsage;
+    this.authorization = authorization;
   }
 
   async start(key: Uint8Array): Promise<void> {
@@ -112,7 +126,7 @@ export class ShuviRuntimeSession implements ShuviRuntimeSessionPort {
   }
   async authorize(prompt: AgentFrontendAuthorizationPrompt, approved: boolean): Promise<AgentFrontendCommandReceipt> {
     this.assertReady();
-    return await decideSearchAuthorization(this.backend, this.previews, prompt, approved, Date.now());
+    return await this.authorization.decide(this.backend,this.previews,prompt,approved);
   }
   async cancel(taskId: string): Promise<AgentFrontendCommandReceipt> {
     this.assertReady();

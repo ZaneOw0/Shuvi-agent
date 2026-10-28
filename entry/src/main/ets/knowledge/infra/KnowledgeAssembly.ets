@@ -55,13 +55,22 @@ import { UnifiedEmbeddingService } from '../application/UnifiedEmbeddingService'
 import { UnifiedProcessingQueue } from '../application/UnifiedProcessingQueue';
 import { UnifiedSettingsService } from '../application/UnifiedSettingsService';
 import { UnifiedEmbeddingConfigPort } from '../domain/UnifiedEmbeddingPorts';
-import { EmbeddingConfig } from '../domain/EmbeddingModels';
+import {
+  EmbeddingConfig, EmbeddingCredentialStatus, EmbeddingDetectionStatus, EmbeddingProvider
+} from '../domain/EmbeddingModels';
 import { LegacyParsedDocumentReader } from './LegacyParsedDocumentReader';
 import { ParsedDocumentMigrationService } from '../application/ParsedDocumentMigrationService';
 import { UnifiedQueryRepository } from './UnifiedQueryRepository';
 import { UnifiedQueryService } from '../application/UnifiedQueryService';
 import { KnowledgeQuerySession } from '../application/KnowledgeQuerySession';
+import { EphemeralQueryHistory } from '../application/EphemeralQueryHistory';
 import { UnifiedKnowledgeHistoryRepository } from './UnifiedKnowledgeHistoryRepository';
+import { KnowledgeDatabaseAdapter } from '../application/KnowledgeDatabaseAdapter';
+import { KnowledgeRuntimeSearchAdapter } from '../application/KnowledgeRuntimeSearchAdapter';
+import { KnowledgeRagReadiness } from '../domain/KnowledgeRuntimePorts';
+import { UnifiedProcessingSettings } from '../domain/UnifiedKnowledgeModels';
+import { embeddingConfigBinding } from '../pipeline/EmbeddingBasisPolicy';
+import { embeddingFingerprint } from '../pipeline/EmbeddingPolicy';
 
 export { KnowledgePlatformIdentity } from './KnowledgeIdentity';
 class UnifiedAssemblyEmbeddingConfig implements UnifiedEmbeddingConfigPort {
@@ -88,6 +97,11 @@ export class KnowledgeAssembly {
   migration: ParsedDocumentMigrationService;
   querySession: KnowledgeQuerySession;
   unifiedHistory: UnifiedKnowledgeHistoryRepository;
+  knowledgeDatabase: KnowledgeDatabaseAdapter;
+  runtimeSearch: KnowledgeRuntimeSearchAdapter;
+  private runtimeUnifiedConfig: UnifiedAssemblyEmbeddingConfig;
+  private runtimeQueryRepository: UnifiedQueryRepository;
+  private runtimeQueryEngine: UnifiedQueryService;
   unifiedLifecycle: ParsedDocumentLifecycle;
   unifiedMessage: string = '';
   text: TextKnowledgeAssembly;
@@ -117,6 +131,7 @@ export class KnowledgeAssembly {
     this.unifiedAssets = new ParsedDocumentAssets(context.filesDir,context.cacheDir,KnowledgeStorageScope.production(),this.unified,new KnowledgePlatformIdentity(),this.sessionId);
     this.unified.attachPublicationVerifier(this.unifiedAssets);
     this.unifiedIngestion = new ParsedDocumentIngestionService(this.unified,this.unifiedAssets,new KnowledgePlatformIdentity());
+    this.knowledgeDatabase = new KnowledgeDatabaseAdapter(this.unified,this.unifiedAssets,this.unifiedIngestion,new KnowledgePlatformIdentity());
     this.unifiedImports = new ParsedDocumentImportAdapter(context,this.host,new KnowledgePlatformIdentity(),this.unifiedIngestion);
     this.migration=new ParsedDocumentMigrationService(new LegacyParsedDocumentReader(context,this.host,new KnowledgePlatformIdentity()),this.unified,this.unifiedAssets,new KnowledgePlatformIdentity());
     this.text = new TextKnowledgeAssembly(context, (): void => { this.changed(); }, this.host);
@@ -161,16 +176,17 @@ export class KnowledgeAssembly {
     const visionCredential: VisionCredentialStore=new VisionCredentialStore();
     this.imageKnowledge=new ImageKnowledgeService(this.unified,this.unifiedAssets,this.unified,new KnowledgePlatformIdentity(),new VisionTransportAdapter(visionCredential,new KnowledgePlatformIdentity()));
     this.unifiedVectors=new UnifiedVectorRepository(this.unified,this.vectors,new KnowledgePlatformIdentity());
-    const unifiedConfig: UnifiedAssemblyEmbeddingConfig=new UnifiedAssemblyEmbeddingConfig(this.embedding);
+    const unifiedConfig: UnifiedAssemblyEmbeddingConfig=new UnifiedAssemblyEmbeddingConfig(this.embedding); this.runtimeUnifiedConfig=unifiedConfig;
     this.unifiedEmbedding=new UnifiedEmbeddingService(this.unified,this.unifiedVectors,counter,transport,unifiedConfig,new KnowledgePlatformIdentity());
     this.unifiedQueue=new UnifiedProcessingQueue(this.unified,this.unified,this.unifiedAssets,new KnowledgePlatformIdentity(),this.imageKnowledge,this.unifiedEmbedding);
     this.unifiedSettings=new UnifiedSettingsService(this.unified,visionCredential,unifiedConfig,this.unifiedQueue);
     this.embedding.attachConfigInvalidation(async (): Promise<void>=> { await this.unifiedSettings.invalidateEmbedding(); });
-    const queryRepository: UnifiedQueryRepository=new UnifiedQueryRepository(this.host,this.unified,this.vectors,unifiedConfig,new KnowledgePlatformIdentity());
+    const queryRepository: UnifiedQueryRepository=new UnifiedQueryRepository(this.host,this.unified,this.vectors,unifiedConfig,new KnowledgePlatformIdentity()); this.runtimeQueryRepository=queryRepository;
+    this.runtimeSearch=new KnowledgeRuntimeSearchAdapter(queryRepository,unifiedConfig);
     this.sourceRegistry.attachUnifiedAdmission(queryRepository); transport.attachUnifiedQuery(counter,this.sourceRegistry);
-    const queryEngine: UnifiedQueryService=new UnifiedQueryService(queryRepository,queryRepository,this.unified,this.vectors,unifiedConfig,counter,transport,new KnowledgePlatformIdentity());
+    const queryEngine: UnifiedQueryService=new UnifiedQueryService(queryRepository,queryRepository,this.unified,this.vectors,unifiedConfig,counter,transport,new KnowledgePlatformIdentity()); this.runtimeQueryEngine=queryEngine;
     this.unifiedHistory=new UnifiedKnowledgeHistoryRepository(this.unified,this.unifiedAssets,queryRepository);
-    this.querySession=new KnowledgeQuerySession(queryRepository,queryEngine,unifiedConfig,this.unifiedHistory,new KnowledgePlatformIdentity());
+    this.querySession=this.createQuerySession();
     this.unifiedLifecycle=new ParsedDocumentLifecycle(this.unified,this.unifiedAssets,this.unifiedVectors,(): void=> { this.querySession.invalidate(); },(): void=> { this.changed(); });
     this.unifiedQueue.attachSettled(async (): Promise<void>=> { await this.unifiedLifecycle.sync(); });
     this.unifiedIngestion.attachPublished(async (document: ParsedDocument): Promise<void>=> { await this.unifiedLifecycle.sync(); await this.unifiedQueue.enqueue(document); });
@@ -203,6 +219,46 @@ export class KnowledgeAssembly {
   subscribe(listener: () => void): void { if (this.listeners.indexOf(listener) < 0) { this.listeners.push(listener); } }
   unsubscribe(listener: () => void): void { this.listeners = this.listeners.filter((item: () => void): boolean => item !== listener); }
   changed(): void { for (const listener of this.listeners) { listener(); } }
+  createQuerySession(): KnowledgeQuerySession {
+    return new KnowledgeQuerySession(this.runtimeQueryRepository,this.runtimeQueryEngine,this.runtimeUnifiedConfig,
+      this.unifiedHistory,new KnowledgePlatformIdentity());
+  }
+  /** Chat RAG: same scope, engine and config, but nothing is written to the knowledge page search history. */
+  createRagQuerySession(): KnowledgeQuerySession {
+    return new KnowledgeQuerySession(this.runtimeQueryRepository,this.runtimeQueryEngine,this.runtimeUnifiedConfig,
+      new EphemeralQueryHistory(),new KnowledgePlatformIdentity());
+  }
+  async ragReadiness(): Promise<KnowledgeRagReadiness> {
+    const result: KnowledgeRagReadiness=new KnowledgeRagReadiness();
+    if (!this.unified.ready()) { result.code='UnifiedStoreUnavailable'; result.message='知识库统一存储尚未就绪。'; return result; }
+    const config: EmbeddingConfig=this.runtimeUnifiedConfig.currentConfig(); const state=this.embedding.state;
+    if (config.provider!==EmbeddingProvider.SiliconFlow || config.modelId!=='BAAI/bge-m3' || config.mutationPending) {
+      result.code='EmbeddingConfigRequired'; result.message='请先配置并保存 SiliconFlow / BAAI/bge-m3。'; return result;
+    }
+    if (state.credential!==EmbeddingCredentialStatus.Configured) {
+      result.code='EmbeddingCredentialRequired'; result.message='请先配置 Embedding Provider 的 Key。'; return result;
+    }
+    if (state.detection.status!==EmbeddingDetectionStatus.Passed ||
+      state.detection.configFingerprint!==embeddingFingerprint(config) ||
+      state.detection.credentialRevision!==config.credentialRevision ||
+      state.detection.requestedModel!==config.modelId || state.detection.returnedModel!==config.modelId ||
+      state.detection.dimension<1) {
+      result.code='EmbeddingDetectionRequired'; result.message='Embedding Provider 尚未通过当前配置检测。'; return result;
+    }
+    const settings: UnifiedProcessingSettings=await this.unifiedSettings.setting('Embedding');
+    if (!settings.enabled || !settings.automatic || !settings.costAcknowledged || !settings.baselineAccepted ||
+      settings.paused || settings.configBinding!==embeddingConfigBinding(config) || settings.model!==config.modelId ||
+      settings.credentialRevision!==config.credentialRevision) {
+      result.code='EmbeddingSettingsRequired'; result.message='请先开启当前 Embedding 配置的自动入库并确认基线与费用。'; return result;
+    }
+    const cancel: ParsedCancellation=new ParsedCancellation(); const scope=await this.runtimeQueryRepository.capture(config,false,cancel);
+    if (!scope.complete || scope.space===undefined || scope.targets.length===0 ||
+      scope.space.dimension!==state.detection.dimension || scope.space.requestedModel!==config.modelId ||
+      scope.space.returnedModel!==config.modelId) {
+      result.code='VectorKnowledgeRequired'; result.message='当前知识库还没有可用于 RAG 的完整向量数据。'; return result;
+    }
+    result.ready=true; result.code='Ready'; result.message='知识库 RAG 已就绪。'; return result;
+  }
   sourceReadLease(sourceId: string, generation: string): KnowledgeReadLease {
     const lease: KnowledgeReadLease = new KnowledgeReadLease(); lease.id = new KnowledgePlatformIdentity().id(); lease.sourceId = sourceId; lease.generation = generation; lease.sessionId = this.sessionId; return lease;
   }
@@ -248,7 +304,16 @@ export class KnowledgeAssembly {
   }
   async retryUnifiedProcessing(): Promise<void> { await this.unifiedQueue.stop(); await this.retryUnifiedInitialization(); await this.unifiedLifecycle.sync(); await this.unifiedQueue.initialize(); await this.unifiedIngestion.refresh(); }
   async acquire(): Promise<void> {
-    const operation = this.gate.then(async (): Promise<void> => { if (this.initializing === undefined) { this.initializing = this.start(); } const initializing: Promise<void> = this.initializing; await initializing; this.leases++; }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
+    const operation = this.gate.then(async (): Promise<void> => {
+      let initializing: Promise<void> | undefined = this.initializing;
+      if (initializing === undefined) { initializing = this.start(); this.initializing = initializing; }
+      try { await initializing; } catch (error) {
+        if (this.initializing === initializing) { this.initializing = undefined; }
+        if (error instanceof Error) { throw error; }
+        throw new Error('KNOWLEDGE_INITIALIZATION_FAILED');
+      }
+      this.leases++;
+    }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
   }
   async release(): Promise<void> {
     const operation = this.gate.then(async (): Promise<void> => { if (this.leases <= 0) { return; } if (this.leases === 1) { this.closing = this.closeSession(); const closing: Promise<void> = this.closing; try { await closing; } finally { this.closing = undefined; } } this.leases--; }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
@@ -277,6 +342,7 @@ export class KnowledgeAssembly {
     }
   }
   private async closeSession(): Promise<void> {
+    try {
        await this.quiesceUnified();
        await this.retrySourceReleases(); await this.imageSources.close(); await this.docxSources.close();
         this.embedding.pause(); this.ingestion.pause(); this.search.pause(); this.pages.pause();
@@ -284,7 +350,8 @@ export class KnowledgeAssembly {
        const deadline: number = Date.now()+120000;
         while (this.embedding.state.busy || this.ingestion.state.busy || this.ingestion.state.releasing || this.search.state.busy || this.pages.reading()) { if (Date.now() >= deadline) { throw new Error('KnowledgeSessionReleaseUnconfirmed'); } await new Promise<void>((resolve: () => void): void => { setTimeout(resolve,20); }); }
         await this.retrySourceReleases();
-       this.pages.clearCache(); await this.vectors.close(); await this.docx.close(); await this.images.close(); await this.repository.close(); await this.unified.close(); await this.text.close(); this.initializing = undefined;
+       this.pages.clearCache(); await this.vectors.close(); await this.docx.close(); await this.images.close(); await this.repository.close(); await this.unified.close(); await this.text.close();
+    } finally { this.initializing = undefined; }
   }
    async quiesceUnified(): Promise<void> { this.unifiedIngestion.pause(); this.migration.pause(); await this.querySession.close(); await this.unifiedQueue.stop(); await this.migration.close(); await this.unifiedIngestion.stop(); }
    static foreground(): void { for (const session of KnowledgeAssembly.sessions) { session.unifiedQueue.resumeForeground(); } }

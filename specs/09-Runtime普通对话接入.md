@@ -1,12 +1,14 @@
 # 09 Runtime 普通对话接入
 
-> 状态：v0.1 已实现待验收；用户已确认四项主要模拟器交互符合预期，设备证据待归档。
+> 状态：v0.1 已实现待验收；用户已确认普通对话四项主要模拟器交互符合预期；现有知识库开关已接入检索优先 RAG。2026-10-27 修复检索结果被丢弃、补齐面板、改为开启知识库时才打开本机资料、聊天提问不写知识库历史、回答次数在检索前拦截（§8.3）；direct host 187/187、完整知识库 host 309/309、未签名 `assembleHap` 通过。同日在模拟器上以真实 SiliconFlow / DeepSeek 跑通 RAG 端到端（§8.4）：11 项检查中 10 项符合预期（其中 5 项有截图或日志、5 项仅用户确认），断网后“仅重试回答”未在设备验证；未按第 7.0 节完整落盘设备日志，故不升级状态。签名安装、真机、最大字体与读屏待验证。
 > 优先级：先验证 UX → Runtime → 模型的最小真实链路。
 > 负责人：UX 应用接入；Agent / 平台共同审核。
-> 最后更新：2026-10-24。
+> 最后更新：2026-10-27（§8.4 模拟器真实 Provider 验收；§8.6 知识库面板与证据排序整理；助手聊天日程扩展见 §1 与 spec 01）。
 > 授权依据：用户确认“按照你的建议推进”，本轮完成普通对话装配及首页接线；不开放工具调用。
 
 ## 1. 目标与范围
+
+2026-10-26 后续扩展：助手真实模式已通过 `AssistantRuntimeSession` 组合意图/草稿模型任务与独立原生日历工具任务，日程描述按 `PERSONAL` 处理，确认后才写入系统日历。启用范围、有限澄清上下文、同会话 Key 复用和新增验收见 [spec 01 §7.12](01-创建日程并提醒.md#712-v08-助手聊天与-runtime-原生日历工具2026-10-26)。下文保留 v0.1 普通问答实现与证据；“仅公开问题、不开放工具”不再代表扩展后的整个助手模式。普通问答本身仍不写日历，搜索回答仍采用独立的公开信息用途。
 
 2026-10-24 后续扩展：真实搜索作为独立模式接入，见 [spec 03 §6.11](03-联网搜索.md)。搜索后的回答复用模型适配器并注入裁剪后的来源上下文；本 spec 的普通对话路径仍不调用搜索或读取 RAG，以下“不开放工具”限定于普通对话。
 
@@ -111,6 +113,116 @@
 ## 7. 已知限制与未覆盖项
 
 - 单轮普通对话，历史只在当前界面展示，不会发给模型；尚无 token 流式渲染、真实来源或知识库引用。
-- Key 仅本次会话可用；异常关闭和进程被回收无法保证远端取消，失败不能推断免费。
+- 会话凭据只在内存，随会话停止清除；用户可选择把 Key 记在本机系统安全存储，下次仍需手动点击启用（§8.5）。异常关闭和进程被回收无法保证远端取消，失败不能推断免费。
 - 暂不展示细分错误码和恢复历史；存储异常时可能需要关闭/重启排查，禁止清库“解决”。
 - 四项主要模拟器交互已有用户反馈，设备日志尚未归档；实际 HTTP 与持久化的设备级取证、离开助手页、最大字体、读屏及 OpenHarmony 真机仍待验收。
+
+## 8. 本机知识库回答与 RAG 增量（2026-10-26）
+
+> 归属：下列前半部分保留旧的 Direct-only 两段式回答基线和历史证据；当前产品接线已升级为“本机正文/标签 → 当前问题 Embedding → 本机 KNN → DeepSeek 带引用回答”，见 8.2。前端契约见第 9 节。
+
+- （旧工具路径：自 8.2 起当前页面已无调用方，代码保留待团队评审，以下几条为历史基线。）本机工具链路为 `RuntimeKnowledgeSession → ProductionAgentRuntime → native://shuvi/knowledge.search.local → KnowledgeRuntimeSearchAdapter → UnifiedQueryRepository`，模型不决定是否检索。
+- 工具只接受 PERSONAL 任务、零费用、无权限、无网络、低风险、无副作用和单次派发；严格匹配后由应用自动批准本机读取。授权、checkpoint、调用和结果通过独立加密库 `shuvi_knowledge_runtime_v1.db` 持久化，结果一致时零金额提交，不伪造账单。
+- 检索只使用完整的本机 scope，默认排除归档，仅返回当前可见的 Direct 正文/OCR 命中；最多 5 条、每条 800 字符、总计 3200 字符。每条引用携带稳定 `evidenceId`、document generation、标题、类型与证据路径；Tag-only 命中不得进入引用。
+- 后端已实现完整的“两段任务”接口：用户明确同意并调用 `start(toolFactory, answerFactory, key, true)` 后，任务 A 本机检索，成功并冻结证据快照后才提交任务 B PERSONAL 模型任务。启用本身不发送模型请求；`consent=false` 不启动会话。当前页面未接入这段 UI。
+- 只有任务 A 成功并通过 `parseKnowledgeToolResult` 校验后才冻结证据快照；空结果、Tag-only、scope 不完整、归档/删除/失效 generation 或结果校验失败均不调用模型。
+- 任务 B 使用独立 `KnowledgeAnswerRuntimeFactory` / `KnowledgeAnswerPlanner` / `KnowledgeAnswerModelAdapter`，隐私级别为 PERSONAL，禁用工具、搜索、日历、MCP 和自动重试；普通 `ChatRuntimeAssembly` 仍只接受 PUBLIC，未被放宽。
+- 发送范围仅为本次问题、引用编号、截短标题和截短正文/OCR 片段（最多 5 条、每条 800 字符、总计 3200 字符）；不发送完整文档、文件路径、数据库标识、sourceHash、generation、evidenceId 或其他内部元数据。数据目的地为 DeepSeek API，处理、留存与费用以供应商规则为准。
+- 模型输出必须为严格 JSON：`{"answer":"...","citations":[1]}`；回答非空且有界，所有 `[n]` 必须在 1..N、至少一个有效引用、引用片段非空；无效引用、空引用或 Markdown 包裹均不显示为成功。成功结果先写入独立加密库 `shuvi_knowledge_answer_v1.db` 再显示；失败/取消保留本机引用，可“仅重试回答”，重试复用同一证据快照，不重新检索。
+- 如果模型明确回答“资料中没有足够依据”且 `citations=[]`，后端映射为 `insufficient` 非成功状态：保留本机引用、不伪造引用、不提供“仅重试回答”。系统提示禁止用方括号表示年份、步骤或范围。
+- `recordOutcome` 结果写入被拒或抛错时，通过工厂回调立即结束检索/回答并保留引用，不再等待 120 秒 watchdog；派发前 checkpoint 拒写仍可能需要手动停止。
+- 兼容入口 `startLocal(toolFactory)` 提供仅本机检索：不需要 Key、不启动模型会话、不调用 DeepSeek。8.2 之后当前页面已不再调用它。
+- 2026-10-26 评审修复：仅本机/空闲停止不再误报“模型请求可能计费”；启动失败且关闭失败时保留 BLOCKED 的资源关闭提示；启动失败不再清空上一轮引用/回答。另修复知识库后端写入读回在并发归档时可能返回成功、工具结果解析再次校验 3200 字符总量、初始化失败后无法重试、关闭失败提前清 opened、取消等待期间完成任务仍派发模型、提交后订阅失败不取消孤儿任务、OCR 多 chunk 重复 evidenceId；新增 `onOutcomeRejected` 立即拒写反馈、`insufficient` 非成功状态和“禁止方括号年份/范围”提示；新增对应回归用例。
+- 2026-10-26 自动复验：Runtime/模型套件 150/150，知识库统一宿主 182/182，完整知识库宿主 309/309，来源校验通过；HAP/HAR 207 个任务（129 执行、78 最新）通过，未签名。证据：`.cache/test-logs/2026-10-26-knowledge-answer-direct-host-final8-42101a3/`、`.cache/test-logs/2026-10-26-knowledge-answer-unified-host-final8-42101a3/`、`.cache/test-logs/2026-10-26-knowledge-answer-full-host-final8-42101a3/`、`.cache/test-logs/2026-10-26-knowledge-answer-build-final8-42101a3/`。一次归档构建 final3 以 exit 1 中断（167 任务，未作为证据），随后 final4-final8 均 207 任务通过。以上仍是 host 与未签名构建证据，不等同于真机、OpenHarmony 或设备数据库验收。
+
+### 8.1 模拟器冒烟（2026-10-26）
+
+- 设备：`Pura 90 Pro`，`127.0.0.1:5555`，HarmonyOS `7.0.0 (26.0.0)`，API 26。
+- 操作：本机临时签名并安装 debug 包；启动应用 → 进入真实功能 → 打开知识库 → 启用本机检索 → 填入知识样例并发送 → 停止会话。
+- 结果：应用启动与页面切换无崩溃；本机知识库返回“没有直接正文命中”，页面显示“未调用模型”；未调用 DeepSeek，未使用真实 API Key；停止后会话/凭据清理。脱敏日志摘要 `fatal=0`、`crash=0`、`js_exception=0`，有 4 条系统 E 级日志（图形/属性相关），未导致失败。
+- 评审修复后复查：重新安装最终构建，打开知识库显示“尚未启用本机知识库检索”，空结果不调用模型，停止后显示“未发送模型请求”，不再误报模型计费。证据：`.cache/test-logs/2026-10-26-device-smoke-final-42101a3/`、`.cache/test-logs/2026-10-26-device-smoke-final-logs-42101a3/`、`.cache/test-logs/2026-10-26-device-smoke-final-summary-42101a3/`；截图 `.cache/device-smoke/postfix-stopped.png`。
+- 最终构建 final6 复查：启动、真实功能、知识库、启用本机检索、停止会话均正常；初始/就绪/停止文案符合预期；脱敏日志 `fatal=0`、`crash=0`、`js_exception=0`（有系统 E 级日志，未导致失败）。证据：`.cache/test-logs/2026-10-26-device-smoke-final6-42101a3/`、`.cache/test-logs/2026-10-26-device-smoke-final6-logs-42101a3/`、`.cache/test-logs/2026-10-26-device-smoke-final6-summary-42101a3/`；截图 `.cache/device-smoke/final6-stopped.png`。
+- 最终构建 final8 复查（安装时间 19:07:25）：安装后强制停止并重启，启动 → 真实功能 → 知识库 → 启用本机检索 → 发送“休比是什么” → 停止；空命中显示“本机知识库没有直接正文命中；未调用模型”，停止显示“会话已停止；凭据已清除，已显示的引用保留；未发送模型请求”。应用 PID 日志 `fatal=0`、`crash=0`、`js_exception=0`、`error=0`；全缓冲区 7015 行中的 8 条系统 JS 异常均不属于应用。安装捕获 `run_cmd_exit=0`，其设备日志阶段因未显式指定 `DEVECOCLI_BIN` 以 127 结束，另以 `hdc hilog` 全缓冲脱敏摘要复核。证据：`.cache/test-logs/2026-10-26-device-smoke-final8-42101a3/`、`.cache/test-logs/2026-10-26-device-smoke-final8-logcheck-42101a3/`；截图 `.cache/device-smoke/final8-enabled.png`、`.cache/device-smoke/final8-result.png`、`.cache/device-smoke/final8-stopped.png`。
+- 未覆盖：新的 Key/同意/两阶段模型回答 UI 尚未由前端接入；final8 模拟器冒烟只走 `startLocal()` 本机检索，没有真实模型请求、账单、模型引用或真机/OpenHarmony 验收。
+- 证据：`.cache/test-logs/2026-10-26-device-smoke-42101a3/`、`.cache/test-logs/2026-10-26-device-smoke-logs-42101a3/`、`.cache/test-logs/2026-10-26-device-smoke-summary-42101a3/`；截图 `.cache/device-smoke/home.png`、`.cache/device-smoke/knowledge-empty.png`。
+- 复现：`BUNDLE=com.example.shuvi RUN_CMD="bash scripts/dev-run.sh --emulator 'Pura 90 Pro' --product default --no-emulator" bash scripts/capture-test-log.sh device-smoke 30m 127.0.0.1:5555`。签名材料未入库，`build-profile.json5` 已恢复模板。
+
+### 8.2 检索优先 RAG 产品接线（2026-10-26）
+
+- 删除未跟踪的模型优先实验 `KnowledgeRagRuntimeAssembly.ets` / `KnowledgeRagTaskSupport.ets`，不再让 DeepSeek 先判断是否搜索。
+- `RuntimeAssistantCoordinator` 消费用户一次输入的 DeepSeek Key，在内存中为助手聊天与 PERSONAL 知识库回答建立隔离会话（合入日历增量后，助手聊天为 `ChatPurpose.ASSISTANT` / PERSONAL，见 §1 与 spec 01 §7.12）；知识库开关关闭后普通聊天继续可用，退后台、离开页面或停止真实对话时两份凭据一起清除。
+- `KnowledgeSemanticRuntimeSearchAdapter` 为每个问题创建独立 `KnowledgeQuerySession`，固定执行本机 Direct/Tag、精确问题授权、一次问题 Embedding、本机向量 KNN，再合并去重；Tag-only 不作为事实证据。
+- 开启知识库只执行本机就绪检查：当前仅接受已保存并检测通过的 SiliconFlow / `BAAI/bge-m3`、已确认基线和费用的自动入库设置，以及至少一个完整当前向量目标；开关本身不产生外部请求。
+- 检索结果仍限制为最多 5 条、每条 800 字符、总计 3200 字符；内部路径、数据库 ID、generation、hash 和 evidenceId 不进入 DeepSeek 提示词。空结果或语义检索失败不调用 DeepSeek。
+- 页面未新增 Key 输入或确认页；现有知识库开关即当前会话 RAG 许可，关闭开关只撤销 RAG，不停止普通对话。
+- 本轮即时验证：Runtime/模型 host 175/175；完整知识库 host 309/309；未签名 `entry:assembleHap` 81 任务成功（35 执行、46 最新）。尚未执行真实 Provider、签名安装、模拟器交互或真机验收。该轮用例在会话与适配器两侧都用替身，未覆盖真实组合，见 8.3 第一条。
+
+### 8.3 验收修复与复验（2026-10-27）
+
+来源：对 `930b76a` 的只读验收。每项单独提交并推送到 `feat/agent-grounded-qa`。
+
+- `1b9cb25` 修复检索结果被丢弃：`KnowledgeSemanticRuntimeSearchAdapter` 返回前关闭查询会话，会把调用方传入的取消标记置为已取消，`RuntimeKnowledgeSession` 据此丢弃成功结果，问题停在“正在检索”、从不调用 DeepSeek，120 秒后由看门狗停止会话。改为只以 generation 判断结果是否过期；新增真实组合回归用例。
+- `3ab6cde` 面板补齐交接契约第 4 节：本机检索/模型回答两阶段状态；DeepSeek 回答移到引用上方并加“DeepSeek 整理回答（依据下方片段，不是原始资料）”标注；`answerFailed` 显示“仅重试回答”；`insufficient` 显示为非成功结论。视图新增 `answerSource`。
+- `a29aa65` 聊天 RAG 改用不落盘的 `EphemeralQueryHistory`，问题和片段不再写入知识库页面的检索历史。
+- `f3ef49d` 启动普通聊天不再打开本机知识库：`prepareRag` 只启动 PERSONAL 回答会话，首次开启知识库时才获取 `KnowledgeAssembly` 租约；打开失败可重试，打开途中停止会释放迟到的租约；开关显示“准备中…”。
+- `45f2e60` 回答次数（10 次，含重试）在检索前拦截，用完后不再调用 Embedding、不再提供无效重试；面板显示 `n/10`；会话停止或用完后说明“停止真实对话后重新输入 Key 启用”；被拒绝的问题放回输入框。
+- 复验（Windows 本机，DevEco Studio 自带 SDK 与 Node 24.14.1）：在 `45f2e60` 上 direct host 187/187、完整知识库 host 309/309；同一源码的未签名 `assembleHap --no-daemon` 通过，0 ERROR，改动文件无新增 WARN。各项修复另做变异验证：撤销修复时对应用例失败。`f3ef49d` 首次构建因页面状态名与知识库页已有的 `knowledgeOpening` 重名失败（`…-lazy-p1-3-build-a29aa65`，exit 4），改名后通过。
+- 证据（`.cache/test-logs/`，不入库）：最终复验 `2026-10-27-knowledge-rag-final-{direct-host,full-host}-45f2e60/`、构建 `2026-10-27-knowledge-rag-limit-p1-4-build-f3ef49d/`；逐项过程 `2026-10-27-knowledge-rag-p0-{direct-host,full-host,build}-930b76a/`、`2026-10-27-knowledge-panel-p1-1-{direct-host-1b9cb25,build-1b9cb25-2}/`、`2026-10-27-knowledge-rag-history-p1-2-{full-host,build}-3ab6cde/`、`2026-10-27-knowledge-rag-lazy-p1-3-{direct-host-a29aa65-2,build-a29aa65-2}/`、`2026-10-27-knowledge-rag-limit-p1-4-direct-host-f3ef49d/`。
+- 复现：`CAPTURE_HOST_ONLY=1 DEVECO_SDK_HOME='<DevEco Studio>/sdk' RUN_CMD='node entry/src/test/run-direct-model-tests.cjs' bash scripts/capture-test-log.sh <scope>`；完整宿主把 `RUN_CMD` 换成 `node entry/src/test/run-host-tests.cjs`；构建为 `ohpm install --all` 后 `hvigorw assembleHap --no-daemon`。`ohpm install` 会把 6 个 `oh-package-lock.json5` 改成 CRLF 行尾（内容无差异），构建后已还原。
+- 未覆盖（截至本节复验时）：真实 SiliconFlow/DeepSeek 凭据下的模拟器或真机端到端验收、页面视觉、最大字体与读屏；旧工具路径与 `KnowledgeDatabaseAdapter` 的去留待团队评审。模拟器端到端结果见 8.4。
+
+### 8.4 模拟器真实 Provider 验收（2026-10-27）
+
+- 环境：`Pura 90 Pro` 模拟器，`127.0.0.1:5555`；安装包由 `710d1c0` 构建（未签名 debug HAP，`install -r`，保留既有应用数据；`build_profile=template`；工作区仅 6 个 `oh-package-lock.json5` 行尾差异）。安装记录 `.cache/test-logs/2026-10-27-rag-emulator-install-710d1c0/`（`run_cmd_exit=0`；该记录为 host-only，未含设备日志）。
+- Provider：Embedding 为硅基流动 `BAAI/bge-m3`（`api.siliconflow.cn`，1024 维）；回答为 DeepSeek `deepseek-flash`。测试资料为虚构的 `shuvi-rag-test-xinghe-cafe.md`（星河咖啡馆运营手册，692 字节），放在模拟器 Download 目录，经知识库“文本文档”入口导入。
+- 凭据：两份 Key 均由用户在本机输入，或用户在本机 PowerShell 隐藏输入后经 `hdc shell uitest uiInput text` 注入到模拟器输入框；Key 未进入对话、截图、日志或仓库。AI 通过 `hdc` 截图、滑动/点击只读界面和读取 `hilog`，未读取凭据。
+
+| 编号 | 检查 | 结果 | 依据 |
+|---|---|---|---|
+| E-01 | Embedding 固定句检测 | 首次 4 次请求（模型列表 ×2、检测 ×2）均 HTTP 401；用户在电脑上用同一 Key 请求 `/v1/models` 得到 200，改为注入后重新保存 Key，检测 `http=200`，显示“检测通过 · 1024 维 · 224 ms” | 截图 + 日志 |
+| E-02 | 开启自动入库并导入 | 列表显示“已入库”；15:43:32–34 共 7 次向量 POST，均 200 | 截图 + 日志 |
+| R-01 | 星河咖啡馆周几闭店？ | 两阶段“已完成 · 5 条本机片段”；DeepSeek 标注回答“星河咖啡馆每周三闭店做设备保养。[1]”，[1] 为营业时间正文；`1/10`；问题向量化 1 次 `http=200` | 截图 + 日志 |
+| R-02 | 全店最贵的饮品是什么？ | 用户确认回答为桂花冷萃 32 元；问题向量化 `http=200` | 用户确认 + 日志 |
+| R-03 | 会员生日有什么优惠？ | 用户确认回答为生日当月八折、不叠加；问题向量化 `http=200` | 用户确认 + 日志 |
+| R-04 | 老板叫什么名字？ | 显示“资料中没有足够依据”非成功提示，无伪造引用，仅列本机片段；`4/10` | 截图 + 日志 |
+| L-01 | 第 5–10 题后发第 11 题 | 用户确认第 11 题被立即拒绝并提示停止后重新输入 Key、输入保留；设备日志只留下最后两次问题向量化（15:52:18、15:52:37），此后无新的问题向量化 | 用户确认 + 部分日志 |
+| B-01 | 退后台后返回 | 用户确认需重新输入 Key 启用，不自动重发 | 用户确认 |
+| H-01 | 知识库页“搜索历史” | 只有 3 条早前的“你”，不含任何本轮聊天问题 | 截图 |
+| T-01 | 开启知识库开关 | 用户确认可开启，问答走 RAG（页脚显示“知识库 RAG · 问题向量化 · 本机 KNN · DeepSeek 带引用整理”）；“准备中…”瞬时状态未截图 | 用户确认 + 截图 |
+| N-01 | 检索成功后断网，点“仅重试回答” | 未执行：模拟器 `hdc shell` 为 shell 用户、无 `iptables`，无法只拦截 DeepSeek；整体断网会使问题向量化先失败。仅有 host 用例覆盖 | 未验证 |
+
+- 发现（均在本分支之前已存在，留后续 PR）：
+  - P2：嵌入模型页检测失败只显示“检测未通过”，失败原因（`HttpRejected:401`）只短暂出现在页面底部状态行，重新进入页面后被覆盖，用户无法判断是 Key、网络还是配置问题。
+  - P2：检测已通过时，页面底部状态行仍显示“配置未检测；语料与问题外发关闭”。
+  - P2：Markdown 标题被切成独立片段；R-01 的 5 条证据中 3 条只有标题、没有正文，资料变多时会挤掉有用正文。
+  - P3：嵌入 Key 输入框关闭了长按菜单，不能长按粘贴，模拟器上手打长 Key 容易出错（E-01 的直接诱因）；放开粘贴涉及防泄露取舍，待评审。
+  - 流程：设备 `hilog` 是内存环形缓冲，15:45–15:51 的条目在 15:52 后被系统日志覆盖。下次验收前应先在电脑端持续抓取并过滤 `SHUVI_R2` 落盘。
+- 证据（`.cache/`，不入库）：截图 `.cache/device-smoke/rag-emu-{embed-fail,embed-pass,imported,q1,q1-top,q4,q4-top,kb-history3}.jpeg`；日志 `.cache/test-logs/2026-10-27-rag-emulator-acceptance-710d1c0/hilog-transcribed.txt` 是验收过程中 `hdc shell hilog -x | grep` 即时输出的逐行转录（不含 Key），同目录 `hilog-shuvi-r2-netstack.txt` 是事后导出，缓冲已被覆盖，仅 2 行。
+- 结论：本节按 [协作约定第 7.0 节](../docs/01-协作与工程约定.md#70-测试日志必须落盘每次测试) 只记为模拟器人工验收与部分证据：设备日志不是经 `scripts/capture-test-log.sh` 完整落盘，R-02、R-03、L-01、B-01 主要依赖用户确认，因此状态保持“已实现待验收”。不能据此推断账单金额、真机行为或断网重试路径。
+- 复现：在嵌入模型页配置硅基流动 / `BAAI/bge-m3` → 保存配置与 Key → 勾选同意后“检测固定短句” → 勾选两项确认后“开启自动入库” → 知识库“文本文档”导入测试资料 → 助手页输入 DeepSeek Key 启用 → 打开“知识库”开关 → 依次提问上表问题。下次应在开始操作前，于电脑端持续接收设备日志并落盘，例如 PowerShell 中 `hdc -t 127.0.0.1:5555 shell hilog | Select-String 'SHUVI_R2|NETSTACK_RCP' | Out-File -Encoding utf8 .cache/test-logs/<日期>-rag-emulator-<提交>/hilog-stream.txt`（`hilog` 不加 `-x` 为持续输出），并在同目录记录提交、安装包与设备信息。
+
+### 8.5 可选“记住 DeepSeek Key”（2026-10-27）
+
+来源：开发者在会话中明确要求“给 DeepSeek Key 做记住 Key”。此前 Key 只在内存，每次启用都要重新输入。
+
+- 页面：真实对话启用卡与真实搜索启用卡共用新组件 `DeepSeekKeyField`。输入框下方新增“记住 Key（只保存在本机系统安全存储，不同步，可随时删除）”勾选，默认不勾选。已记住时（2026-10-27 界面整理后）只显示一个主按钮“同意并启用”/“同意并连接”，下方一行“使用本机记住的 Key · 删除（二次确认） · 使用其他 Key”；展开“使用其他 Key”后可输入新 Key 并勾选替换。范围与费用细节折叠在“了解范围与费用”中，见 spec 01 §7.14。
+- 存储：`DeepSeekCredentialStore` 写入系统 Asset Store（与嵌入 Key 相同的平台能力，独立别名 `shuvi.deepseek.api-key.v1`），属性 `DEVICE_UNLOCKED`、`SyncType.NEVER`、`CONFLICT_RESOLUTION=THROW_ERROR`；只接受 1–2048 字节、不含空白与控制字符的可打印 ASCII。属性不符、多条记录或读取失败时一律不可用并提示重新输入；即使记录损坏也能删除。卸载应用随之清除，`install -r` 不清除。
+- 不变的约束：每次启用仍需用户点击并同意范围，不在启动或回到前台时自动启用；会话内的 Key 仍只在内存，离开助手页、退后台、切换模式、停止或用完 10 次后照旧结束会话、清除内存凭据。记住的 Key 不进入日志、提示词、数据库、截图或仓库；没有新增权限或依赖。
+- 宿主测试：`run-direct-model-tests.cjs` 新增 4 项（属性与每次读取都是新副本、再次保存为替换且删除幂等、非法输入不落盘、同步/损坏/读取失败时失败关闭），共 216/216。变异检查：把 `SyncType` 改为 `TRUSTED_DEVICE` 时 3 项失败，去掉字符校验时 2 项失败；去掉读取后的复制与清零不会被用例发现（平台每次查询本身返回新缓冲区，复制只是纵深防护）。
+- 构建：未签名 `assembleHap --no-daemon` 成功，0 ERROR；新文件仅有与嵌入 Key 存储相同的“Function may throw exceptions”提示，调用处已统一用 Promise `catch` 失败关闭。
+- 模拟器检查（2026-10-27，`172d704`）：与助手聊天日程一起检查，开发者反馈“结果符合预期”；设备日志只录到启动段，按人工反馈记录（spec 01 §7.13 后续）。界面整理后的新布局另见 §8.6。
+
+### 8.6 知识库面板与证据排序整理（2026-10-27）
+
+来源：同 spec 01 §7.14 的界面整理（开发者确认“全部进行修改”）。
+
+- 面板：标题“知识库问答”，右上角“关闭知识库 / 取消本次问答”；两阶段合为一行；DeepSeek 回答保留原标注，回答下方是编号来源胶囊“[n] 片段开头…”（同一文件的片段标题相同，所以预览正文），点胶囊或“查看 N 条来源原文”展开原文；没有模型回答时原文默认展开。去掉“本机证据 · Text · Vector”内部标签；有回答时隐藏与阶段行重复的状态句。
+- 证据排序：`KnowledgeSemanticRuntimeSearchAdapter` 先取正文、再取标题类片段，只降序不丢弃（规则与局限见[交接契约](../docs/integration/知识库回答UI交接契约.md)第 6 节）。
+- 宿主：新增标题片段排序与来源胶囊预览 2 项（计入 spec 01 §7.14 的 222/222）；完整知识库 host 309/309。
+- 模拟器自测：“星河咖啡馆周几闭店？”回答“每周三闭店做设备保养。[1]”，来源胶囊与展开原文有截图 `.cache/device-smoke/rag-emu-ui-{27,28,29,30}-*.jpeg`，前 4 条为正文。资料不足、仅重试回答、停止后的展示未在本轮设备上检查；本轮截图为实现方自测，待开发者人工验收。
+
+## 9. 前端交接契约
+
+- `Index.ets` 已通过 `RuntimeAssistantCoordinator` 接入同一 Key 的普通聊天/RAG 切换；`RuntimeKnowledgePanel.ets` 显示两阶段状态、带标注的 DeepSeek 回答、仅重试回答、资料不足与次数用量，阶段文案在 `RuntimeKnowledgePresentation.ets`。
+- 完整接口、就绪检查、数据范围、失败/重试与生命周期约定见 [知识库回答 UI 交接契约](../docs/integration/知识库回答UI交接契约.md)。
+- 已在模拟器上用真实 Embedding Provider 和 DeepSeek 跑通端到端（§8.4），但设备日志未完整落盘、部分项仅用户确认、断网重试未在设备验证；签名安装与真机验收完成前，不宣称产品端到端已验收。

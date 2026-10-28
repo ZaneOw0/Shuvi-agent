@@ -24,6 +24,11 @@ import { ShuviRuntimeSession, ShuviRuntimeSessionFactory, ShuviRuntimeSessionPor
 
 export const CHAT_POLICY: string = 'shuvi-model-only-v1';
 export const CHAT_MAX_REQUESTS: number = 10;
+// App-owned composition scope; the default public-chat/search scope remains unchanged.
+export enum ChatPurpose { PUBLIC_CHAT, CALENDAR_DRAFT, ASSISTANT }
+function chatPrivacy(purpose: ChatPurpose): PrivacyClass {
+  return purpose === ChatPurpose.PUBLIC_CHAT ? PrivacyClass.PUBLIC : PrivacyClass.PERSONAL;
+}
 export interface ChatContextPort {
   systemPrompt(): string;
   promptFor(intent: string): string | undefined;
@@ -49,12 +54,14 @@ export function parseChatAnswer(json: string): ChatAnswer | undefined {
 
 // Deterministic routing for the explicitly selected single-turn chat feature, not a mock answer/planner.
 export class ChatPlanner implements SemanticPlannerPort, ToolInvocationPreparerPort {
+  private readonly purpose: ChatPurpose;
+  constructor(purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT) { this.purpose = purpose; }
   async plan(request: PlanningRequest): Promise<PlanningResult> {
     const result = new PlanningResult();
     if (!request.envelope.userIntent.trim() || request.envelope.userIntent.length > 500 ||
-      request.envelope.privacyClass !== PrivacyClass.PUBLIC) { result.rejectionCode = 'CHAT_INPUT_REJECTED'; return result; }
+      request.envelope.privacyClass !== chatPrivacy(this.purpose)) { result.rejectionCode = 'CHAT_INPUT_REJECTED'; return result; }
     const step = new WorkflowStep(); step.stepId = 'chat-answer'; step.kind = WorkflowStepKind.LLM;
-    step.goal = '回答本次公开问题，不调用工具'; step.timeoutMs = 30000;
+    step.goal = this.purpose === ChatPurpose.PUBLIC_CHAT ? '回答本次公开问题，不调用工具' : '识别用户意图并提议日程草稿或回答，不直接调用工具'; step.timeoutMs = 30000;
     step.expectedOutputSchemaJson = '{"type":"object"}'; step.retryPolicyRef = 'no-retry'; step.verificationPolicyRef = 'validated-model-answer-v1';
     const graph = new WorkflowGraph(); graph.taskId = request.envelope.taskId;
     graph.workflowId = 'chat-' + request.envelope.taskId; graph.workflowVersion = '1';
@@ -74,11 +81,12 @@ export class ChatModelAdapter implements StepDispatchPort {
   private readonly digest: AgentHostDigest;
   private readonly active: Map<string, ProviderCancellationSource> = new Map<string, ProviderCancellationSource>();
   private calls: number = 0;
+  private readonly purpose: ChatPurpose;
   private readonly context?: ChatContextPort;
   constructor(provider: ModelProvider, model: RegisteredModelProvider, sink: RuntimeToolOutcomeSinkPort, digest: AgentHostDigest,
-    context?: ChatContextPort) {
+    context?: ChatContextPort, purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT) {
     this.provider = provider; this.model = model; this.sink = sink; this.digest = digest;
-    this.context = context;
+    this.context = context; this.purpose = purpose;
   }
   dispatch(request: StepDispatchRequest): StepDispatchReceipt {
     const receipt = new StepDispatchReceipt();
@@ -86,7 +94,8 @@ export class ChatModelAdapter implements StepDispatchPort {
     const estimate = Math.ceil((8192 * this.model.priceSnapshot().inputMicrosPerMillionTokens +
       1024 * this.model.priceSnapshot().outputMicrosPerMillionTokens) / 1000000) + this.model.priceSnapshot().fixedCostMicros;
     if (request.toolInvocation !== undefined || request.step.kind !== WorkflowStepKind.LLM || request.step.stepId !== 'chat-answer' ||
-      !request.task.userIntent.trim() || request.task.userIntent.length > 500 || request.task.privacyClass !== PrivacyClass.PUBLIC ||
+      !request.task.userIntent.trim() || request.task.userIntent.length > 500 || request.task.privacyClass !== chatPrivacy(this.purpose) ||
+      (this.purpose !== ChatPurpose.PUBLIC_CHAT && this.context === undefined) ||
       this.active.size > 0 || this.calls >= CHAT_MAX_REQUESTS || budget.maxInputTokens < 8192 || budget.maxOutputTokens < 1024 ||
       budget.maxMonetaryCostMicros < estimate || budget.maxWallTimeMs < 30000) {
       receipt.rejectionCode = 'CHAT_SCOPE_OR_BUDGET_REJECTED'; return receipt;
@@ -143,10 +152,12 @@ export class ChatModelAdapter implements StepDispatchPort {
 class ChatAdapterFactory implements ProductionRuntimeAdapterFactoryPort {
   private readonly provider: ModelProvider; private readonly model: RegisteredModelProvider; private readonly digest: AgentHostDigest;
   private readonly context?: ChatContextPort;
-  constructor(provider: ModelProvider, model: RegisteredModelProvider, digest: AgentHostDigest, context?: ChatContextPort) {
-    this.provider = provider; this.model = model; this.digest = digest; this.context = context;
+  private readonly purpose: ChatPurpose;
+  constructor(provider: ModelProvider, model: RegisteredModelProvider, digest: AgentHostDigest, context?: ChatContextPort,
+    purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT) {
+    this.provider = provider; this.model = model; this.digest = digest; this.context = context; this.purpose = purpose;
   }
-  create(sink: RuntimeToolOutcomeSinkPort): StepDispatchPort { return new ChatModelAdapter(this.provider, this.model, sink, this.digest, this.context); }
+  create(sink: RuntimeToolOutcomeSinkPort): StepDispatchPort { return new ChatModelAdapter(this.provider, this.model, sink, this.digest, this.context, this.purpose); }
 }
 // Explicitly disabled host capabilities: no memory query and no MCP connections exist in this composition.
 class DisabledChatResource implements SingleAgentHostResourcePort {
@@ -157,7 +168,9 @@ class ChatResources implements ShuviSessionResources {
   credentials: SessionModelCredentials = new SessionModelCredentials();
   memory: SingleAgentHostResourcePort = new DisabledChatResource();
   execution: ChatExecutionResource;
-  constructor(opener: AgentRdbOpenPort, digest: AgentHostDigest) { this.execution = new ChatExecutionResource(opener, digest); }
+  constructor(opener: AgentRdbOpenPort, digest: AgentHostDigest, calendar: boolean, assistant: boolean) {
+    this.execution = new ChatExecutionResource(opener, digest, calendar, assistant);
+  }
 }
 class ChatClock implements RuntimeClockPort { nowMs(): number { return Date.now(); } }
 class ChatIds implements RuntimeIdGeneratorPort { nextId(kind: string, _request: string): string { return kind + '-' + util.generateRandomUUID(); } }
@@ -169,8 +182,8 @@ class ChatBackendFactory implements SingleAgentHostRuntimeFactoryPort {
     return createProductionAgentRuntime(config, this.ports);
   }
 }
-export function chatFrontendConfig(): AgentApplicationBackendConfig {
-  const config = new AgentApplicationBackendConfig(); config.userId = 'shuvi-local-owner-v1'; config.privacyClass = PrivacyClass.PUBLIC;
+export function chatFrontendConfig(purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT): AgentApplicationBackendConfig {
+  const config = new AgentApplicationBackendConfig(); config.userId = 'shuvi-local-owner-v1'; config.privacyClass = chatPrivacy(purpose);
   config.requestedBudget.maxWallTimeMs = 45000; config.requestedBudget.maxInputTokens = 8192;
   config.requestedBudget.maxOutputTokens = 1024; config.requestedBudget.maxMonetaryCostMicros = 10000;
   config.requestedBudget.maxAgentActivations = 1; // No tool calls, retries or replans.
@@ -179,21 +192,26 @@ export function chatFrontendConfig(): AgentApplicationBackendConfig {
 export class ChatRuntimeFactory implements ShuviRuntimeSessionFactory {
   private readonly opener: AgentRdbOpenPort; private readonly debugBuild: boolean;
   private readonly context?: ChatContextPort;
-  constructor(opener: AgentRdbOpenPort, debugBuild: boolean, context?: ChatContextPort) {
-    this.opener = opener; this.debugBuild = debugBuild; this.context = context;
+  private readonly purpose: ChatPurpose;
+  constructor(opener: AgentRdbOpenPort, debugBuild: boolean, context?: ChatContextPort,
+    purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT) {
+    this.opener = opener; this.debugBuild = debugBuild; this.context = context; this.purpose = purpose;
   }
   create(): ShuviRuntimeSessionPort {
     if (!this.debugBuild) throw new Error('CHAT_DEBUG_ONLY');
-    const digest = new AgentHostDigest(); const resources = new ChatResources(this.opener, digest);
+    if (this.purpose !== ChatPurpose.PUBLIC_CHAT && this.context === undefined) throw new Error('CALENDAR_CONTEXT_REQUIRED');
+    const digest = new AgentHostDigest(); const resources = new ChatResources(this.opener, digest,
+      this.purpose === ChatPurpose.CALENDAR_DRAFT, this.purpose === ChatPurpose.ASSISTANT);
     const http = new SessionModelHttpClient(new ArkTsDeepSeekHttpClient());
-    const model = createDeepSeekProvider(startupModelProfile(), startupModelPrice(digest), digest, resources.credentials, http);
-    const ports = new ProductionAgentRuntimePorts(); const planner = new ChatPlanner();
+    const profile = startupModelProfile(); profile.privacyClasses = [chatPrivacy(this.purpose)];
+    const model = createDeepSeekProvider(profile, startupModelPrice(digest), digest, resources.credentials, http);
+    const ports = new ProductionAgentRuntimePorts(); const planner = new ChatPlanner(this.purpose);
     ports.clock = new ChatClock(); ports.ids = new ChatIds(); ports.planner = planner; ports.toolPreparer = planner;
     ports.collaboration = new SingleAgentCollaborationSelector(); ports.persistence = resources.execution;
-    ports.adapterFactory = new ChatAdapterFactory(model.provider, model.registered, digest, this.context);
+    ports.adapterFactory = new ChatAdapterFactory(model.provider, model.registered, digest, this.context, this.purpose);
     const host = new SingleAgentHostPorts(); host.credentialStore = resources.credentials; host.executionStorage = resources.execution;
     host.memoryStorage = resources.memory; host.mcpClient = new DisabledChatResource(); host.runtimeFactory = new ChatBackendFactory(ports);
-    return new ShuviRuntimeSession(new AgentApplicationBackend(chatFrontendConfig(), host), resources, http,
+    return new ShuviRuntimeSession(new AgentApplicationBackend(chatFrontendConfig(this.purpose), host), resources, http,
       new McpClientManager(), new SearchAuthorizationPreviews());
   }
 }

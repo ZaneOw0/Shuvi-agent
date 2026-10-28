@@ -39,7 +39,9 @@ import { KnowledgeDerivedLifecycle } from '../knowledge/application/KnowledgeLif
 import { KnowledgeDocumentListPort } from '../knowledge/domain/KnowledgePorts';
 import { AssistantWelcome, CalendarDraftCard } from '../components/ChatVisuals';
 import { AppIcon } from '../components/AppIcon';
+import { ModeChip } from '../components/ModeChip';
 import { BrandAvatar } from '../components/BrandAvatar';
+import { CalendarCapabilityCheck } from '../components/CalendarCapabilityCheck';
 import {
   AssistantService, CalendarDraft, ChatMessage, DEMO_SCENARIOS, DemoScenario,
   OperationResult, OperationState, RequestState
@@ -83,19 +85,28 @@ import { RuntimeChatService } from '../services/model/RuntimeChatService';
 import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { RuntimeSearchView } from '../services/model/RuntimeSearchSession';
 import { RuntimeSearchPanel } from '../components/RuntimeSearchPanel';
+import { RuntimeKnowledgePanel } from '../components/RuntimeKnowledgePanel';
 import { searchRuntimeFactory } from '../services/model/SearchRuntimeAssembly';
 import { ChatRuntimeFactory } from '../services/model/ChatRuntimeAssembly';
 import { NativeAgentRdbOpen } from '../services/model/AgentRdbResources';
-import { RuntimeChatView } from '../services/model/RuntimeChatSession';
+import { AssistantView } from '../services/calendar/AssistantRuntimeSession';
+import { RuntimeCalendarCard } from '../components/RuntimeCalendarCard';
+import { CalendarCreatedCard } from '../components/CalendarCreatedCard';
+import { CalendarCreatedSummary } from '../services/calendar/CalendarPresentation';
+import { CalendarProbeDraft } from '../services/calendar/CalendarProbeSession';
+import { RuntimeKnowledgeService } from '../services/model/RuntimeKnowledgeService';
+import { RuntimeKnowledgeView } from '../services/model/RuntimeKnowledgeSession';
 import { ShuviRuntimeState } from '../services/model/ShuviRuntimeController';
-import { chatRuntimeFactory } from '../services/model/ChatRuntimeAssembly';
+import { RuntimeAssistantCoordinator } from '../services/model/RuntimeAssistantCoordinator';
+import { KnowledgeRagReadiness } from '../knowledge/domain/KnowledgeRuntimePorts';
 
 @Entry
 @Component
 struct Index {
   @State realChatMode: boolean = false;
-  @State runtimeChat: RuntimeChatView = new RuntimeChatView();
+  @State runtimeChat: AssistantView = new AssistantView();
   @State runtimeSearch: RuntimeSearchView = new RuntimeSearchView();
+  @State runtimeKnowledge: RuntimeKnowledgeView = new RuntimeKnowledgeView();
   @State runtimeSwitching: boolean = false;
   private lastRuntimeReply: number = 0;
   @State migrationOpen: boolean=false;
@@ -116,6 +127,7 @@ struct Index {
   private parsedImports: ParsedDocumentImportAdapter | undefined = undefined;
   @State tab: number = 0;
   @State calendarOpen: boolean = false;
+  @State realCalendarOpen: boolean = false;
   @State input: string = '';
   @State messages: ChatMessage[] = [];
   @State draft: CalendarDraft | undefined = undefined;
@@ -159,6 +171,8 @@ struct Index {
   @State floatingPlacement: FloatingAssistantPlacement = new FloatingAssistantPlacement();
   @State contentHeight: number = 0;
   @State searchEnabled: boolean = false;
+  @State knowledgeEnabled: boolean = false;
+  @State ragPreparing: boolean = false;
   @State searchBusy: boolean = false;
   @State searchScenario: SearchScenario = SearchScenario.Normal;
   @State searchTurns: SearchTurn[] = [];
@@ -180,14 +194,17 @@ struct Index {
   aboutToAppear(): void {
     this.alive = true;
     RuntimeSearchService.session.attach((view: RuntimeSearchView): void => { this.runtimeSearch = view; });
+    RuntimeKnowledgeService.session.attach((view: RuntimeKnowledgeView): void => { this.runtimeKnowledge = view; });
     this.lastRuntimeReply = RuntimeChatService.session.snapshot().replyId;
-    RuntimeChatService.session.attach((view: RuntimeChatView): void => {
+    RuntimeChatService.session.attach((view: AssistantView): void => {
+      const newCalendarCard = view.preview !== undefined && view.preview.requestId !== this.runtimeChat.preview?.requestId;
       this.runtimeChat = view;
       if (this.alive && view.replyId > this.lastRuntimeReply) {
         this.lastRuntimeReply = view.replyId;
-        this.addMessage('真实对话 · ' + view.reply);
+        this.addMessage(view.reply, false, view.created);
         this.scroller.scrollEdge(Edge.Bottom);
       }
+      if (this.alive && newCalendarCard) this.scroller.scrollEdge(Edge.Bottom);
     });
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
   }
@@ -197,6 +214,7 @@ struct Index {
     this.alive = false;
     RuntimeChatService.session.detach();
     RuntimeSearchService.session.detach();
+    RuntimeKnowledgeService.session.detach();
     this.docxIngestionService?.pause();
     this.service.cancel(this.requestId);
     this.searchSession.cancel();
@@ -238,6 +256,7 @@ struct Index {
       this.calendarOpen = false;
       return true;
     }
+    if (this.realCalendarOpen) { this.realCalendarOpen = false; return true; }
     if (this.tab !== 0) {
       this.changeTab(0);
       return true;
@@ -256,7 +275,7 @@ struct Index {
   private changeTab(index: number): void {
     if (index !== this.tab && this.tab === 0) {
       void RuntimeSearchService.session.stop();
-      void RuntimeChatService.session.stop().catch((): void => {});
+      void RuntimeAssistantCoordinator.stop().catch((): void => {});
       this.runtimeChat.clearEpoch++;
     }
     this.floatingPlacement.cancelDrag();
@@ -278,6 +297,7 @@ struct Index {
     this.tab = index;
     if (index === 2) { this.openKnowledge(); }
     this.calendarOpen = false;
+    this.realCalendarOpen = false;
     this.showScenarios = false;
     this.drawerOpen = false;
     this.scroller.scrollEdge(Edge.Top);
@@ -458,26 +478,33 @@ struct Index {
     this.floatingPlacement.resize(width, height, this.floatingHeaderHeight);
   }
 
-  private addMessage(text: string, isUser: boolean = false): void {
-    const message: ChatMessage = { id: this.service.nextId('message'), isUser: isUser, text: text };
+  private addMessage(text: string, isUser: boolean = false, calendar?: CalendarCreatedSummary): void {
+    const message: ChatMessage = { id: this.service.nextId('message'), isUser: isUser, text: text, calendar: calendar };
     this.messages = this.messages.concat([message]);
+  }
+  private openCalendarRecords(): void {
+    // Leaving the assistant tab ends the chat session as before; the workbench lists the verified native records.
+    this.changeTab(1);
+    this.realCalendarOpen = true;
   }
 
   private async startRuntimeChat(key: Uint8Array): Promise<void> {
     try {
       const context = this.getUIContext().getHostContext();
-      if (context === undefined || !DEBUG || !this.realChatMode || this.searchEnabled || this.tab !== 0) return;
-      await RuntimeChatService.session.start(chatRuntimeFactory(context, DEBUG), key);
+      if (context === undefined || !DEBUG || !this.realChatMode || this.searchEnabled || this.knowledgeEnabled || this.tab !== 0) return;
+      // The coordinator composes the calendar-capable assistant session and the PERSONAL RAG answer session.
+      await RuntimeAssistantCoordinator.start(context, DEBUG, key);
     } finally { key.fill(0); }
   }
+
 
   private async switchChatMode(): Promise<void> {
     if (this.blocked()) return;
     this.runtimeSwitching = true;
     try {
-      await RuntimeSearchService.session.stop(); await RuntimeChatService.session.stop();
+      await RuntimeSearchService.session.stop(); await RuntimeAssistantCoordinator.stop();
       if (!this.alive || this.tab !== 0) return;
-      this.resetConversation(); this.searchEnabled = false; this.realChatMode = !this.realChatMode;
+      this.resetConversation(); this.searchEnabled = false; this.knowledgeEnabled = false; this.realChatMode = !this.realChatMode;
     } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
     finally { this.runtimeSwitching = false; }
   }
@@ -486,7 +513,7 @@ struct Index {
     try {
       const context = this.getUIContext().getHostContext();
       if (context === undefined || !DEBUG || !this.realChatMode || !this.searchEnabled || this.tab !== 0) return;
-      await RuntimeChatService.session.stop();
+      await RuntimeAssistantCoordinator.stop();
       if (!this.alive || this.tab !== 0 || !this.searchEnabled || !this.realChatMode) return;
       await RuntimeSearchService.session.start(searchRuntimeFactory(context, DEBUG),
         new ChatRuntimeFactory(new NativeAgentRdbOpen(context), DEBUG, RuntimeSearchService.session.context), key);
@@ -498,35 +525,74 @@ struct Index {
     if (!this.realChatMode) { this.searchEnabled = !this.searchEnabled; return; }
     this.runtimeSwitching = true;
     try {
-      await RuntimeChatService.session.stop(); await RuntimeSearchService.session.stop();
-      if (this.alive && this.tab === 0) this.searchEnabled = !this.searchEnabled;
+      await RuntimeSearchService.session.stop(); await RuntimeAssistantCoordinator.stop();
+      if (this.alive && this.tab === 0) { this.searchEnabled = !this.searchEnabled; this.knowledgeEnabled = false; }
     } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
     finally { this.runtimeSwitching = false; }
+  }
+
+  private async toggleKnowledge(): Promise<void> {
+    if (this.blocked()) return;
+    if (!this.realChatMode) { this.notice('请先打开真实功能', '知识库 RAG 不会回退为演示数据。请先切换到真实功能模式。'); return; }
+    this.runtimeSwitching = true;
+    try {
+      if (this.knowledgeEnabled) {
+        await RuntimeAssistantCoordinator.disableKnowledge();
+        if (this.alive && this.tab === 0) { this.knowledgeEnabled = false; }
+        return;
+      }
+      if (this.searchEnabled || this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
+        this.notice('请先启用普通对话', '请先使用同一份 DeepSeek Key 启用普通对话，再开启知识库 RAG。'); return;
+      }
+      this.ragPreparing = true;
+      const readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge();
+      if (!readiness.ready) { this.notice('知识库 RAG 尚不可用', readiness.message); return; }
+      if (this.alive && this.tab === 0) { this.knowledgeEnabled = true; this.searchEnabled = false; }
+    } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
+    finally { this.runtimeSwitching = false; this.ragPreparing = false; }
   }
 
   @Builder
   private runtimeChatControls() {
     Column({ space: 10 }) {
-      Button(this.realChatMode ? '清空对话并切回演示' : '清空对话并配置真实模型')
+      Button(this.realChatMode ? '清空对话并切回演示' : '清空对话并打开真实功能')
         .fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 })
         .enabled(!this.blocked() && this.runtimeChat.lifecycle !== ShuviRuntimeState.STARTING &&
           this.runtimeChat.lifecycle !== ShuviRuntimeState.STOPPING)
         .id('runtime-chat-mode').onClick((): void => { void this.switchChatMode(); })
-      if (this.realChatMode && this.searchEnabled) {
+      if (this.realChatMode && this.knowledgeEnabled) {
+        RuntimeKnowledgePanel({ view: this.runtimeKnowledge, onDisable: (): void => { void this.toggleKnowledge(); } })
+      } else if (this.realChatMode && this.searchEnabled) {
         RuntimeSearchPanel({ view: this.runtimeSearch, onStart: (key: Uint8Array): void => {
           void this.startRuntimeSearch(key).catch((): void => {});
         } })
       } else if (this.realChatMode) {
-        Text(this.runtimeChat.message).fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-chat-status')
-        if (this.runtimeChat.lifecycle === ShuviRuntimeState.IDLE || this.runtimeChat.lifecycle === ShuviRuntimeState.STOPPED ||
-          this.runtimeChat.lifecycle === ShuviRuntimeState.FAILED) {
-          RuntimeChatSetup({ clearEpoch: this.runtimeChat.clearEpoch, onStart: (key: Uint8Array): void => {
-            void this.startRuntimeChat(key).catch((): void => {});
-          } })
-        } else if (this.runtimeChat.lifecycle === ShuviRuntimeState.READY || this.runtimeChat.lifecycle === ShuviRuntimeState.STARTING) {
-          Button('停止真实对话').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft)
-            .constraintSize({ minHeight: 44 }).id('runtime-chat-stop')
-            .onClick((): void => { void RuntimeChatService.session.stop().catch((): void => {}); })
+        if (this.runtimeChat.lifecycle === ShuviRuntimeState.READY || this.runtimeChat.lifecycle === ShuviRuntimeState.STARTING) {
+          // Enabled session collapses to one status row instead of a full card.
+          Row({ space: 8 }) {
+            Circle({ width: 8, height: 8 }).fill(this.runtimeChat.lifecycle === ShuviRuntimeState.READY ? Theme.ok : Theme.muted)
+            Text(this.runtimeChat.lifecycle === ShuviRuntimeState.READY ?
+              `已启用 · 剩 ${Math.max(0, this.runtimeChat.maxRequests - this.runtimeChat.requestCount)}/${this.runtimeChat.maxRequests} 次` : '正在启用…')
+              .fontSize(13).fontColor(Theme.ink).layoutWeight(1).id('runtime-chat-status')
+            Button('停止').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(18)
+              .constraintSize({ minHeight: Theme.controlHeight, minWidth: 64 }).id('runtime-chat-stop')
+              .accessibilityText('停止真实对话，清除本次会话凭据')
+              .onClick((): void => { void RuntimeAssistantCoordinator.stop().catch((): void => {}); })
+          }.width('100%').padding({ left: 14, right: 6, top: 4, bottom: 4 }).backgroundColor(Theme.surface)
+            .borderRadius(22).border({ width: 1, color: Theme.line })
+          if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
+            Text('本次启用的请求次数已用完；点“停止”后可重新启用。').fontSize(Theme.noteSize).fontColor(Theme.amber).width('100%')
+          }
+        } else {
+          if (this.runtimeChat.lifecycle !== ShuviRuntimeState.IDLE && this.runtimeChat.lifecycle !== ShuviRuntimeState.STOPPED) {
+            Text(this.runtimeChat.message).fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-chat-message')
+          }
+          if (this.runtimeChat.lifecycle === ShuviRuntimeState.IDLE || this.runtimeChat.lifecycle === ShuviRuntimeState.STOPPED ||
+            this.runtimeChat.lifecycle === ShuviRuntimeState.FAILED) {
+            RuntimeChatSetup({ clearEpoch: this.runtimeChat.clearEpoch, onStart: (key: Uint8Array): void => {
+              void this.startRuntimeChat(key).catch((): void => {});
+            } })
+          }
         }
       }
     }.width('100%').padding({ bottom: 12 })
@@ -535,15 +601,30 @@ struct Index {
   private blocked(): boolean {
     return this.generating || this.executing || this.searchBusy || this.draft !== undefined || this.runtimeChat.busy ||
       this.runtimeSearch.busy || this.runtimeSwitching || this.runtimeSearch.lifecycle === ShuviRuntimeState.STARTING ||
-      this.runtimeSearch.lifecycle === ShuviRuntimeState.STOPPING;
+      this.runtimeSearch.lifecycle === ShuviRuntimeState.STOPPING || this.runtimeKnowledge.busy ||
+      this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STARTING || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STOPPING;
   }
 
   private useSample(): void {
     if (this.blocked()) {
       return;
     }
-    this.input = this.realChatMode ? (this.searchEnabled ? 'HarmonyOS ArkUI 官方开发文档' : '用简单的话解释什么是 Agent Runtime。') : (this.searchEnabled ? SEARCH_SAMPLE : this.service.sampleText);
+    this.input = this.sampleText();
     this.scroller.scrollEdge(Edge.Bottom);
+  }
+  private sampleText(): string {
+    return this.realChatMode ? (this.knowledgeEnabled ? '知识库中的 Agent Runtime 是如何设计的？' :
+      (this.searchEnabled ? 'HarmonyOS ArkUI 官方开发文档' : '明天下午 3 点到 4 点开项目评审会，提前 10 分钟提醒')) :
+      (this.searchEnabled ? SEARCH_SAMPLE : this.service.sampleText);
+  }
+  private headerConnected(): boolean {
+    return this.realChatMode && (this.runtimeChat.lifecycle === ShuviRuntimeState.READY ||
+      this.runtimeSearch.lifecycle === ShuviRuntimeState.READY || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.READY);
+  }
+  private composerHint(): string {
+    return this.realChatMode ? (this.knowledgeEnabled ? '回答依据：我的知识库 · 来源可核对' :
+      (this.searchEnabled ? '联网搜索 · 每次搜索前会征求你的同意' : '可以直接说日程安排，创建前会让你确认')) :
+      (this.searchEnabled ? '演示模式 · 固定样例，未联网' : '演示模式 · 数据仅本次有效');
   }
 
   private async send(): Promise<void> {
@@ -551,6 +632,16 @@ struct Index {
       return;
     }
     if (this.realChatMode) {
+      if (this.knowledgeEnabled) {
+        if (this.runtimeKnowledge.lifecycle !== ShuviRuntimeState.READY) {
+          this.notice('知识库问答尚未就绪', this.runtimeKnowledge.message); return;
+        }
+        const query: string = this.input.trim(); this.input = '';
+        void RuntimeKnowledgeService.session.send(query).then((sent: boolean): void => {
+          if (!sent && this.alive && this.input.length === 0) { this.input = query; }
+        });
+        return;
+      }
       if (this.searchEnabled) {
         if (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance) {
           this.notice('真实搜索尚不可用', this.runtimeSearch.message); return;
@@ -560,8 +651,12 @@ struct Index {
       if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
         this.notice('真实对话尚未就绪', '请先启用会话。本次未发送，也不会回退为演示回答。'); return;
       }
-      this.inputController.stopEditing(); this.addMessage(this.input, true);
-      await RuntimeChatService.session.send(this.input); return;
+      if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
+        this.notice('本次请求次数已用完', '请停止真实对话后重新启用。本次未发送，内容保留在输入框。'); return;
+      }
+      const message = this.input; this.input = '';
+      this.inputController.stopEditing(); this.addMessage(message, true);
+      await RuntimeChatService.session.send(message); return;
     }
     if (this.searchEnabled) {
       await this.sendSearch();
@@ -643,7 +738,7 @@ struct Index {
     }
     this.getUIContext().showAlertDialog({
       title: '开始新对话？',
-      message: '将清空当前对话和未发送文字，已确认的演示日程会保留。',
+      message: '将清空当前对话和未发送文字；已创建的日程和操作记录会保留。',
       primaryButton: { value: '继续当前对话', action: () => {} },
       secondaryButton: { value: '开始新对话', action: () => this.resetConversation() }
     });
@@ -651,9 +746,11 @@ struct Index {
 
   private resetConversation(): void {
     RuntimeSearchService.session.clearConversation();
+    RuntimeKnowledgeService.session.clearConversation();
     if (this.blocked()) {
       return;
     }
+    RuntimeChatService.session.clearConversation();
     this.service.cancel(this.requestId);
     this.searchSession.cancel();
     this.searchTurns = [];
@@ -820,8 +917,18 @@ struct Index {
         if (this.tab !== 0) {
           Text(this.tabNames[this.tab]).fontSize(14).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
         }
-        Text(this.tab === 2 || this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen ? '本机资料 · 未同步' : (this.tab === 0 && this.realChatMode ? '真实对话' : '演示模式')).fontSize(11).fontColor(Theme.muted)
-          .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
+        if (this.tab === 0 && !(this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen)) {
+          Row({ space: 6 }) {
+            Circle({ width: 7, height: 7 }).fill(this.headerConnected() ? Theme.ok : Theme.line)
+            Text(this.realChatMode ? (this.headerConnected() ? '休比 · 已连接' : '休比 · 未启用') : '休比 · 演示')
+              .fontSize(12).fontColor(Theme.ink)
+          }.padding({ left: 10, right: 12, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
+            .id('chat-header-status')
+        } else {
+          Text(this.tab === 2 || this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen ? '本机资料 · 未同步' :
+            (this.tab === 1 && this.realCalendarOpen ? '系统日历' : '演示模式')).fontSize(11).fontColor(Theme.muted)
+            .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
+        }
       }.width('34%')
       Row() {
         Button({ type: ButtonType.Circle }) {
@@ -888,11 +995,23 @@ struct Index {
               }
             }, (turn: SearchTurn, _index: number) => turn.id)
           }.width('100%')
+        } else if (message.calendar !== undefined) {
+          Row({ space: 8 }) {
+            BrandAvatar({ size: 28 })
+            Column() {
+              CalendarCreatedCard({ summary: message.calendar as CalendarCreatedSummary,
+                onOpen: (): void => this.openCalendarRecords() })
+            }.layoutWeight(1)
+          }.width('100%').alignItems(VerticalAlign.Top)
         } else {
           Row({ space: 8 }) {
             BrandAvatar({ size: 28 })
-            Text(message.text).fontSize(14).fontColor(Theme.ink).layoutWeight(1)
-              .accessibilityText(`休比：${message.text}`)
+            Column() {
+              Text(message.text).fontSize(Theme.bodySize).fontColor(Theme.ink).lineHeight(22)
+                .padding({ left: 14, right: 14, top: 10, bottom: 10 }).backgroundColor(Theme.surface)
+                .borderRadius({ topLeft: 6, topRight: 20, bottomLeft: 20, bottomRight: 20 })
+                .border({ width: 1, color: Theme.line }).accessibilityText(`休比：${message.text}`)
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start).padding({ right: '8%' })
           }.width('100%').alignItems(VerticalAlign.Top)
         }
       }, (message: ChatMessage) => message.id)
@@ -904,11 +1023,18 @@ struct Index {
             .backgroundColor(Theme.soft).fontColor(Theme.accent).onClick(() => this.cancelGeneration())
         }.width('100%')
       }
-      if (this.runtimeChat.busy) {
+      if (this.runtimeChat.preview !== undefined) {
+        RuntimeCalendarCard({ preview: this.runtimeChat.preview, writing: this.runtimeChat.calendarStage !== 'authorization',
+          pendingLabel: this.runtimeChat.message,
+          onConfirm: (): void => { void RuntimeChatService.session.decide(true).catch((): void => {}); },
+          onResubmit: (draft: CalendarProbeDraft): Promise<string> => RuntimeChatService.session.resubmit(draft),
+          onCancel: (): void => { void RuntimeChatService.session.decide(false).catch((): void => {}); } })
+      }
+      if (this.runtimeChat.busy && this.runtimeChat.calendarStage !== 'authorization') {
         Row({ space: 10 }) {
           LoadingProgress().width(22).height(22).color(Theme.accent)
           Text(this.runtimeChat.message).fontSize(14).fontColor(Theme.muted).layoutWeight(1)
-          Button('取消回答').constraintSize({ minHeight: 44 }).fontColor(Theme.accent).backgroundColor(Theme.soft)
+          Button(this.runtimeChat.calendarStage === 'idle' ? '取消回答' : '停止等待').constraintSize({ minHeight: 44 }).fontColor(Theme.accent).backgroundColor(Theme.soft)
             .id('runtime-chat-cancel').onClick((): void => { void RuntimeChatService.session.cancel().catch((): void => {}); })
         }.width('100%')
       }
@@ -1064,32 +1190,30 @@ struct Index {
   @Builder
   composer() {
     Column({ space: 8 }) {
-      Column({ space: 8 }) {
+      if (this.input.length === 0 && !this.blocked()) {
+        Row({ space: 6 }) {
+          Text('试试').fontSize(Theme.noteSize).fontColor(Theme.muted)
+          Text(this.sampleText()).fontSize(13).fontColor(Theme.accent).maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        }.width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 }).backgroundColor(Theme.soft).borderRadius(18)
+          .id('chat-sample').accessibilityText(`填入示例：${this.sampleText()}`).onClick(() => this.useSample())
+      }
+      Column({ space: 6 }) {
         TextArea({ text: this.input, placeholder: '发消息，或说说你的想法…', controller: this.inputController })
-          .fontSize(15).fontColor(Theme.ink).placeholderColor(Theme.muted).backgroundColor(Color.Transparent)
-          .height(64).width('100%').padding({ left: 6, right: 6, top: 4, bottom: 4 })
+          .fontSize(Theme.bodySize).fontColor(Theme.ink).placeholderColor(Theme.muted).backgroundColor(Color.Transparent)
+          .constraintSize({ minHeight: 40, maxHeight: 120 }).width('100%').padding({ left: 6, right: 6, top: 4, bottom: 4 })
           .enabled(!this.blocked()).onChange((value: string) => this.input = value)
           .accessibilityText('写下想做的事，最多 500 字').id('chat-input')
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center }) {
-          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-            Button({ type: ButtonType.Normal }) {
-              Row({ space: 4 }) {
-                AppIcon({ source: this.realChatMode ? $r('app.media.chat_chat') : (this.searchEnabled ? $r('app.media.chat_book') : $r('app.media.chat_calendar')), size: 16})
-                Text(this.realChatMode && !this.searchEnabled ? '提问样例' : (this.searchEnabled ? '搜索样例' : '日程样例')).fontSize(12).fontColor(Theme.accent)
-              }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
-            }.borderRadius(22).backgroundColor(Theme.soft).border({ width: 1, color: Theme.line })
-              .margin({ right: 4, bottom: 4 }).enabled(!this.blocked()).onClick(() => this.useSample())
-              .id('chat-sample').accessibilityText(this.realChatMode ? '提问样例，填入公开问题，点击发送才请求模型' : `${this.searchEnabled ? '搜索' : '日程'}样例，填入固定演示文字`)
-            Button({ type: ButtonType.Normal }) {
-              Row({ space: 4 }) {
-                AppIcon({ source: $r('app.media.chat_globe'), size: 16})
-                Text('搜索').fontSize(12).fontColor(this.searchEnabled ? Theme.accent : Theme.muted)
-              }.padding({ left: 8, right: 8, top: 9, bottom: 9 }).constraintSize({ minHeight: 44 })
-            }.borderRadius(22).backgroundColor(this.searchEnabled ? Theme.soft : Color.Transparent)
-              .border({ width: 1, color: this.searchEnabled ? Theme.accent : Theme.line })
-              .margin({ bottom: 4 }).accessibilityText(`${this.realChatMode ? '真实联网搜索' : '联网搜索演示'}，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`)
-              .id('chat-search-toggle').enabled(!this.blocked()).onClick((): void => { void this.toggleSearch(); })
-          }
+        Row({ space: 6 }) {
+          ModeChip({ icon: $r('app.media.chat_globe'), label: '搜索', on: this.searchEnabled, disabled: this.blocked(),
+            chipId: 'chat-search-toggle',
+            a11y: `${this.realChatMode ? '真实联网搜索' : '联网搜索演示'}，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`,
+            onTap: (): void => { void this.toggleSearch(); } })
+          ModeChip({ icon: $r('app.media.chat_book'), label: this.ragPreparing ? '准备中…' : '知识库', on: this.knowledgeEnabled,
+            disabled: this.blocked(), chipId: 'chat-knowledge-toggle',
+            a11y: `本机知识库问答，${this.ragPreparing ? '正在打开本机知识库' : (this.knowledgeEnabled ? '已开启，点击关闭' : '已关闭，点击开启')}`,
+            onTap: (): void => { void this.toggleKnowledge(); } })
+          Blank()
           Row() {
             Button({ type: ButtonType.Circle }) {
               AppIcon({ source: $r('app.media.chat_plus'), size: 26 })
@@ -1104,23 +1228,22 @@ struct Index {
               Button({ type: ButtonType.Circle }) {
                 AppIcon({ source: $r('app.media.chat_wave'), size: 26 })
               }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('语音输入，待接入')
-                .onClick(() => this.notice('语音输入待接入', '本次不会开启麦克风或录音。请使用日程样例体验确认流程。'))
+                .onClick(() => this.notice('语音输入待接入', '本次不会开启麦克风或录音。可以点上方「试试」体验确认流程。'))
             }
-          }.margin({ bottom: 4 })
-        }.width('100%')
+          }
+        }.width('100%').alignItems(VerticalAlign.Center)
         if (this.input.length >= 400) {
           Text(`${this.input.length} / 500`).fontSize(11)
             .fontColor(this.input.length > 500 ? Theme.danger : Theme.muted).width('100%').textAlign(TextAlign.End)
         }
-      }.width('100%').padding({ left: 10, right: 10, top: 12, bottom: 6 })
-        .backgroundColor(Theme.inputSurface).borderRadius(26)
+      }.width('100%').padding({ left: 10, right: 8, top: 8, bottom: 6 })
+        .backgroundColor(Theme.inputSurface).borderRadius(24)
         .border({ width: 1, color: this.input.length > 500 ? Theme.danger : Theme.line })
       if (this.input.length > 500) {
         Text('最多 500 字，请缩短后发送。').fontSize(12).fontColor(Theme.danger).width('100%')
       }
-      Text(this.realChatMode ? (this.searchEnabled ? '真实搜索 · 逐次授权 · 费用待核对 · 未读取知识库' : '真实模型 · 单轮问答 · 未搜索或读取知识库') : (this.searchEnabled ? '固定样例演示 · 未联网 · 回答非模型生成' : '演示数据 · 重启后重置 · 图片与语音待接入'))
-        .fontSize(10).fontColor(Theme.muted)
-        .textAlign(TextAlign.Center).width('100%')
+      Text(this.composerHint()).fontSize(11).fontColor(Theme.muted).textAlign(TextAlign.Center).width('100%')
+        .id('chat-composer-hint')
     }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%').backgroundColor(Theme.surface)
   }
 
@@ -1130,7 +1253,7 @@ struct Index {
       Row({ space: 8 }) {
         Column({ space: 6 }) {
           Text('Shuvi 休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
-          Text(this.realChatMode ? '个人助理 · 真实对话' : '个人助理 · 演示模式').fontSize(12).fontColor(Theme.muted)
+          Text(this.realChatMode ? '个人助理 · 真实功能' : '个人助理 · 演示模式').fontSize(12).fontColor(Theme.muted)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Button({ type: ButtonType.Circle }) {
           AppIcon({ source: $r('app.media.ui_close'), size: 22 })
@@ -1161,7 +1284,7 @@ struct Index {
       Button('演示场景设置  ›', { type: ButtonType.Normal }).width('100%').constraintSize({ minHeight: 44 })
         .fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
         .enabled(!this.generating && !this.executing && !this.searchBusy).onClick(() => this.openScenarios())
-      Text('助手日程与联网搜索为演示功能\n知识库资料保存在本机').fontSize(11).fontColor(Theme.muted)
+      Text('演示模式不联网、不写日历；真实对话、搜索和日程在助手页开启\n知识库资料保存在本机').fontSize(11).fontColor(Theme.muted)
         .width('100%').padding({ top: 16 })
     }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
       .backgroundColor(Theme.inputSurface).borderRadius({ topRight: 26, bottomRight: 26 })
@@ -1282,18 +1405,28 @@ struct Index {
             if (DEBUG) {
               this.runtimeChatControls()
             }
-            if (this.messages.length === 0 && !(this.realChatMode && this.searchEnabled && this.runtimeSearch.query.length > 0)) {
+            if (this.messages.length === 0 && !(this.realChatMode && this.searchEnabled && this.runtimeSearch.query.length > 0) &&
+              !(this.realChatMode && this.knowledgeEnabled && this.runtimeKnowledge.query.length > 0)) {
               AssistantWelcome({ searchEnabled: this.searchEnabled, realChat: this.realChatMode })
             } else {
               this.assistant()
             }
           } else if (this.tab === 1) {
-            if (this.calendarOpen) {
+            if (this.realCalendarOpen) {
+              Row() {
+                Button('‹ 工作台').fontSize(14).fontColor(Theme.accent).backgroundColor(Color.Transparent)
+                  .constraintSize({ minHeight: Theme.controlHeight }).padding({ left: 4, right: 12 })
+                  .accessibilityText('返回工作台').id('calendar-back')
+                  .onClick((): void => { this.realCalendarOpen = false; })
+              }.width('100%')
+              CalendarCapabilityCheck()
+            } else if (this.calendarOpen) {
               this.calendar()
             } else {
               WorkbenchPage({ recordCount: this.records.length,
                 onDocuments: (): void => { this.changeTab(2); this.parsedDocumentId = ''; this.openParsed(); },
                 onCalendar: () => this.calendarOpen = true,
+                onRealCalendar: (): void => { this.realCalendarOpen = true; },
                 onNotice: (title: string, message: string) => this.notice(title, message) })
             }
            } else if (this.tab === 2) {

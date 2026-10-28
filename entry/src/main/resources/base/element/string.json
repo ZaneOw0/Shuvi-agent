@@ -1,6 +1,14 @@
 {
   "string": [
     {
+      "name": "calendar_read_reason",
+      "value": "用于核查休比为你创建的日程，确认保存结果并避免重复创建"
+    },
+    {
+      "name": "calendar_write_reason",
+      "value": "用于在你确认后，将日程和提前提醒配置写入休比专用日历"
+    },
+    {
       "name": "module_desc",
       "value": "module description"
     },

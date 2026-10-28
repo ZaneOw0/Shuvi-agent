@@ -23,7 +23,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Agent source verification failed' }
     & node --test scripts/tests/agent-local-changes.test.cjs
     if ($LASTEXITCODE -ne 0) { throw 'Agent local provenance checks failed' }
-    foreach ($script in @('run-host-tests.cjs', 'run-floating-placement-tests.cjs', 'run-mcp-probe-tests.cjs', 'run-direct-model-tests.cjs')) {
+    foreach ($script in @('run-host-tests.cjs', 'run-floating-placement-tests.cjs', 'run-mcp-probe-tests.cjs', 'run-direct-model-tests.cjs', 'run-calendar-probe-tests.cjs')) {
         & node "entry/src/test/$script"
         if ($LASTEXITCODE -ne 0) { throw "UX checks failed: $script" }
     }
