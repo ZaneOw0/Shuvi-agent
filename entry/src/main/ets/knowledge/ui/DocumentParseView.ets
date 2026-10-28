@@ -577,7 +577,7 @@ struct DocumentParseOriginalRow {
         Button(this.open ? '收起' : '开始解析').fontSize(12).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(10).constraintSize({ minHeight: 44 }).onClick((): void => { this.open = !this.open; })
       }.width('100%')
       if (this.open) {
-        Text(this.original.preflightReason || '发送前需要确认以下内容。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+        Text((this.original.format === DocumentParseFormat.Pdf ? '' : this.original.preflightReason) || '发送前需要确认以下内容。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
         Row() { Checkbox().selectedColor(Theme.accent).select(this.whole).onChange((v: boolean): void => { this.whole = v; }).accessibilityText('同意发送完整原文件'); Text('发送完整原文件').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
         Row() { Checkbox().selectedColor(Theme.accent).select(this.images).onChange((v: boolean): void => { this.images = v; }).accessibilityText('确认包含全部内嵌图'); Text('包含文件中的全部内嵌图').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
         Row() { Checkbox().selectedColor(Theme.accent).select(this.nonSensitive).onChange((v: boolean): void => { this.nonSensitive = v; }).accessibilityText('确认文件为非敏感测试文件'); Text('这是一份有权使用、且不含敏感信息的测试文件').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')

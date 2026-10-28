@@ -44,13 +44,13 @@ export function documentParseCases(): DocumentPolicyTestCase[] {
       grant.version = original.version; grant.credentialRevision++;
       documentPolicyCheck(documentSubmitReason(original, grant, snapshot, DocumentCredentialStatus.Configured) !== '');
     } },
-    { name: 'PDF真实页数1到50及预检不可用failclosed', run: async (): Promise<void> => {
+    { name: 'PDF提交不依赖历史预检或本机页数', run: async (): Promise<void> => {
       const original: DocumentOriginal = documentUnitOriginal(); const grant: DocumentParseGrant = documentUnitGrant(original);
       const snapshot: DocumentParseSnapshot = new DocumentParseSnapshot(); snapshot.config.enabled = true; snapshot.config.credentialRevision = 1;
       for (const pages of [1, 50]) { original.pages = pages; documentPolicyCheck(documentSubmitReason(original, grant, snapshot, DocumentCredentialStatus.Configured) === ''); }
-      for (const pages of [0, 51, -1, 1.5]) { original.pages = pages; documentPolicyCheck(documentSubmitReason(original, grant, snapshot, DocumentCredentialStatus.Configured) !== ''); }
+      for (const pages of [0, 51]) { original.pages = pages; documentPolicyCheck(documentSubmitReason(original, grant, snapshot, DocumentCredentialStatus.Configured) === ''); }
       original.pages = 1; original.preflight = DocumentPreflightStatus.Blocked;
-      documentPolicyCheck(documentSubmitReason(original, grant, snapshot, DocumentCredentialStatus.Configured) !== '');
+      documentPolicyCheck(documentSubmitReason(original, grant, snapshot, DocumentCredentialStatus.Configured) === '');
     } },
     { name: '原件单批总量实际边界加一拒绝', run: async (): Promise<void> => {
       const usage: DocumentParseUsage = new DocumentParseUsage();

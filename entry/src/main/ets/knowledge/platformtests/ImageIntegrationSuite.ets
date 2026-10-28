@@ -18,8 +18,8 @@ import { KnowledgeSourceRegistry } from '../infra/KnowledgeSourceRegistry';
 import { KnowledgeSqlSourceReader } from '../infra/KnowledgeSourceReaders';
 import { KnowledgeDerivedBudget } from '../infra/KnowledgeDerivedBudget';
 import { KnowledgeLifecycleService } from '../application/KnowledgeLifecycleService';
-import { DocumentSelectionPort, DocumentPreflightPort, MineruCredentialPort, DocumentParseClockPort } from '../domain/DocumentParsePorts';
-import { DocumentCredentialStatus, DocumentFileSelection, DocumentSelectedFile, DocumentOriginal, DocumentParseCancellation } from '../domain/DocumentParseModels';
+import { DocumentSelectionPort, MineruCredentialPort, DocumentParseClockPort } from '../domain/DocumentParsePorts';
+import { DocumentCredentialStatus, DocumentFileSelection, DocumentSelectedFile } from '../domain/DocumentParseModels';
 import { KnowledgeFailure, KnowledgeCancellation } from '../domain/PdfKnowledgeModels';
 import { ImageDocument, ImageJob } from '../domain/ImageKnowledgeModels';
 import { KnowledgeHit } from '../domain/KnowledgeSearchModels';
@@ -49,10 +49,6 @@ class ImageFixtureCredential implements MineruCredentialPort {
   async save(_input: string, _replace: boolean): Promise<DocumentCredentialStatus> { throw new KnowledgeFailure('FixtureCredentialAccessForbidden','fixture'); }
   async remove(): Promise<DocumentCredentialStatus> { throw new KnowledgeFailure('FixtureCredentialAccessForbidden','fixture'); }
   clearTransient(): void {}
-}
-class ImageFixturePreflight implements DocumentPreflightPort {
-  cancelLocal(): void {}
-  async inspect(original: DocumentOriginal, cancel: DocumentParseCancellation): Promise<DocumentOriginal> { cancel.check(); return original; }
 }
 class ImageFixtureClock implements DocumentParseClockPort {
   private identity: KnowledgePlatformIdentity = new KnowledgePlatformIdentity();
@@ -110,7 +106,7 @@ export class ImageIntegrationSuite {
     const fixtureBudget: KnowledgeDerivedBudget = new KnowledgeDerivedBudget(context,scope);
     this.assets = new DocumentFileAdapter(context,scope); this.parse = new DocumentParseService(new ImageFixtureCredential(),new DocumentParseRepository(context,scope),scope);
     this.parse.attachLocalCapacity(async (bytes: number): Promise<void> => { if ((await fixtureBudget.usage()).total()+bytes*2+1048576 > 524288000) { throw new KnowledgeFailure('FixtureSharedBudget','fixture'); } });
-    this.parse.attachLocal(this.selection,this.assets,new ImageFixturePreflight());
+    this.parse.attachLocal(this.selection,this.assets);
     const protection: KnowledgeLifecycleService = new KnowledgeLifecycleService(this.pdf); protection.attachImageProtection(async (ids: string[]): Promise<void> => { await this.images.assertUnpinned(ids); }); this.parse.attachSourceProtection(protection);
     this.source = new ImageSourceSession(this.images,new ImageOriginalAdapter(context.filesDir,scope),this.identity);
     this.service = this.newService(); this.search = new KnowledgeSearchService(this.text,this.pdf,this.identity);

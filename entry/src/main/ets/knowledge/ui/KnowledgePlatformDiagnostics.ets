@@ -30,7 +30,6 @@ import { ResidualIngestionView } from './ResidualIngestionView';
 import { ResidualHistorySession, ResidualHistoryView } from './ResidualHistoryView';
 import { ImageIntegrationSuite } from '../platformtests/ImageIntegrationSuite';
 import { ImageIntegrationView } from './ImageIntegrationView';
-import { documentPdfPreflightCase } from '../platformtests/DocumentPdfPreflightCase';
 import { pdfJsLocalCase } from '../platformtests/PdfJsLocalCase';
 
 @Component
@@ -43,12 +42,6 @@ export struct KnowledgePlatformDiagnostics {
     try { await pdfJsLocalCase(context,(line: string): void=> { this.summary=line; hilog.info(0x0001,'SHUVI_PDFJS','%{public}s',line); }); }
     catch (error) { this.summary=error instanceof Error?error.message:'PDF.js本机验证失败'; }
     finally { this.running=false; }
-  }
-  private async pdfPreflight(): Promise<void> {
-    const context=this.getUIContext().getHostContext(); if (context===undefined || this.running) { return; } this.running=true;
-    try { this.summary=await documentPdfPreflightCase(context,KnowledgeStorageScope.isolated(Date.now().toString(16).padStart(16,'0'))); }
-    catch (error) { this.summary=error instanceof Error?error.message:'PDF预检测试失败'; }
-    finally { hilog.info(0x0001,'SHUVI_R2','%{public}s',this.summary); this.running=false; }
   }
   @State summary: string = 'NotRun';
   @State results: string[] = [];
@@ -179,8 +172,7 @@ export struct KnowledgePlatformDiagnostics {
       else if (this.smokeOpen) { EmbeddingSafetySmoke({ onBack: (): void => { this.smokeOpen = false; } }) } else {
       Text('ROUND2 Native').fontSize(20)
        Text(this.summary).id('r2-suite-summary')
-       Button('PDF.js本机预检与原页（不联网）').id('r2-pdfjs-local').enabled(!this.running).onClick((): void=> { this.pdfJsCase(); })
-       Button('隔离PDFKit预检（不联网）').id('r2-pdf-preflight').enabled(!this.running).onClick((): void=> { this.pdfPreflight(); })
+       Button('PDF.js原页预览（不联网）').id('r2-pdfjs-local').enabled(!this.running).onClick((): void=> { this.pdfJsCase(); })
        Button('11图正式解析与本机回执').id('image-happy-path-entry').enabled(!this.running).onClick((): void => { this.onImageHappyPath(); })
       ForEach(['US1','US2','US3','US4','US5'], (caseId: string) => { Button('M3 隔离 '+caseId).id('m3-open-fixture-'+caseId).enabled(!this.running).onClick((): void => { this.openImageFixture(caseId); }) }, (caseId: string): string => caseId)
       Button('隔离 R007 入库验收').id('r2-open-residual-ingestion').enabled(!this.running).onClick((): void => { this.residual('ingestion'); })

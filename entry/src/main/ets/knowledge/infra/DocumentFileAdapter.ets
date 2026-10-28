@@ -46,7 +46,7 @@ async function documentCopyWorker(uri: string, title: string, id: string, filesR
     original.title = title; original.bytes = before.size; original.hash = documentDigestHex((await md.digest()).data);
     if (await documentHashFile(temporary, DocumentParseBudget.originalBytes, cancel) !== original.hash) { throw new DocumentParseFailure('副本摘要不一致', '保存'); }
     try {
-      original.format = documentSuffix(title); await documentContainerPreflight(temporary, original);
+      original.format = documentSuffix(title); if (original.format !== DocumentParseFormat.Pdf) { await documentContainerPreflight(temporary, original); }
       if (original.format === DocumentParseFormat.Docx) { await docxPreflightPath(temporary,original.bytes); original.preflight = DocumentPreflightStatus.Passed; original.preflightReason = ''; }
     } catch (error) { original.preflightReason = error instanceof DocumentParseFailure ? error.message : '身份预检失败'; }
     documentWorkerCheck(cancel); if (await fileIo.access(target)) { throw new DocumentParseFailure('发布目标已存在', '保存'); }

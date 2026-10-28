@@ -22,6 +22,7 @@ import { DirectModelCheckService } from '../services/model/DirectModelCheckServi
 import { ShuviRuntimeService } from '../services/model/ShuviRuntimeService';
 import { RuntimeChatService } from '../services/model/RuntimeChatService';
 import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
+import { PdfJsRuntime } from '../knowledge/infra/PdfJsRuntime';
 import { DocumentParseAssembly } from '../knowledge/infra/DocumentParseAssembly';
 import { KnowledgeAssembly } from '../knowledge/infra/KnowledgeAssembly';
 import { SemanticQualitySession } from '../knowledge/platformtests/SemanticQualitySuite';
@@ -43,6 +44,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    PdfJsRuntime.shared.detach();
     void RuntimeSearchService.session.onDestroy().catch((): void => {});
     void RuntimeChatService.controller.onDestroy().catch((): void => {});
     void ShuviRuntimeService.session.onDestroy().catch((): void => {
@@ -74,6 +76,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    PdfJsRuntime.shared.detach();
     // Main window is destroyed, release UI related resources
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
   }
@@ -88,6 +91,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onBackground(): void {
+    PdfJsRuntime.shared.closePreview();
     void RuntimeSearchService.session.onBackground().catch((): void => {});
     void RuntimeChatService.controller.onBackground().catch((): void => {});
     void ShuviRuntimeService.session.onBackground().catch((): void => {

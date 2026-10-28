@@ -129,7 +129,7 @@ export struct ParsedDocumentView {
     this.refreshResources().catch((): void=> { this.message='处理进度读取未完成，可重试打开资料'; });
     if (this.initialDocument.length > 0) { this.open(this.initialDocument); }
   }
-  aboutToDisappear(): void { this.openSequence++; this.alive = false; this.queue?.unsubscribe(this.resourceListener); this.boundService?.unsubscribe(this.listener); this.boundParse?.unsubscribe(this.parseListener); this.boundService?.closePreview().catch((): void => {}); this.boundService = undefined; this.boundParse = undefined; this.parseConsent = ''; this.fullFile = false; this.freeEligible = false; }
+  aboutToDisappear(): void { PdfJsRuntime.shared.closePreview(); this.openSequence++; this.alive = false; this.localBusy=false; this.queue?.unsubscribe(this.resourceListener); this.boundService?.unsubscribe(this.listener); this.boundParse?.unsubscribe(this.parseListener); this.boundService?.closePreview().catch((): void => {}); this.boundService = undefined; this.boundParse = undefined; this.parseConsent = ''; this.fullFile = false; this.freeEligible = false; }
   private async loadSeenTimes(): Promise<void> {
     if (this.seenLoaded) { return; }
     try {
@@ -219,7 +219,7 @@ export struct ParsedDocumentView {
       const item: ParsedLibraryItem = new ParsedLibraryItem(); item.id = o.id; item.originalId = o.id; item.title = o.title; item.namespace = '';
       item.category = this.categoryOf(o.title, ''); item.savedAt = o.savedAt;
       const task = tasks.find((t: DocumentParseTask): boolean => t.originalId === o.id);
-      item.status = task?.stage === DocumentParseStage.Received ? '待入库' : task?.stage ?? (o.format===DocumentParseFormat.Pdf && o.preflightReason.length>0?'PDF预检未通过':'待解析'); rows.push(item);
+      item.status = task?.stage === DocumentParseStage.Received ? '待入库' : task?.stage ?? '待解析'; rows.push(item);
     }
     const matched: ParsedLibraryItem[] = rows.filter((item: ParsedLibraryItem): boolean => item.title.toLowerCase().includes(this.filterText.trim().toLowerCase()));
     if (this.sortMode === 'name') {
@@ -330,7 +330,6 @@ export struct ParsedDocumentView {
     if (this.selectedDocument.length > 0) { return '内容已保存在本机'; }
     const task = this.tasks.find((t: DocumentParseTask): boolean => t.originalId === this.selectedOriginal);
     const original: DocumentOriginal | undefined=this.originals.find((o: DocumentOriginal): boolean=>o.id===this.selectedOriginal);
-    if (task===undefined && original?.format===DocumentParseFormat.Pdf && original.preflightReason.length>0) { return original.preflightReason; }
     if (task?.failure !== undefined && task.failure.length > 0) { return '上次处理没有完成，可查看处理状态后重试'; }
     if (task?.stage === DocumentParseStage.Received) { return '结果已接收，等待整理入库'; }
     if (task?.stage === DocumentParseStage.RemoteFailed) { return '云端处理没有完成，可以稍后重试'; }
@@ -485,17 +484,11 @@ export struct ParsedDocumentView {
   }
   private async previewPdfOriginal(): Promise<void> {
     if (this.localBusy || this.parse===undefined) { return; } const context=this.getUIContext().getHostContext(); if (context===undefined) { return; }
+    const parse: DocumentParseService=this.parse; const originalId: string=this.selectedOriginal; const sequence: number=this.openSequence;
     this.localBusy=true;
-    try { await this.parse.withPdfOriginal<void>(this.selectedOriginal,async (original: DocumentOriginal): Promise<void>=> { await PdfJsRuntime.shared.preview(documentAssetPath(context.filesDir+'/knowledge_parse_v1',original.assetId),original,new DocumentParseCancellation()); }); }
-    catch (error) { this.message=error instanceof Error?error.message:'PDF原件预览未完成'; }
-    finally { this.localBusy=false; }
-  }
-  private async retryPdfPreflight(): Promise<void> {
-    if (this.localBusy || this.parse===undefined) { return; }
-    this.localBusy=true; this.message='正在本机复核PDF页数；未发送请求';
-    try { await this.parse.retryPdfPreflight(this.selectedOriginal); this.message=this.parse.viewState().message; }
-    catch (error) { this.message=error instanceof Error?error.message:'PDF本机预检未完成，未发送请求'; }
-    finally { this.localBusy=false; this.refreshView(); }
+    try { await PdfJsRuntime.shared.open(async (cancel: DocumentParseCancellation): Promise<void>=> { cancel.check(); await parse.withPdfOriginal<void>(originalId,async (original: DocumentOriginal): Promise<void>=> { cancel.check(); await PdfJsRuntime.shared.preview(documentAssetPath(context.filesDir+'/knowledge_parse_v1',original.assetId),original,cancel); }); }); }
+    catch (error) { if (this.alive && sequence===this.openSequence && originalId===this.selectedOriginal) { this.message=error instanceof Error?error.message:'PDF原件预览未完成'; } }
+    finally { if (this.alive && sequence===this.openSequence) { this.localBusy=false; } }
   }
   private async requestParse(): Promise<void> {
     if (this.localBusy) { return; }
@@ -505,7 +498,6 @@ export struct ParsedDocumentView {
     const current = parse.viewState().snapshot.tasks.find((t: DocumentParseTask): boolean => t.originalId === o.id && t.hash === o.hash && t.version === o.version);
     let failure: string = '';
     try {
-      if (o.format===DocumentParseFormat.Pdf && current===undefined) { await parse.retryPdfPreflight(o.id); }
       if (o.format === DocumentParseFormat.Docx) { await parse.confirmDocx(o.id,true,true); }
       else if (o.format !== DocumentParseFormat.Pdf) { await this.imports?.preserveImage(parse,o); await parse.confirmImage(o.id,true,true); }
       else { const a: DocumentTestAcknowledgement = new DocumentTestAcknowledgement(); a.fullFile = true; a.embeddedImages = true; a.nonSensitive = true; a.privacyUnknown = true; a.freeEligible = true; await parse.confirm(o.id,a); }
@@ -675,9 +667,6 @@ export struct ParsedDocumentView {
           Text(this.selectedStatus()).fontColor(Theme.ink).id('upd-file-status').fontSize(14).width('100%')
           if (this.originals.some((o: DocumentOriginal): boolean=>o.id===this.selectedOriginal && o.format===DocumentParseFormat.Pdf)) {
             Button('查看PDF原件').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({minHeight:44}).width('100%').id('upd-preview-pdf-original').enabled(!this.localBusy).onClick((): void=> { this.previewPdfOriginal(); })
-          }
-          if (this.originals.some((o: DocumentOriginal): boolean=>o.id===this.selectedOriginal && o.format===DocumentParseFormat.Pdf) && !this.tasks.some((t: DocumentParseTask): boolean=>t.originalId===this.selectedOriginal)) {
-            Button('仅重试本机PDF预检（不发送）').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('upd-retry-pdf-preflight').enabled(!this.localBusy).onClick((): void=> { this.retryPdfPreflight(); })
           }
           if (this.selectedResult() !== undefined && (this.selectedDocument.length === 0 || this.parsedEngine !== 'MinerU')) {
             Button('保存到知识库').fontSize(14).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(12).constraintSize({ minHeight: 46 }).width('100%').id('upd-save-result').enabled(!this.localBusy).onClick((): void => { this.saveSelected(); })

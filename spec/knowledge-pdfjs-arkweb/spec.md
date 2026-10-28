@@ -2,13 +2,15 @@
 
 日期：2026-10-27。分支 `refactor/rag-pdf`，基线 `dev/rag` / `86ca813`。用户已明确授权 PDF.js + ArkWeb 试验及新分支，新增依赖仅为离线 PDF.js 6.4.299；不增权限、服务或 Native 库。
 
+2026-10-28 入口与生命周期修订：仅面向 Windows x86，移除 PDF 预检，统一详情 / 旧检索原件预览；本轮不做样本回归或设备复验。详见 [收口记录](lifecycle-verification.md)，以下早期实验验收授权和结果保留为历史，不自动继承外发授权。
+
 ## 用户流程
 
-Windows x86 模拟器导入 PDF → 本机 PDF.js 检查真实字节、加密与 1–50 页 → 当前文件明确确认 → 原 MinerU 上传 / 解析 / 结果接收 → 统一正文发布 → 获准正文向量生成与完整读回 → 同一份原件 PDF.js 预览。旧资料不自动重新上传或重嵌入。
+Windows x86 模拟器导入 PDF 并保存原件 → 当前文件明确确认 → 原 MinerU 上传 / 解析 / 结果接收 → 统一正文发布 → 获准正文向量生成与完整读回 → 同一份原件 PDF.js 预览。旧资料不自动重新上传或重嵌入。
 
 ## 页面事项
 
-资料详情新增「查看 PDF 原件」；本机重试预检和确认解析保留。预览使用持久 ArkWeb 页面，同一引擎读取原字节并渲染 Canvas，显示原件页码、上下页及关闭；不将服务生成的 PDF 或 Markdown 冒作原件。
+资料详情新增「查看 PDF 原件」；PDF 本机预检及重试入口已按 2026-10-28 用户要求移除，确认解析保留。预览使用持久 ArkWeb 页面，同一引擎读取原字节并渲染 Canvas，显示原件页码、上下页及关闭；不将服务生成的 PDF 或 Markdown 冒作原件。
 
 2026-10-28 高清屏增量：CSS 显示尺寸与 Canvas 位图尺寸分离，以 `devicePixelRatio` 及捏合缩放倍率计算实际渲染密度；屏幕密度 / 视口变化合并重绘，单画布仍限 8MP。取消任务完成后才复用画布，重绘保留用户正在请求的页码。依据为 [PDF.js 高清屏示例](https://mozilla.github.io/pdf.js/examples/)、[devicePixelRatio](https://developer.mozilla.org/en-US/docs/Web/API/Window/devicePixelRatio) 与 [VisualViewport.scale](https://developer.mozilla.org/en-US/docs/Web/API/VisualViewport/scale)。验证见 [高清屏验证记录](hidpi-verification.md)。
 

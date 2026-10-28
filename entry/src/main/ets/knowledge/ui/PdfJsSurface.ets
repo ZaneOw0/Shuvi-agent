@@ -8,8 +8,10 @@ const PDF_JS_ORIGIN: string='https://shuvi-pdf.invalid/';
 @Component
 export struct PdfJsSurface {
   private controller: webview.WebviewController=new webview.WebviewController();
+  private loadedOnce: boolean=false;
   @State expanded: boolean=false;
-  private changed: () => void=(): void=> { this.expanded=PdfJsRuntime.shared.expanded; };
+  @State loading: boolean=false;
+  private changed: () => void=(): void=> { this.expanded=PdfJsRuntime.shared.expanded; this.loading=PdfJsRuntime.shared.loading; };
   aboutToAppear(): void { PdfJsRuntime.shared.bind(this.controller); PdfJsRuntime.shared.subscribe(this.changed); }
   aboutToDisappear(): void { PdfJsRuntime.shared.unsubscribe(this.changed); PdfJsRuntime.shared.detach(); }
   private resource(url: string): WebResourceResponse {
@@ -30,10 +32,14 @@ export struct PdfJsSurface {
   build() {
     Stack({alignContent:Alignment.TopEnd}) {
       Web({src:PDF_JS_ORIGIN+'index.html',controller:this.controller})
+        .onPageBegin((): void=> { if (this.loadedOnce) { PdfJsRuntime.shared.reset(); } })
+        .onPageEnd((): void=> { this.loadedOnce=true; })
+        .onRenderExited((): void=> { PdfJsRuntime.shared.reset(); try { this.controller.refresh(); } catch {} })
         .javaScriptAccess(true).fileAccess(false).domStorageAccess(false)
         .onInterceptRequest((event: OnInterceptRequestEvent): WebResourceResponse=>this.resource(event.request.getRequestUrl()))
         .onConsole((event: OnConsoleEvent): boolean=> { const message: string=event.message.getMessage(); if (message.startsWith('PDFJS_')) { hilog.info(0x0001,'SHUVI_PDFJS','%{public}s',message.slice(0,160)); } return true; })
         .width('100%').height('100%')
+      if (this.loading) { Column() { Text('正在打开 PDF 原件…').fontColor(Theme.ink) }.width('100%').height('100%').justifyContent(FlexAlign.Center).backgroundColor(Theme.surface) }
       if (this.expanded) { Button('关闭原件').id('pdfjs-close-preview').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({minHeight:44}).margin({top:8,right:8}).onClick((): void=> { PdfJsRuntime.shared.closePreview(); }) }
     }.id('pdfjs-surface').width('100%').height(this.expanded?'100%':1).opacity(this.expanded?1:0).zIndex(this.expanded?1000:0)
   }

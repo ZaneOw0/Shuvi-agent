@@ -5,7 +5,7 @@ import {
   DocumentParseAction, DocumentParseTask, DocumentParseStage, DocumentRemoteState, DocumentRemoteOccupancy,
    DocumentParseBudget, DocumentAllocationReceipt, DocumentInspection, DocumentParseResultEnvelope, DocumentParseCleanup, DocumentParseUsage, documentCopySnapshot, DocumentPreflightStatus, DocumentParseFormat, DocumentImageEvidence, DocumentSelectedFile, ImageParsePermit, documentCopyFailure, ParseFailureKind, DocxParsePermit
 } from '../domain/DocumentParseModels';
-import { MineruCredentialPort, DocumentParseRepositoryPort, DocumentSelectionPort, DocumentAssetPort, DocumentPreflightPort, MineruTaskPort, DocumentParseClockPort, DocumentImageResultSourcePort } from '../domain/DocumentParsePorts';
+import { MineruCredentialPort, DocumentParseRepositoryPort, DocumentSelectionPort, DocumentAssetPort, MineruTaskPort, DocumentParseClockPort, DocumentImageResultSourcePort } from '../domain/DocumentParsePorts';
 import { documentBudgetCheck, documentUsage, documentAcknowledged, documentSubmitReason, documentGrantMatches, documentRemoteTerminal, documentSafeId, documentHashValid, documentIsImage, documentSuffix, imagePermitInputId, imagePermitPolicy } from '../pipeline/DocumentParsePolicy';
 import { parseFailureSummary, parseDetailedFailure, parseSanitizedReason } from '../pipeline/ParseFailurePolicy';
 import { KnowledgeStorageScope } from '../domain/KnowledgeStorageScope';
@@ -17,7 +17,6 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
   private listeners: DocumentParseStateListener[] = [];
   private selection: DocumentSelectionPort | undefined = undefined;
   private assets: DocumentAssetPort | undefined = undefined;
-  private preflight: DocumentPreflightPort | undefined = undefined;
   private localCancel: DocumentParseCancellation | undefined = undefined;
   private network: MineruTaskPort | undefined = undefined;
   private clock: DocumentParseClockPort | undefined = undefined;
@@ -69,8 +68,8 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     });
   }
   attachRemote(network: MineruTaskPort, clock: DocumentParseClockPort): void { this.network = network; this.clock = clock; }
-  attachLocal(selection: DocumentSelectionPort, assets: DocumentAssetPort, preflight: DocumentPreflightPort): void {
-    this.selection = selection; this.assets = assets; this.preflight = preflight;
+  attachLocal(selection: DocumentSelectionPort, assets: DocumentAssetPort): void {
+    this.selection = selection; this.assets = assets;
   }
   constructor(credential: MineruCredentialPort, repository: DocumentParseRepositoryPort, scope: KnowledgeStorageScope = KnowledgeStorageScope.production()) {
     this.credential = credential; this.repository = repository; this.scope = scope;
@@ -149,7 +148,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     return documentSubmitReason(original, grant, this.state.snapshot, this.state.credential);
   }
   async prepare(imagesOnly: boolean = false, docxOnly: boolean = false): Promise<void> {
-    if (this.state.busy || this.selection === undefined || this.assets === undefined || this.preflight === undefined) { return; }
+    if (this.state.busy || this.selection === undefined || this.assets === undefined) { return; }
     this.state.busy = true; const cancel: DocumentParseCancellation = new DocumentParseCancellation(); this.localCancel = cancel;
     try {
       const selected: DocumentFileSelection = docxOnly && this.selection.selectDocx !== undefined ? await this.selection.selectDocx() : imagesOnly && this.selection.selectImages !== undefined ? await this.selection.selectImages() : await this.selection.select(); cancel.check();
@@ -183,39 +182,10 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
           if (protection !== undefined) { await protection.withSource<void>(original.id,async (): Promise<void> => { await protection.assertCleanup([original.assetId]); await this.assets?.remove([original.assetId]); }); }
           throw new DocumentParseFailure('原件登记失败，清理由持久意图继续保护', '持久化');
         }
-        // Preserve original before PDFKit. Expired/blocked preflight cannot remove this durable copy.
-        try { await this.preflight.inspect(original, cancel); }
-        catch (error) { original.preflight = DocumentPreflightStatus.Blocked; original.pages=0; original.preflightReason = error instanceof DocumentParseFailure?error.message:'页数预检中断，原件保留但不外发'; }
-        await this.repository.save(this.state.snapshot);
-        if (cancel.invalid || Date.now() >= cancel.deadline) { this.state.message = '原件保留；预检取消或时间耗尽，不外发'; break; }
-        this.state.message = '原件已保存，未授权外发；预检状态不等于完整支持'; this.emit();
+        this.state.message = '原件已保存，未授权外发'; this.emit();
       }
     } catch (error) { this.state.message = error instanceof DocumentParseFailure ? error.message : '原件准备失败，已有资料保留'; await this.retryCleanup(); }
     finally { this.localCancel = undefined; this.state.busy = false; this.emit(); }
-  }
-  async retryPdfPreflight(originalId: string): Promise<void> {
-    if (this.state.busy) { throw new DocumentParseFailure('解析服务正忙，请稍后重试','PDF预检'); }
-    const original: DocumentOriginal | undefined=this.state.snapshot.originals.find((o: DocumentOriginal): boolean=>o.id===originalId);
-    const protection: KnowledgeSourceProtectionPort | undefined=this.sourceProtection;
-    if (original===undefined || original.format!==DocumentParseFormat.Pdf || this.assets===undefined || this.preflight===undefined || protection===undefined) { throw new DocumentParseFailure('PDF本机预检能力或原件不可用','PDF预检'); }
-    const assets: DocumentAssetPort=this.assets; const preflight: DocumentPreflightPort=this.preflight;
-    if (this.state.snapshot.tasks.some((t: DocumentParseTask): boolean=>t.originalId===originalId)) { throw new DocumentParseFailure('已有云端任务，请继续原任务','PDF预检'); }
-    const cancel: DocumentParseCancellation=new DocumentParseCancellation(); this.localCancel=cancel; this.state.busy=true;
-    this.state.message='正在本机复核PDF页数；未发送请求'; this.emit();
-    try {
-      await protection.withSource<void>(originalId,async (): Promise<void>=> {
-        await assets.verify(original,cancel); cancel.check();
-        await preflight.inspect(original,cancel); cancel.check();
-        if (original.preflight!==DocumentPreflightStatus.Passed || original.pages<1 || original.pages>50 || original.preflightReason.length>0) { throw new DocumentParseFailure(original.preflightReason || 'PDF页数尚未核定','PDF预检'); }
-        await this.repository.save(this.state.snapshot); cancel.check();
-      });
-      this.state.message=`PDF本机预检通过，共${original.pages}页；未发送请求`;
-    } catch (error) {
-      original.preflight=DocumentPreflightStatus.Blocked; original.pages=0;
-      original.preflightReason=error instanceof DocumentParseFailure?error.message:'PDF本机预检失败，原件保留'; this.state.message=original.preflightReason;
-      try { await this.repository.save(this.state.snapshot); } catch { this.state.message+='；预检结果保存失败，外发仍阻止'; }
-      throw new DocumentParseFailure(this.state.message,'PDF预检');
-    } finally { this.localCancel=undefined; this.state.busy=false; this.emit(); }
   }
   async confirm(originalId: string, acknowledgement: DocumentTestAcknowledgement): Promise<void> {
     if (this.state.busy) { return; }
@@ -364,8 +334,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
     action.onUploadStarting = async (): Promise<void> => {
       this.check(action);
       const original: DocumentOriginal = action.original;
-      if (original.hash !== action.task.hash || original.version !== action.task.version || original.preflight !== DocumentPreflightStatus.Passed || original.bytes < 1 || original.bytes > DocumentParseBudget.originalBytes ||
-        original.format === DocumentParseFormat.Pdf && (original.pages < 1 || original.pages > DocumentParseBudget.pdfPages)) { throw new DocumentParseFailure('原件身份或预算已变', '上传前复核'); }
+      if (original.hash !== action.task.hash || original.version !== action.task.version || original.format !== DocumentParseFormat.Pdf && original.preflight !== DocumentPreflightStatus.Passed || original.bytes < 1 || original.bytes > DocumentParseBudget.originalBytes) { throw new DocumentParseFailure('原件身份或预算已变', '上传前复核'); }
       if (recovery && (action.task.remote !== DocumentRemoteState.Waiting || action.task.recoveryUploadUsed)) { throw new DocumentParseFailure('本次未确认waiting-file或补传已用', '上传前复核'); }
       // Durable intent precedes SDK fetch. Crash at this boundary is conservative, never an automatic retry.
       if (recovery) { action.task.recoveryUploadUsed = true; }
@@ -506,7 +475,7 @@ export class DocumentParseService implements DocumentImageResultSourcePort {
   }
   pauseImmediate(): void {
     for (const grant of this.state.snapshot.grants) { if (grant.format===DocumentParseFormat.Docx && !this.state.snapshot.tasks.some((t: DocumentParseTask): boolean=>t.grantId===grant.id && t.originalId===grant.originalId)) { grant.revoked=true; } }
-    this.assets?.cancelLocal(); this.preflight?.cancelLocal();
+    this.assets?.cancelLocal();
     if (this.localCancel !== undefined) { this.localCancel.invalid = true; }
     if (this.activeAction !== undefined) {
       this.activeAction.cancel.reason = 'PAUSE'; this.activeAction.cancel.invalid = true; this.activeAction.task.epoch++;

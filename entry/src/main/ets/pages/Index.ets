@@ -27,15 +27,14 @@ import { KnowledgeAssembly } from '../knowledge/infra/KnowledgeAssembly';
 import { EmbeddingSettingsView } from '../knowledge/ui/EmbeddingSettingsView';
 import { PdfJsSurface } from '../knowledge/ui/PdfJsSurface';
 import { PdfJsRuntime } from '../knowledge/infra/PdfJsRuntime';
+import { PdfJsSourcePreview } from '../knowledge/infra/PdfJsSourcePreview';
+import { KnowledgeReadLease } from '../knowledge/domain/PdfKnowledgeModels';
 import { EmbeddingService } from '../knowledge/application/EmbeddingService';
 import { PdfIngestionService } from '../knowledge/application/PdfIngestionService';
 import { PdfIngestionView } from '../knowledge/ui/PdfIngestionView';
 import { KnowledgeView } from '../knowledge/ui/KnowledgeView';
 import { KnowledgeSearchService } from '../knowledge/application/KnowledgeSearchService';
 import { KnowledgeHit, KnowledgeSourceKind } from '../knowledge/domain/KnowledgeSearchModels';
-import { PdfPageAdapter } from '../knowledge/infra/PdfPageAdapter';
-import { PdfSourceView } from '../knowledge/ui/PdfSourceView';
-import { PdfSourceBinding, PdfLocator, PdfKnowledgeDocument } from '../knowledge/domain/PdfKnowledgeModels';
 import { KnowledgeDerivedLifecycle } from '../knowledge/application/KnowledgeLifecycleService';
 import { KnowledgeDocumentListPort } from '../knowledge/domain/KnowledgePorts';
 import { AssistantWelcome, CalendarDraftCard } from '../components/ChatVisuals';
@@ -47,8 +46,6 @@ import {
 } from '../model/AssistantModels';
 import { MockAssistantService } from '../mock/MockAssistantService';
 import { KnowledgePlatformDiagnostics } from '../knowledge/ui/KnowledgePlatformDiagnostics';
-import { PdfPageReferenceState, ResultPageReference } from '../knowledge/domain/PdfLocalModels';
-import { KnowledgeCancellation } from '../knowledge/domain/PdfKnowledgeModels';
 import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
 import { ImageIngestionView } from '../knowledge/ui/ImageIngestionView';
 import { ImageSourceView } from '../knowledge/ui/ImageSourceView';
@@ -141,10 +138,6 @@ struct Index {
   @State pdfIngestionOpen: boolean = false;
   private pdfIngestionService: PdfIngestionService | undefined = undefined;
   private unifiedSearchService: KnowledgeSearchService | undefined = undefined;
-  @State pdfSourceOpen: boolean = false;
-  @State pdfSourceBinding: PdfSourceBinding = new PdfSourceBinding();
-  @State pdfSourceLocator: PdfLocator = new PdfLocator();
-  private pdfPageAdapter: PdfPageAdapter | undefined = undefined;
   private derivedLifecycle: KnowledgeDerivedLifecycle | undefined = undefined;
   private pdfDocumentsPort: KnowledgeDocumentListPort | undefined = undefined;
   private embeddingService: EmbeddingService | undefined = undefined;
@@ -200,6 +193,7 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    PdfJsRuntime.shared.closePreview();
     this.alive = false;
     RuntimeChatService.session.detach();
     RuntimeSearchService.session.detach();
@@ -210,6 +204,7 @@ struct Index {
     this.embeddingService?.pause(); this.closeKnowledgeSession().catch((): void => { this.parsedMessage='会话释放未确认；保留本机持有，可重试释放'; });
   }
   private async closeKnowledgeSession(): Promise<void> {
+    await PdfJsRuntime.shared.closeAndWait();
     this.sharedKnowledge?.unsubscribe(this.knowledgeListener);
     await this.sharedKnowledge?.quiesceUnified();
     await this.docxIngestionService?.close(); await this.sharedKnowledge?.docxSources.close();
@@ -231,7 +226,6 @@ struct Index {
     if (this.imageSourceOpen) { this.imageSourceOpen = false; this.sharedKnowledge?.imageSources.close().catch((): void => {}); return true; }
     if (this.imageIngestionOpen) { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); return true; }
     if (this.platformDiagnosticsOpen) { this.platformDiagnosticsOpen = false; return true; }
-    if (this.pdfSourceOpen) { this.pdfSourceOpen = false; return true; }
     if (this.pdfIngestionOpen) { this.pdfIngestionOpen = false; return true; }
     if (this.embeddingOpen) { this.closeEmbedding(); return true; }
     if (this.parseOpen) { this.closeParse(); return true; }
@@ -340,22 +334,10 @@ struct Index {
       await this.knowledgeService?.openHit(text); return;
     }
     if (hit.sourceKind !== KnowledgeSourceKind.Pdf) { return; }
-    const doc: PdfKnowledgeDocument | undefined = await this.sharedKnowledge?.repository.get(hit.documentId); const context = this.getUIContext().getHostContext();
-    if (doc === undefined || doc.tombstone || context === undefined) { return; }
-    if (this.sharedKnowledge === undefined) { return; }
-    const sourceJob = await this.sharedKnowledge.repository.generationJob(hit.generation);
-    if (doc.activeContentGeneration !== hit.generation || doc.binding.originalHash !== hit.originalHash) { return; }
-    let pageReference: ResultPageReference;
-    try { pageReference = await this.sharedKnowledge.pages.resolve(hit,new KnowledgeCancellation()); if (pageReference.state !== PdfPageReferenceState.Verified) { return; } } catch { this.knowledgeState.message = '原页依据或原件已失效，未跳转'; return; }
-    if (sourceJob.binding === undefined || sourceJob.snapshotId !== hit.snapshotId || sourceJob.snapshotHash !== hit.snapshotHash || sourceJob.binding.originalHash !== hit.originalHash || sourceJob.binding.originalVersion !== hit.originalVersion) { return; }
-    this.pdfSourceBinding = sourceJob.binding; this.pdfSourceLocator = hit.locator.pdfRegions[0] ?? new PdfLocator();
-    const adapter: PdfPageAdapter = new PdfPageAdapter(context.filesDir);
-    if (this.sharedKnowledge === undefined) { return; }
-    adapter.attachLease(this.sharedKnowledge.repository,this.sharedKnowledge.sourceReadLease(sourceJob.sourceId,hit.generation));
-    adapter.attachSnapshot(this.sharedKnowledge.repository,this.sharedKnowledge.assets,hit.snapshotId,hit.snapshotHash);
-    adapter.attachPageReference(pageReference);
-    adapter.attachNodeIds(await this.sharedKnowledge.repository.chunkSources(hit.chunkId,hit.generation));
-    try { if (this.pdfPageAdapter !== undefined) { await this.sharedKnowledge.sources.release(this.pdfPageAdapter); } this.sharedKnowledge.sources.adopt(adapter); this.pdfPageAdapter = adapter; this.pdfSourceOpen = true; } catch { this.knowledgeState.message = '原件读租约释放待确认，请重试释放'; }
+    const shared=this.sharedKnowledge; const context=this.getUIContext().getHostContext();
+    if (shared===undefined || context===undefined) { return; }
+    try { await new PdfJsSourcePreview(context.filesDir+'/knowledge_parse_v1',shared.repository,shared.pages,shared.lifecycle,(source: string,generation: string): KnowledgeReadLease=>shared.sourceReadLease(source,generation)).open(hit); }
+    catch (error) { if (this.alive) { this.knowledgeState.message=error instanceof Error?error.message:'PDF原件预览未完成'; } }
   }
   private closeParse(): void {
     this.parseService?.clearInput(); this.parseOpen = false; this.scroller.scrollEdge(Edge.Top);
@@ -1269,8 +1251,6 @@ struct Index {
               KnowledgePlatformDiagnostics({ onBack: (): void => { this.platformDiagnosticsOpen = false; }, onImageHappyPath: (): void => { this.platformDiagnosticsOpen = false; this.openImages(); } })
           } else if (this.showScenarios) {
             this.scenarioPanel()
-           } else if (this.pdfSourceOpen) {
-              PdfSourceView({ adapter: this.pdfPageAdapter, session: this.sharedKnowledge?.sources, binding: this.pdfSourceBinding, locator: this.pdfSourceLocator, onBack: (): void => { this.pdfSourceOpen = false; } })
            } else if (this.pdfIngestionOpen) {
              if (this.pdfIngestionService !== undefined) {
                PdfIngestionView({ service: this.pdfIngestionService, lifecycle: this.derivedLifecycle, onBack: (): void => { this.pdfIngestionOpen = false; } })

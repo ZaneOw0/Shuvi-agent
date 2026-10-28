@@ -1,9 +1,8 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { DocumentOriginal, DocumentParseCancellation, DocumentParseFailure, DocumentPreflightStatus } from '../domain/DocumentParseModels';
+import { DocumentOriginal, DocumentParseCancellation, DocumentParseFailure } from '../domain/DocumentParseModels';
 import { documentEnsureDirectory, documentHashFile, documentAssetPath } from '../infra/DocumentFileOperations';
 import { pdfCodecUtf8 } from '../pipeline/PdfSnapshotCodec';
-import { PdfJsPreflight } from '../infra/PdfJsPreflight';
 import { PdfJsRuntime } from '../infra/PdfJsRuntime';
 
 export function pdfJsFixtureBytes(): Uint8Array {
@@ -20,8 +19,7 @@ export async function pdfJsLocalCase(context: common.Context, report: (line: str
   const bytes: Uint8Array=pdfJsFixtureBytes(); const original: DocumentOriginal=new DocumentOriginal(); original.id='pdfjs-local'; original.assetId='original-pdfjs-local'; original.title='shuvi-pdfjs-e2e-20261027.pdf'; original.bytes=bytes.length;
   const path: string=documentAssetPath(root+'/knowledge_parse_v1',original.assetId); const file: fileIo.File=await fileIo.open(path,fileIo.OpenMode.CREATE|fileIo.OpenMode.READ_WRITE|fileIo.OpenMode.NOFOLLOW);
   try { if (await fileIo.write(file.fd,bytes.buffer)!==bytes.length) { throw new DocumentParseFailure('隔离PDF写入不完整','PDF.js测试'); } await fileIo.fsync(file.fd); } finally { await fileIo.close(file); }
-  original.hash=await documentHashFile(path,20971520,new DocumentParseCancellation()); await new PdfJsPreflight(root).inspect(original,new DocumentParseCancellation());
-  if (original.preflight!==DocumentPreflightStatus.Passed || original.pages!==1) { throw new DocumentParseFailure('隔离PDF真实预检失败','PDF.js测试'); }
+  original.hash=await documentHashFile(path,20971520,new DocumentParseCancellation());
   report(`PDFJS_LOCAL pages=1 bytes=${bytes.length} hash=${original.hash} engine=6.4.299 requests=0`);
-  await PdfJsRuntime.shared.preview(path,original,new DocumentParseCancellation());
+  await PdfJsRuntime.shared.open(async (cancel: DocumentParseCancellation): Promise<void>=> { await PdfJsRuntime.shared.preview(path,original,cancel); });
 }
