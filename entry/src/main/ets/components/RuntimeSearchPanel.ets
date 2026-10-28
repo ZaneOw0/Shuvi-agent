@@ -9,6 +9,7 @@ import { SourceLinkService } from '../services/SourceLinkService';
 @Component
 export struct RuntimeSearchPanel {
   @Prop view: RuntimeSearchView = new RuntimeSearchView();
+  @Prop hideQuery: boolean = false;
   @State linkMessage: string = '';
   @State details: boolean = false;
   onStart: (key: Uint8Array) => void = (_key: Uint8Array): void => {};
@@ -35,8 +36,8 @@ export struct RuntimeSearchPanel {
           purpose: '搜索回答', onKey: (key: Uint8Array): void => { this.onStart(key); } })
       }
       if (this.view.preview !== undefined) {
-        Text('允许发送以下关键词？').fontSize(15).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
-        Text(this.view.preview?.query ?? '').fontSize(15).fontColor(Theme.ink).width('100%')
+        Text(this.hideQuery ? '允许用这条语音的后台转写搜索？' : '允许发送以下关键词？').fontSize(15).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
+        Text(this.hideQuery ? '语音消息（转写内容不显示）' : (this.view.preview?.query ?? '')).fontSize(15).fontColor(Theme.ink).width('100%')
         Text('工具 web_search · Tavily · 最多 3 条结果。授权有效期 60 秒。检索成功后将摘录发给 DeepSeek 生成回答。')
           .fontSize(12).fontColor(Theme.muted)
         Text('本机搜索预算预留 CNY 1.00，仅为调试预留，非供应商报价、实际扣款或计费硬上限。实际金额未知，保留待核账；本轮不自动释放额度。')
@@ -53,7 +54,7 @@ export struct RuntimeSearchPanel {
           .backgroundColor(Theme.soft).fontColor(Theme.accent).onClick((): void => { void RuntimeSearchService.session.stop(); })
       }
       if (this.view.query.length > 0) {
-        Text('本次关键词：' + this.view.query).fontSize(13).fontColor(Theme.ink)
+        Text(this.hideQuery ? '本次输入：语音消息' : ('本次关键词：' + this.view.query)).fontSize(13).fontColor(Theme.ink)
         Text(this.view.billing).fontSize(12).fontColor(Theme.muted).id('runtime-search-billing')
       }
       ForEach(this.view.sources, (source: LiveSearchSource, index: number) => {

@@ -17,6 +17,7 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { SourceLinkService } from '../services/SourceLinkService';
+import { SpeechService } from '../services/speech/SpeechService';
 import { McpConnectionCheckService } from '../services/McpConnectionCheckService';
 import { DirectModelCheckService } from '../services/model/DirectModelCheckService';
 import { ShuviRuntimeService } from '../services/model/ShuviRuntimeService';
@@ -38,6 +39,7 @@ const DOMAIN = 0x0000;
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     SourceLinkService.bind(this.context);
+    SpeechService.bind(this.context);
     CalendarProbeService.bind(this.context);
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
@@ -48,6 +50,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    SpeechService.release();
     void CalendarDraftService.controller.onDestroy().catch((): void => {});
     CalendarProbeService.release();
     void RuntimeSearchService.session.onDestroy().catch((): void => {});
@@ -85,11 +88,13 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    SpeechService.background();
     // Main window is destroyed, release UI related resources
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
   }
 
   onForeground(): void {
+    SpeechService.foreground();
     CalendarDraftService.controller.onForeground();
     RuntimeSearchService.session.onForeground();
     RuntimeKnowledgeService.session.onForeground();
@@ -103,6 +108,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onBackground(): void {
+    SpeechService.background();
     void CalendarDraftService.controller.onBackground().catch((): void => {});
     CalendarProbeService.background();
     void RuntimeSearchService.session.onBackground().catch((): void => {});

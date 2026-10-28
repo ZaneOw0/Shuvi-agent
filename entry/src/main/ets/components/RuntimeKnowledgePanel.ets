@@ -15,6 +15,7 @@ import { Theme } from './Theme';
 @Component
 export struct RuntimeKnowledgePanel {
   @Prop @Watch('viewChanged') view: RuntimeKnowledgeView = new RuntimeKnowledgeView();
+  @Prop hideQuery: boolean = false;
   @State sourcesOpen: boolean = false;
   private shownQuery: string = '';
   onDisable: () => void = (): void => {};
@@ -58,7 +59,7 @@ export struct RuntimeKnowledgePanel {
           .onClick((): void => { this.onDisable(); })
       }
       if (this.view.query.length > 0) {
-        Text('问：' + this.view.query).fontSize(13).fontColor(Theme.muted).width('100%').maxLines(3)
+        Text(this.hideQuery ? '问：语音消息' : ('问：' + this.view.query)).fontSize(13).fontColor(Theme.muted).width('100%').maxLines(3)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
           Text('本机检索 · ' + knowledgeRetrievalStage(this.view)).fontSize(Theme.noteSize).fontColor(Theme.ink)

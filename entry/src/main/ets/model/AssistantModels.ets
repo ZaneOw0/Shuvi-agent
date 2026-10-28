@@ -1,4 +1,5 @@
 // Frontend prototype types only; the shared Agent/platform contract is still pending.
+import { VoiceClip } from '../services/speech/VoiceAudio';
 import { CalendarCreatedSummary } from '../services/calendar/CalendarPresentation';
 
 export enum DemoScenario {
@@ -38,6 +39,7 @@ export interface ChatMessage {
   isUser: boolean;
   text: string;
   searchId?: string;
+  voice?: VoiceClip;
   /** Present only on the reply that reports a verified calendar creation; rendered as a card. */
   calendar?: CalendarCreatedSummary;
 }
