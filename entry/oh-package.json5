@@ -6,6 +6,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@harmony_agent/native-tools": "file:../modules/harmony_agent/native_tools",
     "@harmony_agent/agent-contracts": "file:../modules/harmony_agent/agent_contracts",
     "@harmony_agent/agent-core": "file:../modules/harmony_agent/agent_core",
     "@harmony_agent/agent-runtime": "file:../modules/harmony_agent/agent_runtime",

@@ -7,6 +7,7 @@ import {
 } from '@harmony_agent/agent-runtime';
 import { McpAgentAdapter } from '../mcp/McpAgentAdapter';
 import {
+  McpRuntimeToolExtension,
   createProviderMcpProductionAgentRuntime,
   createRecoveredProviderMcpProductionAgentRuntime
 } from '../mcp/McpProductionRuntime';
@@ -64,6 +65,7 @@ export class LocalAIGatewayMcpRuntimePorts {
   httpClient?: LocalAIGatewayHttpClientPort;
   plannerObserver?: ProviderSemanticPlannerObserverPort;
   memoryContext?: PlanningMemoryContextPort;
+  toolExtensions: McpRuntimeToolExtension[] = [];
 }
 
 class LocalAIGatewayProviderAssembly {
@@ -115,7 +117,7 @@ export async function createLocalAIGatewayMcpProductionAgentRuntime(config: Loca
   const assembly: LocalAIGatewayProviderAssembly = assembleProvider(config, ports);
   return await createProviderMcpProductionAgentRuntime(config.runtimeConfig, ports.runtimePorts, adapter, registry,
     assembly.registered, assembly.provider, config.plannerConfig, ports.plannerObserver, ports.memoryContext,
-    requiredToolIds);
+    requiredToolIds, ports.toolExtensions);
 }
 
 /** Restores durable tasks through the same concrete Local AI Gateway Provider chain. */
@@ -125,5 +127,5 @@ export async function createRecoveredLocalAIGatewayMcpProductionAgentRuntime(
   const assembly: LocalAIGatewayProviderAssembly = assembleProvider(config, ports);
   return await createRecoveredProviderMcpProductionAgentRuntime(config.runtimeConfig, ports.runtimePorts,
     adapter, registry, assembly.registered, assembly.provider, config.plannerConfig,
-    ports.plannerObserver, ports.memoryContext, requiredToolIds);
+    ports.plannerObserver, ports.memoryContext, requiredToolIds, ports.toolExtensions);
 }

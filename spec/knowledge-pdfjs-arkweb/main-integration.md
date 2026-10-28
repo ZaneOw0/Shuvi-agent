@@ -1,5 +1,7 @@
 # main 增量集成与 Agent 知识库调用核对
 
+后续 PR #23 的工具循环增量合并与 L1 差距核对见 [PR #23 集成记录](pr23-integration.md)。本文保留 PR #21 时点。
+
 日期：2026-10-28。用户明确授权：`refactor/rag-pdf` 合入 `dev/rag` 并推送一次，更新本地 main 后尝试合并到 dev/rag；保留既有 RAG 链路，冲突分类展示。
 
 ## Git 状态与边界

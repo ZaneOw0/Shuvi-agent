@@ -1,6 +1,6 @@
 # Shuvi（休比）
 
-> 当前阶段：真实能力整合与验收。状态截至 2026-10-27：`main` 已合入检索优先 RAG 与验收修复（PR #20），debug 首页已接入 Runtime 助手对话、授权搜索与知识库 RAG；`feat/calendar-real` 在此基础上接通助手聊天 → Runtime 日程草稿 → 用户确认 → 原生日历工具（合入 main 前本机 171 项宿主测试与 HAP 构建通过，正常创建获模拟器人工反馈，返回修改待模拟器验收；合入后的复验见 spec 01）。知识库 RAG 已在模拟器上用真实 Provider 跑通（未完整落盘设备日志，不计正式验收）。签名安装、完整 CI 与 OpenHarmony 真机验收尚未完成。
+> 当前阶段：真实能力整合与验收。状态截至 2026-10-28：`main` 已合入检索优先 RAG（PR #20）与助手日程真实链路（PR #21）。集成分支 `feat/assistant-tools` 合入后台文档工具（PR #22）并把助手改为统一工具循环：模型按对话自主选择直接回答、调用文档 create/read/update（保存到系统文件管理器 Download/com.example.shuvi/，回执显示真实保存位置），或调用 `calendar_propose` 生成待确认日程草稿，用户确认后才由原生日历工具写入并读回；MCP 增加受控写入、幂等与结果不确定保护。联网搜索与知识库 RAG 仍为显式开关。知识库 RAG 已在模拟器上用真实 Provider 跑通（未完整落盘设备日志，不计正式验收）。签名安装、完整 CI 与 OpenHarmony 真机验收尚未完成；本分支的验收记录见 [spec 01](specs/01-创建日程并提醒.md) 与 [08](docs/08-项目进度与验收.md)，文档工具见 [后台本地文档工具](docs/integration/agent/后台本地文档工具.md)。
 
 > 本轮新增：[应用内悬浮助手入口](specs/02-应用内悬浮助手入口.md) v0.3 已实现拖动与左右吸边，本轮模拟器验收范围见第 6.7 节；v0.2 的历史反馈见第 6.6 节。可从其他页面返回当前对话，在「我的」关闭入口。位置与开关仅本次运行有效，重启恢复开启并回到右下角；未覆盖窗口场景、无障碍朗读与真机待验证。
 
@@ -12,7 +12,7 @@
 
 日程和搜索 Mock 继续作为独立演示模式保留，不调用真实供应商。真实模式不会失败后自动回退成 Mock；普通对话、真实搜索与演示的范围分别记录，不能混用验收证据。
 
-Agent 八模块已迁至 `modules/harmony_agent/`，来源固定为 `f177176`，后续适配登记在 `LOCAL_CHANGES.json`；六个 HAR 供产品引用，另两个用于独立测试宿主。应用服务已装配生产 Runtime，当前开放 debug 对话、确认后创建日程和显式关键词搜索；自主多 Agent 协作尚未完成产品验收。连接检查仍只做 MCP 握手与工具发现。统一进度与证据见 [08 项目进度与验收](docs/08-项目进度与验收.md)。
+Agent 八模块已迁至 `modules/harmony_agent/`，来源固定为 `f177176`，后续适配登记在 `LOCAL_CHANGES.json`；产品引用原六个 HAR 及新增的 `native_tools`，`agent_testkit` 仅用于独立测试宿主。应用服务已装配生产 Runtime，当前开放 debug 助手（模型自主选择回答、文档工具或待确认日程）与显式关键词搜索；自主多 Agent 协作尚未完成产品验收。连接检查仍只做 MCP 握手与工具发现。统一进度与证据见 [08 项目进度与验收](docs/08-项目进度与验收.md)。
 
 休比（Shuvi）是面向开源鸿蒙社区竞赛开发的智能个人助理，使用 ArkTS / ArkUI 开发。产品目标、需求层级与架构建议见 [00 项目总览](docs/00-项目总览.md)。
 
@@ -28,7 +28,7 @@ Agent 八模块已迁至 `modules/harmony_agent/`，来源固定为 `f177176`，
 | `AppScope/` | 应用级配置（`app.json5`：bundleName、版本、图标与名称） |
 | `services/search-mcp/` | 独立 Node.js 搜索 MCP Server，不进入 HAP；单独安装、构建与测试 |
 | `services/local-ai-gateway/` | 独立 Windows/.NET 模型网关，固定源码已导入，自包含自动测试 588/588 通过；不进入 HAP，远端 CI 与完整运行包验收待完成 |
-| `modules/harmony_agent/` | 八个 Agent HAR 源码模块及测试；原六模块供产品依赖，另外两个仅接入测试工程 |
+| `modules/harmony_agent/` | 八个 Agent HAR 源码模块及测试；原六模块和 native_tools 供产品依赖，agent_testkit 仅接入测试工程 |
 | `tests/agent-host/` | 独立 Agent 测试工程，复用八模块；本机 Hypium 380/380 通过，设备测试待执行 |
 | `tools/agent/fixture/` | 固定样例 MCP 测试服务，不是生产搜索服务 |
 | `scripts/` | 本地一键启动脚本：设备/模拟器 → 签名 → 构建 → 安装运行 |
