@@ -71,8 +71,9 @@ export class McpClientManager {
       clientVersion: this.options.clientVersion === undefined ? MCP_CLIENT_VERSION : this.options.clientVersion,
       debugBuild: this.options.debugBuild === true
     };
-    const client: McpProtocolClient = this.createProtocolClient(profile, protocolOptions);
-    this.servers.set(profile.id, new ManagedServer(profile, client));
+    const registeredProfile: McpServerProfile = JSON.parse(JSON.stringify(profile)) as McpServerProfile;
+    const client: McpProtocolClient = this.createProtocolClient(registeredProfile, protocolOptions);
+    this.servers.set(profile.id, new ManagedServer(registeredProfile, client));
     this.emit(this.requireServer(profile.id));
   }
 
@@ -221,6 +222,19 @@ export class McpClientManager {
 
   async callTool(ref: McpCapabilityRef, argumentsValue: Object,
     cancellation?: McpCancellationSignal): Promise<McpToolResult> {
+    try {
+      // Capture caller-owned values before any discovery or policy await.
+      const callRef: McpCapabilityRef = { serverId: ref.serverId, kind: ref.kind, name: ref.name };
+      const callArguments: Object = JSON.parse(JSON.stringify(argumentsValue)) as Object;
+      return await this.callToolChecked(callRef, callArguments, cancellation);
+    } catch (error) {
+      if (error instanceof McpClientError && error.requestDispatched === undefined) error.requestDispatched = false;
+      throw this.normalizeError(error);
+    }
+  }
+
+  private async callToolChecked(ref: McpCapabilityRef, argumentsValue: Object,
+    cancellation?: McpCancellationSignal): Promise<McpToolResult> {
     if (ref.kind !== McpCapabilityKind.TOOL) {
       throw new McpClientError(McpErrorCode.CONFIGURATION, 'Capability reference is not a tool', ref.serverId);
     }
@@ -234,6 +248,7 @@ export class McpClientManager {
       throw new McpClientError(McpErrorCode.CONFIGURATION,
         `Unknown tool ${ref.name}`, ref.serverId);
     }
+    const callTool: McpTool = JSON.parse(JSON.stringify(tool)) as McpTool;
     if (this.options.invocationPolicy === undefined) {
       throw new McpClientError(McpErrorCode.POLICY_DENIED,
         'Tool calls are denied until an invocation policy is registered', ref.serverId);
@@ -242,9 +257,9 @@ export class McpClientManager {
     let reason: string | undefined = undefined;
     try {
       const decision = await this.options.invocationPolicy.authorize({
-        profile: server.profile,
-        tool: tool,
-        arguments: argumentsValue
+        profile: JSON.parse(JSON.stringify(server.profile)) as McpServerProfile,
+        tool: JSON.parse(JSON.stringify(callTool)) as McpTool,
+        arguments: JSON.parse(JSON.stringify(argumentsValue)) as Object
       });
       allowed = decision.allowed;
       reason = decision.reason;
@@ -256,7 +271,7 @@ export class McpClientManager {
       throw new McpClientError(McpErrorCode.POLICY_DENIED,
         reason === undefined ? 'Tool call denied by invocation policy' : reason, ref.serverId);
     }
-    return server.client.callTool(tool, argumentsValue, cancellation);
+    return server.client.callTool(callTool, argumentsValue, cancellation);
   }
 
   async readResource(ref: McpCapabilityRef): Promise<McpReadResourceResult> {

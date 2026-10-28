@@ -230,13 +230,23 @@ export class McpProtocolClient {
       this.throwIfCancelled(cancellation);
       result = await this.request('tools/call', params, tool.name, false, additionalHeaders, cancellation);
     }
-    const record: Record<string, Object> = this.asRecord(result, 'tool result');
-    return {
-      content: this.parseContentArray(this.optionalArray(record, 'content')),
-      structuredContent: record['structuredContent'],
-      isError: this.optionalBoolean(record, 'isError') === true,
-      raw: result
-    };
+    try {
+      const record: Record<string, Object> = this.asRecord(result, 'tool result');
+      if ((record['content'] === undefined && record['structuredContent'] === undefined) ||
+        (record['content'] !== undefined && !Array.isArray(record['content'])) ||
+        (record['isError'] !== undefined && typeof record['isError'] !== 'boolean')) {
+        throw new McpClientError(McpErrorCode.PROTOCOL, 'Invalid tool result envelope', this.profile.id);
+      }
+      if (record['structuredContent'] !== undefined) this.asRecord(record['structuredContent'], 'structured content');
+      return {
+        content: this.parseContentArray(this.optionalArray(record, 'content')),
+        structuredContent: record['structuredContent'],
+        isError: this.optionalBoolean(record, 'isError') === true,
+        raw: result
+      };
+    } catch (error) {
+      throw this.dispatchedError(error);
+    }
   }
 
   async readResource(uri: string): Promise<McpReadResourceResult> {
@@ -465,8 +475,26 @@ export class McpProtocolClient {
       headers['MCP-Session-Id'] = this.sessionId;
     }
     const body: string = JsonRpcCodec.request(id, method, wireParams);
-    const response: McpTransportResponse = await this.transport.send(
-      this.transportRequest(McpHttpMethod.POST, headers, body, cancellation));
+    const request: McpTransportRequest = this.transportRequest(McpHttpMethod.POST, headers, body, cancellation);
+    if (method === 'tools/call') request.reuseConnections = false;
+    try {
+      return await this.sendRequest(request, id, method, initializeRequest);
+    } catch (error) {
+      if (method === 'tools/call') throw this.dispatchedError(error);
+      throw this.normalizeError(error);
+    }
+  }
+
+  private dispatchedError(error: Object): McpClientError {
+    const result: McpClientError = error instanceof McpClientError ? error :
+      new McpClientError(McpErrorCode.PROTOCOL, 'Tool response could not be processed', this.profile.id);
+    result.requestDispatched = true;
+    return result;
+  }
+
+  private async sendRequest(request: McpTransportRequest, id: number, method: string,
+    initializeRequest: boolean): Promise<Object> {
+    const response: McpTransportResponse = await this.transport.send(request);
     if (initializeRequest) {
       const session: string | undefined = response.headers['mcp-session-id'];
       if (session !== undefined && session.length > 0) {
@@ -509,7 +537,8 @@ export class McpProtocolClient {
     }
     let authHeaders: Record<string, string>;
     try {
-      authHeaders = await this.options.authProvider.getHeaders(this.profile, operation);
+      authHeaders = await this.options.authProvider.getHeaders(
+        JSON.parse(JSON.stringify(this.profile)) as McpServerProfile, operation);
     } catch (_error) {
       throw new McpClientError(McpErrorCode.AUTHENTICATION,
         'Authentication provider failed', this.profile.id);

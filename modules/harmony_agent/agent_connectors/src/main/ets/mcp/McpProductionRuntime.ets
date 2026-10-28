@@ -8,12 +8,14 @@ import {
   RuntimeToolOutcomeSinkPort,
   SingleAgentCollaborationSelector,
   StepDispatchPort,
+  StepDispatchReceipt,
+  StepDispatchRequest,
   ToolRegistry,
   ToolRegistryEntry,
   createProductionAgentRuntime,
   createRecoveredProductionAgentRuntime
 } from '@harmony_agent/agent-runtime';
-import { ToolOutcome } from '@harmony_agent/agent-contracts';
+import { ContractCodec, ToolOutcome, ToolSourceType } from '@harmony_agent/agent-contracts';
 import { McpAgentAdapter } from './McpAgentAdapter';
 import { McpCatalogRefreshResult, McpToolOutcomeSinkPort } from './McpConnectorTypes';
 import { McpStepDispatchAdapter } from './McpStepDispatchAdapter';
@@ -86,6 +88,63 @@ export class McpRuntimeCompositionError extends Error {
   }
 }
 
+/** Host-owned non-MCP catalog and dispatch factory; grants and persistence remain owned by Runtime. */
+export class McpRuntimeToolExtension {
+  readonly entries: ToolRegistryEntry[];
+  readonly adapterFactory: ProductionRuntimeAdapterFactoryPort;
+
+  constructor(entries: ToolRegistryEntry[], adapterFactory: ProductionRuntimeAdapterFactoryPort) {
+    this.entries = entries;
+    this.adapterFactory = adapterFactory;
+  }
+}
+
+function captureExtensions(extensions: McpRuntimeToolExtension[]): McpRuntimeToolExtension[] {
+  const result: McpRuntimeToolExtension[] = [];
+  for (let i: number = 0; i < extensions.length; i++) {
+    const entries: ToolRegistryEntry[] = [];
+    for (let j: number = 0; j < extensions[i].entries.length; j++) {
+      entries.push(JSON.parse(ContractCodec.stringify(extensions[i].entries[j])) as ToolRegistryEntry);
+    }
+    result.push(new McpRuntimeToolExtension(entries, extensions[i].adapterFactory));
+  }
+  return result;
+}
+
+class MixedToolDispatch implements StepDispatchPort {
+  private readonly routes: Map<string, StepDispatchPort> = new Map<string, StepDispatchPort>();
+  private readonly dispatchers: StepDispatchPort[] = [];
+
+  constructor(mcp: StepDispatchPort, mcpEntries: ToolRegistryEntry[], extensions: McpRuntimeToolExtension[],
+    sink: RuntimeToolOutcomeSinkPort) {
+    this.dispatchers.push(mcp);
+    for (let i: number = 0; i < mcpEntries.length; i++) this.routes.set(mcpEntries[i].descriptor.toolId, mcp);
+    for (let i: number = 0; i < extensions.length; i++) {
+      const dispatcher: StepDispatchPort = extensions[i].adapterFactory.create(sink);
+      this.dispatchers.push(dispatcher);
+      for (let j: number = 0; j < extensions[i].entries.length; j++) {
+        this.routes.set(extensions[i].entries[j].descriptor.toolId, dispatcher);
+      }
+    }
+  }
+
+  dispatch(request: StepDispatchRequest): StepDispatchReceipt {
+    const dispatcher: StepDispatchPort | undefined = request.toolInvocation === undefined ? undefined :
+      this.routes.get(request.toolInvocation.toolId);
+    if (dispatcher !== undefined) return dispatcher.dispatch(request);
+    const rejected: StepDispatchReceipt = new StepDispatchReceipt();
+    rejected.rejectionCode = 'TOOL_DISPATCH_NOT_REGISTERED';
+    return rejected;
+  }
+
+  cancel(dispatchId: string): boolean {
+    for (let i: number = 0; i < this.dispatchers.length; i++) {
+      if (this.dispatchers[i].cancel(dispatchId)) return true;
+    }
+    return false;
+  }
+}
+
 class RuntimeMcpOutcomeSink implements McpToolOutcomeSinkPort {
   private readonly sink: RuntimeToolOutcomeSinkPort;
 
@@ -100,17 +159,23 @@ class RuntimeMcpOutcomeSink implements McpToolOutcomeSinkPort {
 
 class McpProductionAdapterFactory implements ProductionRuntimeAdapterFactoryPort {
   private readonly adapter: McpAgentAdapter;
+  private readonly extensions: McpRuntimeToolExtension[];
+  private readonly mcpEntries: ToolRegistryEntry[];
 
-  constructor(adapter: McpAgentAdapter) {
+  constructor(adapter: McpAgentAdapter, mcpEntries: ToolRegistryEntry[], extensions: McpRuntimeToolExtension[]) {
     this.adapter = adapter;
+    this.mcpEntries = mcpEntries;
+    this.extensions = extensions;
   }
 
   create(sink: RuntimeToolOutcomeSinkPort): StepDispatchPort {
-    return new McpStepDispatchAdapter(this.adapter, new RuntimeMcpOutcomeSink(sink));
+    const mcp: StepDispatchPort = new McpStepDispatchAdapter(this.adapter, new RuntimeMcpOutcomeSink(sink));
+    return new MixedToolDispatch(mcp, this.mcpEntries, this.extensions, sink);
   }
 }
 
-function copyPorts(source: ProductionAgentRuntimePorts, adapter: McpAgentAdapter): ProductionAgentRuntimePorts {
+function copyPorts(source: ProductionAgentRuntimePorts, adapter: McpAgentAdapter,
+  registry: ToolRegistry, extensions: McpRuntimeToolExtension[]): ProductionAgentRuntimePorts {
   const value: ProductionAgentRuntimePorts = new ProductionAgentRuntimePorts();
   value.clock = source.clock;
   value.ids = source.ids;
@@ -121,7 +186,9 @@ function copyPorts(source: ProductionAgentRuntimePorts, adapter: McpAgentAdapter
   value.collaborationPlan = source.collaborationPlan;
   value.collaborationPreparation = source.collaborationPreparation;
   value.toolPreparer = source.toolPreparer;
-  value.adapterFactory = new McpProductionAdapterFactory(adapter);
+  const mcpEntries: ToolRegistryEntry[] = registry.activeEntries().filter(
+    (entry: ToolRegistryEntry): boolean => entry.descriptor.sourceType === ToolSourceType.MCP);
+  value.adapterFactory = new McpProductionAdapterFactory(adapter, mcpEntries, extensions);
   value.persistence = source.persistence;
   value.recovery = source.recovery;
   return value;
@@ -136,7 +203,7 @@ function validRequiredToolIds(requiredToolIds: string[]): boolean {
 }
 
 async function bindCatalog(adapter: McpAgentAdapter, registry: ToolRegistry,
-  requiredToolIds: string[]): Promise<void> {
+  requiredToolIds: string[], extensions: McpRuntimeToolExtension[]): Promise<void> {
   const requirements: string[] = requiredToolIds.slice();
   if (!validRequiredToolIds(requirements)) {
     throw new McpRuntimeCompositionError(McpRuntimeCompositionErrorCode.CATALOG_REQUIREMENT_INVALID,
@@ -157,16 +224,29 @@ async function bindCatalog(adapter: McpAgentAdapter, registry: ToolRegistry,
     throw new McpRuntimeCompositionError(McpRuntimeCompositionErrorCode.CATALOG_PARTIAL_FAILURE,
       'MCP catalog discovery returned one or more server failures');
   }
-  if (refresh.entries.length === 0) {
+  const combined: ToolRegistryEntry[] = refresh.entries.slice();
+  for (let i: number = 0; i < extensions.length; i++) {
+    for (let j: number = 0; j < extensions[i].entries.length; j++) {
+      const entry: ToolRegistryEntry = extensions[i].entries[j];
+      if (entry.descriptor.sourceType === ToolSourceType.MCP || entry.descriptor.toolId.startsWith('mcp://')) {
+        throw new McpRuntimeCompositionError(McpRuntimeCompositionErrorCode.CATALOG_ENTRY_REJECTED,
+          'Non-MCP extensions cannot register MCP identities');
+      }
+      combined.push(entry);
+    }
+  }
+  if (combined.length === 0) {
     throw new McpRuntimeCompositionError(McpRuntimeCompositionErrorCode.CATALOG_EMPTY,
-      'MCP catalog contains no controlled read-only tools');
+      'Tool catalog contains no controlled tools');
   }
   const validated: ToolRegistry = new ToolRegistry();
-  for (let i: number = 0; i < refresh.entries.length; i++) {
-    if (!validated.register(refresh.entries[i]).accepted) {
+  const identities: Set<string> = new Set<string>();
+  for (let i: number = 0; i < combined.length; i++) {
+    if (identities.has(combined[i].descriptor.toolId) || !validated.register(combined[i]).accepted) {
       throw new McpRuntimeCompositionError(McpRuntimeCompositionErrorCode.CATALOG_ENTRY_REJECTED,
         'MCP catalog contains an invalid or conflicting Tool Registry entry');
     }
+    identities.add(combined[i].descriptor.toolId);
   }
   const entries: ToolRegistryEntry[] = validated.activeEntries();
   for (let requiredIndex: number = 0; requiredIndex < requirements.length; requiredIndex++) {
@@ -188,22 +268,24 @@ async function bindCatalog(adapter: McpAgentAdapter, registry: ToolRegistry,
 }
 
 /**
- * Discovers the controlled read-only MCP catalog before exposing the sole task-control Facade.
+ * Discovers and validates the controlled MCP/native catalog before exposing the sole task-control Facade.
  * The caller-owned registry may be shared with its planner and tool preparer, but must be empty.
  */
 export async function createMcpProductionAgentRuntime(config: ProductionAgentRuntimeConfig,
   ports: ProductionAgentRuntimePorts, adapter: McpAgentAdapter,
-  registry: ToolRegistry, requiredToolIds: string[] = []): Promise<AgentRuntimeFacade> {
-  await bindCatalog(adapter, registry, requiredToolIds);
-  return createProductionAgentRuntime(config, copyPorts(ports, adapter));
+  registry: ToolRegistry, requiredToolIds: string[] = [], extensions: McpRuntimeToolExtension[] = []): Promise<AgentRuntimeFacade> {
+  const captured: McpRuntimeToolExtension[] = captureExtensions(extensions);
+  await bindCatalog(adapter, registry, requiredToolIds, captured);
+  return createProductionAgentRuntime(config, copyPorts(ports, adapter, registry, captured));
 }
 
 /** Restores durable tasks only after the controlled MCP catalog is discovered and bound. */
 export async function createRecoveredMcpProductionAgentRuntime(config: ProductionAgentRuntimeConfig,
   ports: ProductionAgentRuntimePorts, adapter: McpAgentAdapter,
-  registry: ToolRegistry, requiredToolIds: string[] = []): Promise<AgentRuntimeFacade> {
-  await bindCatalog(adapter, registry, requiredToolIds);
-  return await createRecoveredProductionAgentRuntime(config, copyPorts(ports, adapter));
+  registry: ToolRegistry, requiredToolIds: string[] = [], extensions: McpRuntimeToolExtension[] = []): Promise<AgentRuntimeFacade> {
+  const captured: McpRuntimeToolExtension[] = captureExtensions(extensions);
+  await bindCatalog(adapter, registry, requiredToolIds, captured);
+  return await createRecoveredProductionAgentRuntime(config, copyPorts(ports, adapter, registry, captured));
 }
 
 /**
@@ -215,10 +297,10 @@ export async function createProviderMcpProductionAgentRuntime(config: Production
   registered: RegisteredModelProvider, provider: ModelProvider, plannerConfig: ProviderSemanticPlannerConfig,
   observer?: ProviderSemanticPlannerObserverPort,
   memoryContext?: PlanningMemoryContextPort,
-  requiredToolIds: string[] = []): Promise<AgentRuntimeFacade> {
+  requiredToolIds: string[] = [], extensions: McpRuntimeToolExtension[] = []): Promise<AgentRuntimeFacade> {
   const composed: ProductionAgentRuntimePorts = withProviderPlanner(
     ports, registered, provider, plannerConfig, observer, memoryContext);
-  return await createMcpProductionAgentRuntime(config, composed, adapter, registry, requiredToolIds);
+  return await createMcpProductionAgentRuntime(config, composed, adapter, registry, requiredToolIds, extensions);
 }
 
 /** Restores durable tasks through the same Provider Planner and catalog-before-Facade boundary. */
@@ -227,8 +309,8 @@ export async function createRecoveredProviderMcpProductionAgentRuntime(config: P
   registered: RegisteredModelProvider, provider: ModelProvider, plannerConfig: ProviderSemanticPlannerConfig,
   observer?: ProviderSemanticPlannerObserverPort,
   memoryContext?: PlanningMemoryContextPort,
-  requiredToolIds: string[] = []): Promise<AgentRuntimeFacade> {
+  requiredToolIds: string[] = [], extensions: McpRuntimeToolExtension[] = []): Promise<AgentRuntimeFacade> {
   const composed: ProductionAgentRuntimePorts = withProviderPlanner(
     ports, registered, provider, plannerConfig, observer, memoryContext);
-  return await createRecoveredMcpProductionAgentRuntime(config, composed, adapter, registry, requiredToolIds);
+  return await createRecoveredMcpProductionAgentRuntime(config, composed, adapter, registry, requiredToolIds, extensions);
 }

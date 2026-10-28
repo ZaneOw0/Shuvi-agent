@@ -50,6 +50,10 @@ export class AssistantRuntimeSession {
   private writing: boolean = false;
   private resubmitting: boolean = false;
   private draftJson: string = '';
+  /** Tool mode: document tools run inside the model turn and calendar drafts arrive as calendar_propose proposals. */
+  private tools: boolean = false;
+  /** Host receipts (document tools) from the turn that proposed the current draft; shown with the calendar result. */
+  private note: string = '';
   constructor(controller: ShuviRuntimeController) {
     this.model = new RuntimeChatSession(controller);
     this.model.attach((view: RuntimeChatView): void => this.modelChanged(view));
@@ -57,7 +61,8 @@ export class AssistantRuntimeSession {
   attach(listener: (view: AssistantView) => void): void { this.listener = listener; this.publish(); }
   detach(): void { this.listener = undefined; void this.stop().catch((): void => {}); }
   snapshot(): AssistantView { const copy: AssistantView = JSON.parse(JSON.stringify(this.view)); return copy; }
-  clearConversation(): void { if (!this.view.busy) this.context.clear(); }
+  /** Also drops the model conversation kept by the tool transport (it checks the context epoch before each turn). */
+  clearConversation(): void { if (!this.view.busy) this.context.resetConversation(); }
   private publish(): void { this.listener?.(this.snapshot()); }
   private modelChanged(value: RuntimeChatView): void {
     this.view.lifecycle = value.lifecycle; this.view.clearEpoch = value.clearEpoch;
@@ -69,7 +74,7 @@ export class AssistantRuntimeSession {
       if (!value.succeeded) { this.context.clear(); this.finish(value.reply); return; }
       const intent = parseAssistantIntent(value.reply, Date.now());
       if (intent.kind === 'clarify') this.context.rememberClarification(); else this.context.clear();
-      if (intent.draft !== undefined) { void this.submitCalendar(intent.draft); return; }
+      if (intent.draft !== undefined) { this.note = intent.note; void this.submitCalendar(intent.draft); return; }
       this.finish(intent.message, intent.kind === 'answer' || intent.kind === 'clarify'); return;
     }
     if (this.view.calendarStage === 'idle') { this.view.busy = value.busy; this.view.message = value.message; }
@@ -80,7 +85,7 @@ export class AssistantRuntimeSession {
   }
   async start(factory: ShuviRuntimeSessionFactory, calendarFactory: CalendarRuntimeFactory, key: Uint8Array): Promise<void> {
     if (this.view.lifecycle === ShuviRuntimeState.READY || this.view.lifecycle === ShuviRuntimeState.STARTING || this.stopping) { key.fill(0); return; }
-    this.factory = calendarFactory;
+    this.factory = calendarFactory; this.tools = factory.documentToolsEnabled === true;
     calendarFactory.onOutcomeRejected = (id: string): void => {
       if (this.taskId === id && this.view.busy) { this.finish('日历执行结果未能可靠保存，请到工作台核查日程；不要重复创建。'); void this.calendar.stop().catch((): void => {}); }
     };
@@ -100,7 +105,7 @@ export class AssistantRuntimeSession {
   async send(input: string): Promise<void> {
     if (this.view.busy || this.stopping || this.view.lifecycle !== ShuviRuntimeState.READY || !input.trim() || input.length > 500) return;
     if (this.view.requestCount >= this.view.maxRequests) {
-      this.view.message = `本次启用的 ${this.view.maxRequests} 次请求已用完；请停止后重新启用。未发送本次输入。`; this.publish(); return;
+      this.view.message = `本次启用的 ${this.view.maxRequests} 轮对话已用完；请停止后重新启用。未发送本次输入。`; this.publish(); return;
     }
     this.view.requestCount++;
     this.context.bind(input, Date.now()); this.awaiting = true; await this.model.send(input);
@@ -224,21 +229,28 @@ export class AssistantRuntimeSession {
     finally { this.deciding = false; }
   }
   private finish(message: string, succeeded: boolean = false, created?: CalendarCreatedSummary): void {
+    // A finished calendar hand-off is reported to the model with the next turn, so it knows whether the event exists.
+    const calendar: boolean = this.view.calendarStage !== 'idle' || this.view.preview !== undefined;
+    if (calendar) this.context.recordOutcome(message);
+    const reply: string = calendar && this.note ? this.note + '\n\n' + message : message;
+    this.note = '';
     ++this.generation; this.subscription?.close(); this.subscription = undefined;
     this.view.created = created;
     if (this.timer !== undefined) clearTimeout(this.timer); this.timer = undefined;
     this.factory?.previews.clear(); this.prompt = undefined; this.view.preview = undefined;
-    this.view.busy = false; this.view.calendarStage = 'idle'; this.view.reply = message; this.view.replyId++;
+    this.view.busy = false; this.view.calendarStage = 'idle'; this.view.reply = reply; this.view.replyId++;
     this.view.succeeded = succeeded;
     this.view.message = this.view.lifecycle === ShuviRuntimeState.READY && !this.stopping ?
-      '助手已就绪；可继续提问或安排日程。' : this.model.snapshot().message;
+      (this.tools ? '助手已就绪；可继续提问、安排日程或处理文档。' : '助手已就绪；可继续提问或安排日程。') : this.model.snapshot().message;
     this.publish();
   }
   async cancel(): Promise<void> {
     if (!this.view.busy) return;
     this.awaiting = false; this.context.clear();
     if (this.view.calendarStage === 'idle') {
-      await this.model.cancel(); this.finish('已取消本次回答，未写入日历；已发送的模型请求可能计费。'); return;
+      await this.model.cancel();
+      this.finish(this.tools ? '已取消本次回答，未写入日历；本轮已保存的文档会保留，请核查。已发送的模型请求可能计费。' :
+        '已取消本次回答，未写入日历；已发送的模型请求可能计费。'); return;
     }
     const id = this.taskId; const generation = this.generation;
     try {

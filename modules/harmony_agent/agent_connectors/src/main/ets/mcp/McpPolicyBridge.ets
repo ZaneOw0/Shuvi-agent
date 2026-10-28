@@ -15,6 +15,8 @@ class InvocationTicket {
   serverId: string = '';
   toolName: string = '';
   argumentsDigest: string = '';
+  schemaDigest?: string;
+  profileDigest?: string;
 }
 
 class BridgeDecision implements McpAuthorizationDecision {
@@ -30,7 +32,8 @@ export class McpInvocationPolicyBridge implements McpInvocationPolicy {
     this.digestPort = digestPort;
   }
 
-  arm(invocation: ToolInvocation, ref: McpCapabilityRef, argumentsValue: Object): boolean {
+  arm(invocation: ToolInvocation, ref: McpCapabilityRef, argumentsValue: Object,
+    profileDigest?: string): boolean {
     if (ref.kind !== McpCapabilityKind.TOOL || invocation.authorizationGrantId.trim().length === 0 ||
       invocation.argumentsDigest !== this.digestPort.digest(canonicalJson(argumentsValue))) {
       return false;
@@ -42,6 +45,8 @@ export class McpInvocationPolicyBridge implements McpInvocationPolicy {
     ticket.serverId = ref.serverId;
     ticket.toolName = ref.name;
     ticket.argumentsDigest = invocation.argumentsDigest;
+    ticket.schemaDigest = invocation.schemaDigest;
+    ticket.profileDigest = profileDigest;
     this.tickets.push(ticket);
     return true;
   }
@@ -54,10 +59,14 @@ export class McpInvocationPolicyBridge implements McpInvocationPolicy {
 
   authorize(context: McpInvocationContext): Promise<McpAuthorizationDecision> {
     const argumentsDigest: string = this.digestPort.digest(canonicalJson(context.arguments));
+    const schemaDigest: string = this.digestPort.digest('mcp-schema-v1|' + canonicalJson(context.tool.inputSchema) +
+      '|' + (context.tool.outputSchema === undefined ? '' : canonicalJson(context.tool.outputSchema)));
+    const profileDigest: string = this.digestPort.digest(canonicalJson(context.profile as Object));
     for (let index: number = 0; index < this.tickets.length; index++) {
       const ticket: InvocationTicket = this.tickets[index];
       if (ticket.serverId === context.profile.id && ticket.toolName === context.tool.name &&
-        ticket.argumentsDigest === argumentsDigest) {
+        ticket.argumentsDigest === argumentsDigest && ticket.schemaDigest === schemaDigest &&
+        (ticket.profileDigest === undefined || ticket.profileDigest === profileDigest)) {
         this.tickets.splice(index, 1);
         const allowed: BridgeDecision = new BridgeDecision();
         allowed.allowed = true;

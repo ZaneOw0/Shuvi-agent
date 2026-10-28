@@ -6,13 +6,14 @@ export {
   McpGrantVerification,
   McpClientToolPort,
   McpProviderRegistration,
+  McpToolPolicy,
   McpReadOnlyToolPolicy,
   McpCatalogRefreshResult,
   McpToolOutcomeSinkPort
 } from './src/main/ets/mcp/McpConnectorTypes';
 export { canonicalJson, parseJsonObject } from './src/main/ets/mcp/CanonicalJson';
 export { McpProviderRegistry } from './src/main/ets/mcp/McpProviderRegistry';
-export { McpReadOnlyToolPolicyRegistry } from './src/main/ets/mcp/McpToolPolicyRegistry';
+export { McpToolPolicyRegistry, McpReadOnlyToolPolicyRegistry } from './src/main/ets/mcp/McpToolPolicyRegistry';
 export { McpInvocationPolicyBridge } from './src/main/ets/mcp/McpPolicyBridge';
 export { McpClientManagerToolPort } from './src/main/ets/mcp/McpClientManagerToolPort';
 export {
@@ -42,6 +43,7 @@ export {
 export {
   McpRuntimeCompositionErrorCode,
   McpRuntimeCompositionError,
+  McpRuntimeToolExtension,
   createMcpProductionAgentRuntime,
   createRecoveredMcpProductionAgentRuntime,
   createProviderMcpProductionAgentRuntime,

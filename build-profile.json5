@@ -46,6 +46,9 @@
     { "name": "agent_connectors", "srcPath": "./modules/harmony_agent/agent_connectors", "targets": [
       { "name": "default", "applyToProducts": ["default"] }
     ] },
+    { "name": "native_tools", "srcPath": "./modules/harmony_agent/native_tools", "targets": [
+      { "name": "default", "applyToProducts": ["default"] }
+    ] },
     { "name": "agent_storage", "srcPath": "./modules/harmony_agent/agent_storage", "targets": [
       { "name": "default", "applyToProducts": ["default"] }
     ] }
