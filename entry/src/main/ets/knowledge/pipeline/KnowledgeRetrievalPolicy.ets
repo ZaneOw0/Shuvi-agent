@@ -75,7 +75,7 @@ export function unifiedSemanticCards(scope: UnifiedQueryScope, candidates: Knowl
   const out: UnifiedSearchCard[]=[];
   for (let rank: number=0;rank<candidates.length;rank++) {
     const candidate=candidates[rank]; const target: UnifiedQueryTarget | undefined=scope.targets.find((t: UnifiedQueryTarget): boolean=>t.input.id===candidate.row.chunkId && t.qualification.vectorGeneration===candidate.row.vectorGeneration && t.qualification.documentId===candidate.row.documentId && t.input.inputHash===candidate.row.inputHash);
-    if (target===undefined || candidate.row.spaceId!==scope.space?.id) { continue; } let card: UnifiedSearchCard;
+    if (target===undefined || candidate.row.spaceId!==target.qualification.spaceId) { continue; } let card: UnifiedSearchCard;
     if (target.input.ownerNamespace==='upd-image') { const image=scope.images.find((i: UnifiedQueryImageSource): boolean=>i.record.effectiveId===target.input.version && i.annotation?.lineage===target.input.ownerId); if (image===undefined) { continue; } card=unifiedImageCard(image,scope); }
     else { const source=scope.texts.find((s: UnifiedQueryTextSource): boolean=>s.document.id===target.input.documentKey); const chunk=source?.chunks.find((c: ParsedTextChunk): boolean=>c.id===target.input.id); if (chunk===undefined) { continue; } card=unifiedBodyCard(chunk,scope); }
     const reason: UnifiedSearchReason=new UnifiedSearchReason(); reason.id='vector:'+target.input.id; reason.route='Vector'; reason.text=target.input.actualText; reason.version=target.input.version; reason.inputId=target.input.id; reason.occurrenceId=target.input.occurrenceId; reason.distance=candidate.distance; reason.rank=rank+1; card.vectorRank=rank+1; card.reasons=[reason]; out.push(card);

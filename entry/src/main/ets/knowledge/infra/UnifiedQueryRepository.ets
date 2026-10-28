@@ -10,6 +10,7 @@ import { EmbeddingConfig, EmbeddingSpace } from '../domain/EmbeddingModels';
 import { UnifiedProcessingJob, UnifiedImageRecord, UnifiedIndexBinding, UnifiedBindingState, UnifiedTextInput, UNIFIED_QUERY_POLICY, UNIFIED_TEXT_POLICY } from '../domain/UnifiedKnowledgeModels';
 import { parsedUtf8, parsedJson } from '../pipeline/ParsedDocumentCodec';
 import { embeddingConfigBinding } from '../pipeline/EmbeddingBasisPolicy';
+import { unifiedQuerySpaceMatches, unifiedQuerySpacesCompatible } from '../pipeline/EmbeddingSpacePolicy';
 import { unifiedStored } from '../pipeline/UnifiedProcessingCodec';
 import { unifiedProxyText } from '../pipeline/UnifiedTextPolicy';
 
@@ -38,28 +39,35 @@ export class UnifiedQueryRepository implements UnifiedQueryScopePort, UnifiedQue
     }
     const settings=await this.repository.settings('Embedding'); const jobs: UnifiedProcessingJob[]=await this.repository.jobs(); let numericReady: boolean=false;
     try { await this.vectors.open(); numericReady=true; } catch { projection.push('NumericUnavailable'); }
-    const spaces: EmbeddingSpace[]=numericReady?this.vectors.registeredSpaces().filter((s: EmbeddingSpace): boolean=>s.preprocessing===UNIFIED_TEXT_POLICY && s.configFingerprint===embeddingConfigBinding(config)):[];
-    // A single current config/policy uses one real dimensional space. Conflicts are not mixed.
-    if (spaces.length===1) { scope.space=spaces[0]; } else if (spaces.length>1) { projection.push('UnifiedDimensionConflict'); }
+    const spaces: EmbeddingSpace[]=numericReady?this.vectors.registeredSpaces().filter((s: EmbeddingSpace): boolean=>s.preprocessing===UNIFIED_TEXT_POLICY && unifiedQuerySpaceMatches(s,config)):[];
+    spaces.sort((a: EmbeddingSpace,b: EmbeddingSpace): number=>a.id.localeCompare(b.id));
+    // Historical physical spaces remain immutable. Query all compatible spaces with one current authorization.
+    if (spaces.length>0 && spaces.every((s: EmbeddingSpace): boolean=>unifiedQuerySpacesCompatible(s,spaces[0]))) {
+      scope.spaces=spaces; scope.space=spaces[0];
+    } else if (spaces.length>0) { projection.push('UnifiedSemanticSpaceConflict'); }
     for (const source of scope.texts) {
       const binding=await this.repository.binding('upd-body',source.document.id); const job: UnifiedProcessingJob | undefined=jobs.find((j: UnifiedProcessingJob): boolean=>j.id===binding?.vectorGeneration);
-      if (binding?.state!==UnifiedBindingState.Synced || binding.version!==source.document.activeGeneration || binding.epoch!==source.document.epoch || job===undefined || job.configBinding!==embeddingConfigBinding(config) || scope.space===undefined || await this.repository.meta('vector-space:'+job.id)!==scope.space.id) { scope.unupgraded++; continue; }
+      const spaceId: string=job===undefined?'':await this.repository.meta('vector-space:'+job.id);
+      const space: EmbeddingSpace | undefined=scope.spaces.find((s: EmbeddingSpace): boolean=>s.id===spaceId && s.configFingerprint===job?.configBinding);
+      if (binding?.state!==UnifiedBindingState.Synced || binding.version!==source.document.activeGeneration || binding.epoch!==source.document.epoch || job===undefined || space===undefined) { scope.unupgraded++; continue; }
       if (binding.expected!==source.chunks.length || binding.expected!==job.inputs.length || job.inputHash!==binding.inputSetHash) { throw new ParsedFailure('UnifiedBodyExpectedMismatch','query-scope'); }
       if (await this.identity.hash(parsedUtf8(job.inputs.map((i: UnifiedTextInput): string=>i.id+'|'+i.inputHash).join('\n')))!==binding.inputSetHash || binding.readbackHash!==binding.inputSetHash) { throw new ParsedFailure('UnifiedBodyReadbackSet','query-scope'); }
-      for (const input of job.inputs) { if (!source.chunks.some((c: ParsedTextChunk): boolean=>c.id===input.id && c.inputHash===input.inputHash && c.text===input.actualText)) { throw new ParsedFailure('UnifiedBodyInputMismatch','query-scope'); } const target=this.target(input,job,binding); target.qualification.spaceId=scope.space.id; scope.targets.push(target); }
+      for (const input of job.inputs) { if (!source.chunks.some((c: ParsedTextChunk): boolean=>c.id===input.id && c.inputHash===input.inputHash && c.text===input.actualText)) { throw new ParsedFailure('UnifiedBodyInputMismatch','query-scope'); } const target=this.target(input,job,binding); target.qualification.spaceId=space.id; scope.targets.push(target); }
       projection.push(JSON.stringify(binding));
     }
     const owners: Set<string>=new Set<string>();
     for (const image of scope.images) {
       const r=image.record; const annotation=image.annotation; if (annotation===undefined || owners.has(annotation.lineage)) { continue; } owners.add(annotation.lineage);
       const binding=await this.repository.binding('upd-image',annotation.lineage); const job: UnifiedProcessingJob | undefined=jobs.find((j: UnifiedProcessingJob): boolean=>j.id===binding?.vectorGeneration);
-      if (binding?.state!==UnifiedBindingState.Synced || binding.version!==r.effectiveId || job===undefined || job.configBinding!==embeddingConfigBinding(config) || scope.space===undefined || await this.repository.meta('vector-space:'+job.id)!==scope.space.id) { scope.unupgraded++; continue; }
+      const spaceId: string=job===undefined?'':await this.repository.meta('vector-space:'+job.id);
+      const space: EmbeddingSpace | undefined=scope.spaces.find((s: EmbeddingSpace): boolean=>s.id===spaceId && s.configFingerprint===job?.configBinding);
+      if (binding?.state!==UnifiedBindingState.Synced || binding.version!==r.effectiveId || job===undefined || space===undefined) { scope.unupgraded++; continue; }
       if (binding.expected!==job.inputs.length || binding.inputSetHash!==job.inputHash) { throw new ParsedFailure('UnifiedProxyExpectedMismatch','query-scope'); }
       if (job.inputs.map((i: UnifiedTextInput): string=>i.actualText).join('')!==unifiedProxyText(annotation.description,annotation.tags) || await this.identity.hash(parsedUtf8(job.inputs.map((i: UnifiedTextInput): string=>i.id+'|'+i.inputHash).join('\n')))!==binding.inputSetHash || binding.readbackHash!==binding.inputSetHash) { throw new ParsedFailure('UnifiedProxyReadbackSet','query-scope'); }
-      count+=job.inputs.length; for (const input of job.inputs) { const target=this.target(input,job,binding); target.qualification.spaceId=scope.space.id; scope.targets.push(target); } projection.push(JSON.stringify(binding));
+      count+=job.inputs.length; for (const input of job.inputs) { const target=this.target(input,job,binding); target.qualification.spaceId=space.id; scope.targets.push(target); } projection.push(JSON.stringify(binding));
     }
     if (count>30000 || scope.targets.length>30000) { throw new ParsedFailure('UnifiedQueryInputBudget','query-scope'); }
-    projection.push(JSON.stringify(settings),embeddingConfigBinding(config),scope.space?.id ?? 'NoUnifiedSpace',String(scope.unupgraded)); scope.hash=await this.identity.hash(parsedUtf8(projection.join('\n'))); scope.complete=true; return scope;
+    projection.push(JSON.stringify(settings),embeddingConfigBinding(config),JSON.stringify(scope.spaces),String(scope.unupgraded)); scope.hash=await this.identity.hash(parsedUtf8(projection.join('\n'))); scope.complete=true; return scope;
   }
   private target(input: UnifiedTextInput, job: UnifiedProcessingJob, binding: UnifiedIndexBinding): UnifiedQueryTarget {
     const t: UnifiedQueryTarget=new UnifiedQueryTarget(); t.input=input; t.binding=binding; t.qualification.documentId=`upd:${job.stage==='ImageEmbedding'?'image':'body'}:${job.ownerId}`; t.qualification.contentGeneration=input.version; t.qualification.vectorGeneration=job.id; t.qualification.epoch=job.epoch; t.qualification.chunkIds=[input.id]; t.qualification.inputHash=input.inputHash; return t;

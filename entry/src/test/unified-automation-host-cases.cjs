@@ -41,6 +41,18 @@ exports.cases=h=>{
   }
   const vision=(content,finish='stop',usage)=>JSON.stringify({id:'synthetic-response',object:'chat.completion',model:'deepseek-flash',choices:[{index:0,finish_reason:finish,message:{role:'assistant',content}}],...(usage?{usage}:{})});
   return [
+    ['l1_restart_restores_other_owners_when_one_readback_is_broken_without_network',async()=>{
+      const s=await session();await s.settings.enableEmbedding(true,true,true);
+      await s.importDoc('restore-a','第一份已入库正文');await s.queue.drain();await s.importDoc('restore-b','第二份已入库正文');await s.queue.drain();
+      const jobs=(await s.repo.jobs()).filter(j=>j.stage==='BodyEmbedding'&&j.state==='Complete');assert.equal(jobs.length,2);
+      const before=s.counts();
+      for(const j of jobs){const b=await s.repo.binding('upd-body',j.ownerId);b.state=U.UnifiedBindingState.Pending;await s.repo.saveBinding(b);}
+      const broken=jobs[0];await s.repo.putMeta('vector-input:'+broken.id+':'+broken.inputs[0].id,'');
+      await assert.rejects(s.vectors.reconcileCurrentOwners(),e=>e.category==='VectorOwnerRecoveryIncomplete');
+      assert.equal((await s.repo.binding('upd-body',jobs[1].ownerId)).state,U.UnifiedBindingState.Synced);
+      assert.equal((await s.repo.binding('upd-body',broken.ownerId)).state,U.UnifiedBindingState.Pending);
+      assert.deepEqual(s.counts(),before);
+    }],
     ['embedding_entry_async_load_keeps_loading_until_service_ready',async()=>{
       const source=fs.readFileSync(path.resolve(__dirname,'../main/ets/pages/Index.ets'),'utf8');const start=source.indexOf('  private async openEmbedding()'),end=source.indexOf('  private async preparePdf',start);assert(start>0&&end>start);
       const ts=require(path.join(process.env.DEVECO_SDK_HOME,'default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));const Module=require('node:module');const loaded=new Module(__filename,module);let release;const gate=new Promise(r=>release=r);const service={};loaded.assembly={forContext:()=>({acquire:()=>gate,repository:{ready:()=>true},embedding:service})};

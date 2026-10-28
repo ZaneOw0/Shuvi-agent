@@ -40,7 +40,7 @@ export class UnifiedQueryTarget {
 }
 export class UnifiedQueryScope {
   hash: string=''; localHash: string=''; texts: UnifiedQueryTextSource[]=[]; images: UnifiedQueryImageSource[]=[]; targets: UnifiedQueryTarget[]=[];
-  space: EmbeddingSpace | undefined; unupgraded: number=0; includeArchived: boolean=false; complete: boolean=false;
+  space: EmbeddingSpace | undefined; spaces: EmbeddingSpace[]=[]; unupgraded: number=0; includeArchived: boolean=false; complete: boolean=false;
 }
 export class UnifiedQueryApproval {
   id: string=''; policy: string=UNIFIED_QUERY_POLICY; session: string=''; epoch: number=0; actual: string=''; inputHash: string='';

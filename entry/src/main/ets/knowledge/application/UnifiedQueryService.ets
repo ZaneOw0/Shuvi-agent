@@ -1,10 +1,10 @@
 import { UnifiedQueryEnginePort, UnifiedQueryNumericPort, UnifiedQueryTokenPort, UnifiedQueryTransportPort } from '../domain/UnifiedQueryPorts';
-import { UnifiedQueryApproval, UnifiedQueryGrant, UnifiedQueryPersistentPort, UnifiedQueryScopePort, UnifiedSearchCard } from '../domain/UnifiedQueryModels';
+import { UnifiedQueryApproval, UnifiedQueryGrant, UnifiedQueryPersistentPort, UnifiedQueryScopePort, UnifiedSearchCard, UnifiedQueryTarget } from '../domain/UnifiedQueryModels';
 import { UnifiedEmbeddingConfigPort } from '../domain/UnifiedEmbeddingPorts';
 import { UnifiedProcessingRepositoryPort } from '../domain/UnifiedProcessingPorts';
 import { ParsedIdentityPort } from '../domain/ParsedDocumentPorts';
 import { ParsedCancellation, ParsedFailure } from '../domain/ParsedDocumentModels';
-import { EmbeddingPurpose, EmbeddingConfig } from '../domain/EmbeddingModels';
+import { EmbeddingPurpose, EmbeddingConfig, KnowledgeVectorCandidate } from '../domain/EmbeddingModels';
 import { unifiedQueryEligible, embeddingConfigBinding } from '../pipeline/EmbeddingBasisPolicy';
 import { prepareTextQuery } from '../pipeline/QueryPreparation';
 import { parsedUtf8 } from '../pipeline/ParsedDocumentCodec';
@@ -41,6 +41,13 @@ export class UnifiedQueryService implements UnifiedQueryEnginePort {
     grant.cancellation=cancel;
     const response=await this.transport.embedUnifiedQuery(config,grant,a.actual,cancel); cancel.check();
     const current=await this.scope.capture(this.config.currentConfig(),a.includeArchived,cancel); if (current.hash!==scope.hash || current.space?.id!==a.spaceId || response.vector.length!==scope.space.dimension || response.model!==config.modelId) { throw new ParsedFailure('QueryResultScopeChanged','query'); }
-    const candidates=await this.numeric.filteredKnnAll(scope.space,response.vector,scope.targets,cancel); cancel.check(); const latest=await this.scope.capture(this.config.currentConfig(),a.includeArchived,cancel); if (latest.hash!==scope.hash) { throw new ParsedFailure('QueryCandidatesScopeChanged','query'); } return unifiedSemanticCards(scope,candidates);
+    const candidates: KnowledgeVectorCandidate[]=[];
+    for (const space of scope.spaces) {
+      cancel.check(); const targets=scope.targets.filter((target: UnifiedQueryTarget): boolean=>target.qualification.spaceId===space.id);
+      if (targets.length===0) { continue; }
+      for (const candidate of await this.numeric.filteredKnnAll(space,response.vector,targets,cancel)) { candidates.push(candidate); }
+    }
+    candidates.sort((left: KnowledgeVectorCandidate,right: KnowledgeVectorCandidate): number=>left.distance-right.distance || left.row.documentId.localeCompare(right.row.documentId) || left.row.chunkId.localeCompare(right.row.chunkId) || left.row.vectorGeneration.localeCompare(right.row.vectorGeneration));
+    cancel.check(); const latest=await this.scope.capture(this.config.currentConfig(),a.includeArchived,cancel); if (latest.hash!==scope.hash) { throw new ParsedFailure('QueryCandidatesScopeChanged','query'); } return unifiedSemanticCards(scope,candidates);
   }
 }

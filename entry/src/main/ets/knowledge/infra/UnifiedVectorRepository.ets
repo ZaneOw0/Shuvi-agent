@@ -58,7 +58,9 @@ export class UnifiedVectorRepository implements ParsedLifecycleMirrorPort {
   }
   async reconcileCurrentOwners(): Promise<void> {
     await this.repository.reconcileUnifiedOwners(); const records=await this.repository.imageRecords(); const jobs=await this.repository.jobs();
+    let failed: boolean=false;
     for (const job of jobs) {
+      try {
       if (job.stage==='Vision') { continue; } const space=await this.repository.meta('vector-space:'+job.id); if (space.length===0) { continue; }
       const document=await this.repository.get(job.documentKey); const binding=await this.repository.binding(job.stage==='ImageEmbedding'?'upd-image':'upd-body',job.ownerId);
       const current=document!==undefined && !document.tombstone && !document.archived && document.activeGeneration===job.version && document.epoch===job.epoch && (job.stage!=='ImageEmbedding' || records.some((r: UnifiedImageRecord): boolean=>r.lineage===job.ownerId && r.effectiveId===job.annotationId));
@@ -67,6 +69,8 @@ export class UnifiedVectorRepository implements ParsedLifecycleMirrorPort {
       if (!current || job.state!=='Complete') { if (this.vectors.revokeUnified!==undefined) { await this.vectors.revokeUnified(space,this.owner(job)); } continue; }
       // Rebind only an already fully received numeric generation; never call transport.
       await this.finish(job,new ParsedCancellation());
+      } catch { failed=true; }
     }
+    if (failed) { throw new ParsedFailure('VectorOwnerRecoveryIncomplete','vector-recovery'); }
   }
 }
