@@ -33,6 +33,7 @@ export interface ShuviRuntimeSessionPort {
 }
 
 export interface ShuviRuntimeSessionFactory {
+  readonly documentToolsEnabled?: boolean;
   // Construct a fresh session with no key or I/O. The controller consumes the key after accepting ownership.
   create(): ShuviRuntimeSessionPort;
 }

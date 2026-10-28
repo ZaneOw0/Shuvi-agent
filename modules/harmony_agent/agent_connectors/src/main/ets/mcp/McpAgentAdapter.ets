@@ -2,7 +2,6 @@ import {
   AgentErrorClass,
   ContractCodec,
   ContractValidator,
-  IdempotencyMode,
   SideEffect,
   ToolDescriptor,
   ToolInvocation,
@@ -29,11 +28,11 @@ import {
   McpGrantVerification,
   McpGrantVerifierPort,
   McpProviderRegistration,
-  McpReadOnlyToolPolicy
+  McpToolPolicy
 } from './McpConnectorTypes';
 import { McpInvocationPolicyBridge } from './McpPolicyBridge';
 import { McpProviderRegistry } from './McpProviderRegistry';
-import { McpReadOnlyToolPolicyRegistry } from './McpToolPolicyRegistry';
+import { McpToolPolicyRegistry } from './McpToolPolicyRegistry';
 
 function toolId(serverId: string, name: string): string {
   return 'mcp://' + encodeURIComponent(serverId) + '/tool/' + encodeURIComponent(name);
@@ -144,7 +143,7 @@ function projectStructuredToolError(value: Object | undefined): McpToolErrorProj
 export class McpAgentAdapter {
   private readonly client: McpClientToolPort;
   private readonly providers: McpProviderRegistry;
-  private readonly policies: McpReadOnlyToolPolicyRegistry;
+  private readonly policies: McpToolPolicyRegistry;
   private readonly digestPort: ConnectorDigestPort;
   private readonly clock: ConnectorClockPort;
   private readonly grantVerifier: McpGrantVerifierPort;
@@ -154,7 +153,7 @@ export class McpAgentAdapter {
   private catalog: ToolRegistryEntry[] = [];
 
   constructor(client: McpClientToolPort, providers: McpProviderRegistry,
-    policies: McpReadOnlyToolPolicyRegistry, digestPort: ConnectorDigestPort,
+    policies: McpToolPolicyRegistry, digestPort: ConnectorDigestPort,
     clock: ConnectorClockPort, grantVerifier: McpGrantVerifierPort,
     policyBridge: McpInvocationPolicyBridge) {
     this.client = client;
@@ -224,6 +223,14 @@ export class McpAgentAdapter {
       return this.failure(invocation.invocationId, startedAt, ToolOutcomeStatus.FAILED,
         AgentErrorClass.CONFIGURATION, 'MCP_TOOL_NOT_REGISTERED', 'MCP tool is not in the current catalog');
     }
+    const policy: McpToolPolicy | undefined = this.policies.get(entry.descriptor.providerId,
+      entry.descriptor.capabilityName);
+    const provider: McpProviderRegistration | undefined = this.providers.get(entry.descriptor.providerId);
+    if (policy === undefined || provider === undefined ||
+      this.identityVersion(provider, policy, entry.descriptor.schemaDigest) !== entry.descriptor.toolIdentityVersion) {
+      return this.failure(invocation.invocationId, startedAt, ToolOutcomeStatus.DENIED,
+        AgentErrorClass.POLICY_DENIED, 'MCP_TOOL_IDENTITY_STALE', 'Controlled MCP profile or policy changed');
+    }
     if (entry.descriptor.toolIdentityVersion !== invocation.toolIdentityVersion ||
       entry.descriptor.schemaDigest !== invocation.schemaDigest) {
       return this.failure(invocation.invocationId, startedAt, ToolOutcomeStatus.DENIED,
@@ -239,6 +246,22 @@ export class McpAgentAdapter {
     if (this.digestPort.digest(canonicalJson(argumentsValue)) !== invocation.argumentsDigest) {
       return this.failure(invocation.invocationId, startedAt, ToolOutcomeStatus.DENIED,
         AgentErrorClass.POLICY_DENIED, 'MCP_ARGUMENTS_DIGEST_MISMATCH', 'Tool arguments changed after authorization');
+    }
+    if (policy.sideEffect !== SideEffect.NONE) {
+      if (provider.profile.retryToolCallOnExpiredSession === true) {
+        return this.failure(invocation.invocationId, startedAt, ToolOutcomeStatus.DENIED,
+          AgentErrorClass.CONFIGURATION, 'MCP_WRITE_SESSION_REPLAY_ENABLED',
+          'Write tools require expired-session replay to be disabled in the server profile');
+      }
+      const args: Record<string, Object> = argumentsValue as Record<string, Object>;
+      if (invocation.idempotencyKey === undefined || invocation.idempotencyKey.trim().length === 0 ||
+        (policy.idempotencyKeyArgument !== undefined &&
+          args[policy.idempotencyKeyArgument] !== invocation.idempotencyKey) ||
+        (policy.operationIdArgument !== undefined && args[policy.operationIdArgument] !== invocation.operationId)) {
+        return this.failure(invocation.invocationId, startedAt, ToolOutcomeStatus.DENIED,
+          AgentErrorClass.INVALID_INPUT, 'MCP_WRITE_BINDING_INVALID',
+          'Write invocation must bind its idempotency key and operation to authorized arguments');
+      }
     }
     let grant: McpGrantVerification;
     try {
@@ -256,7 +279,7 @@ export class McpAgentAdapter {
       kind: McpCapabilityKind.TOOL,
       name: entry.descriptor.capabilityName
     };
-    if (!this.policyBridge.arm(invocation, ref, argumentsValue)) {
+    if (!this.policyBridge.arm(invocation, ref, argumentsValue, provider.profileDigest)) {
       return this.failure(invocation.invocationId, startedAt, ToolOutcomeStatus.DENIED,
         AgentErrorClass.POLICY_DENIED, 'MCP_POLICY_BRIDGE_REJECTED', 'MCP policy ticket could not be created');
     }
@@ -270,27 +293,33 @@ export class McpAgentAdapter {
     try {
       const result: McpToolResult = await this.client.callTool(ref, argumentsValue, cancellation);
       this.policyBridge.disarm(invocation.invocationId);
-      this.activeCancellations.delete(invocation.invocationId);
-      return this.success(invocation.invocationId, startedAt, result);
+      return this.success(invocation.invocationId, startedAt, result, policy);
     } catch (error) {
       this.policyBridge.disarm(invocation.invocationId);
+      const outcome: ToolOutcome = this.clientFailure(invocation.invocationId, startedAt, error);
+      if (policy.sideEffect !== SideEffect.NONE &&
+        !(error instanceof McpClientError && error.requestDispatched === false) &&
+        !(error instanceof McpClientError && error.code === McpErrorCode.POLICY_DENIED &&
+          error.requestDispatched !== true)) {
+        outcome.status = ToolOutcomeStatus.UNKNOWN_OUTCOME;
+      }
+      return outcome;
+    } finally {
       this.activeCancellations.delete(invocation.invocationId);
-      return this.clientFailure(invocation.invocationId, startedAt, error);
     }
   }
 
   private mapTool(tool: McpTool): ToolRegistryEntry | undefined {
     if (tool.ref.kind !== McpCapabilityKind.TOOL || tool.ref.name !== tool.name) return undefined;
     const provider: McpProviderRegistration | undefined = this.providers.get(tool.ref.serverId);
-    const policy: McpReadOnlyToolPolicy | undefined = this.policies.get(tool.ref.serverId, tool.name);
+    const policy: McpToolPolicy | undefined = this.policies.get(tool.ref.serverId, tool.name);
     if (provider === undefined || policy === undefined) return undefined;
     const inputSchemaJson: string = canonicalJson(tool.inputSchema);
     const outputSchemaJson: string | undefined = tool.outputSchema === undefined ? undefined :
       canonicalJson(tool.outputSchema);
     const schemaDigest: string = this.digestPort.digest('mcp-schema-v1|' + inputSchemaJson + '|' +
       (outputSchemaJson === undefined ? '' : outputSchemaJson));
-    const identityVersion: string = this.digestPort.digest('mcp-tool-identity-v1|' + tool.ref.serverId +
-      '|tool|' + tool.name + '|' + provider.profileVersion + '|' + provider.profileDigest + '|' + schemaDigest);
+    const identityVersion: string = this.identityVersion(provider, policy, schemaDigest);
     const descriptor: ToolDescriptor = new ToolDescriptor();
     descriptor.toolId = toolId(tool.ref.serverId, tool.name);
     descriptor.sourceType = ToolSourceType.MCP;
@@ -305,13 +334,13 @@ export class McpAgentAdapter {
     descriptor.schemaDigest = schemaDigest;
     descriptor.capabilityTags = policy.capabilityTags.slice();
     descriptor.riskLevel = policy.riskLevel;
-    descriptor.sideEffect = SideEffect.NONE;
+    descriptor.sideEffect = policy.sideEffect;
     descriptor.permissionRequirements = policy.permissionRequirements.slice();
     descriptor.dataBoundary = policy.dataBoundary;
     descriptor.availability = 'available';
     descriptor.latencyClass = policy.latencyClass;
     descriptor.costClass = policy.costClass;
-    descriptor.idempotencyMode = IdempotencyMode.NONE;
+    descriptor.idempotencyMode = policy.idempotencyMode;
     descriptor.adapterRef = 'mcp:' + tool.ref.serverId;
     const entry: ToolRegistryEntry = new ToolRegistryEntry();
     entry.descriptor = descriptor;
@@ -326,11 +355,30 @@ export class McpAgentAdapter {
     return entry;
   }
 
-  private success(invocationId: string, startedAt: string, result: McpToolResult): ToolOutcome {
+  private identityVersion(provider: McpProviderRegistration, policy: McpToolPolicy, schemaDigest: string): string {
+    return this.digestPort.digest('mcp-tool-identity-v2|' + provider.profile.id + '|tool|' + policy.toolName +
+      '|' + provider.profileVersion + '|' + provider.profileDigest + '|' + schemaDigest + '|' +
+      canonicalJson(policy as Object));
+  }
+
+  private success(invocationId: string, startedAt: string, result: McpToolResult,
+    policy: McpToolPolicy): ToolOutcome {
     if (result.isError) {
       const projection: McpToolErrorProjection = projectStructuredToolError(result.structuredContent);
-      return this.failure(invocationId, startedAt, projection.status,
+      return this.failure(invocationId, startedAt, policy.sideEffect === SideEffect.NONE ? projection.status : ToolOutcomeStatus.UNKNOWN_OUTCOME,
         projection.errorClass, projection.code, projection.message);
+    }
+    let receipt: string | undefined = undefined;
+    if (policy.sideEffect !== SideEffect.NONE) {
+      const content: Object | undefined = result.structuredContent;
+      const field: string | undefined = policy.receiptField;
+      const value: Object | undefined = content === undefined || content === null || Array.isArray(content) ||
+        typeof content !== 'object' || field === undefined ? undefined : (content as Record<string, Object>)[field];
+      if (typeof value !== 'string' || value.trim().length === 0) {
+        return this.failure(invocationId, startedAt, ToolOutcomeStatus.UNKNOWN_OUTCOME,
+          AgentErrorClass.PROVIDER, 'MCP_WRITE_RECEIPT_MISSING', 'Write result has no controlled operation receipt');
+      }
+      receipt = value;
     }
     const outcome: ToolOutcome = new ToolOutcome();
     outcome.invocationId = invocationId;
@@ -341,6 +389,7 @@ export class McpAgentAdapter {
       result.structuredContent;
     outcome.resultJson = canonicalJson(payload);
     outcome.resultDigest = this.digestPort.digest(outcome.resultJson);
+    outcome.providerReceipt = receipt;
     return outcome;
   }
 

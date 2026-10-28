@@ -8,7 +8,15 @@ const { localChanges } = require('./agent-local-changes.cjs');
 const root = path.resolve(__dirname, '../modules/harmony_agent');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'UPSTREAM.json'), 'utf8'));
 const localPath = path.join(root, 'LOCAL_CHANGES.json');
-const changes = localChanges(manifest, fs.existsSync(localPath) ? JSON.parse(fs.readFileSync(localPath, 'utf8')) : undefined);
+const local = fs.existsSync(localPath) ? JSON.parse(fs.readFileSync(localPath, 'utf8')) : undefined;
+const changes = localChanges(manifest, local);
+const productModules = local?.productModules ?? [];
+assert(Array.isArray(productModules));
+assert.equal(new Set(productModules).size, productModules.length);
+for (const name of productModules) {
+  assert(manifest.modules.some(module => module.directory === name && module.usage === 'test-host-only'),
+    'Only reviewed test-host modules may be added to the product');
+}
 assert.equal(manifest.schemaVersion, 1);
 assert.match(manifest.commit, /^[0-9a-f]{40}$/);
 const seen = new Set();
@@ -45,7 +53,7 @@ for (const module of manifest.modules) {
   assert.equal(pkg.license, manifest.licenseDeclaredByUpstreamPackages);
   assert(['product', 'test-host-only'].includes(module.usage), `Unknown usage: ${module.directory}`);
   const registered = buildProfile.modules.find(item => item.name === module.directory);
-  if (module.usage === 'product') {
+  if (module.usage === 'product' || productModules.includes(module.directory)) {
     assert.equal(entryPackage.dependencies[module.name], `file:../modules/harmony_agent/${module.directory}`);
     assert(registered, `Module not registered in product: ${module.directory}`);
     assert.equal(path.resolve(projectRoot, registered.srcPath), folder);

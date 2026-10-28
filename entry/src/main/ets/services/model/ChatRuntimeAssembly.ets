@@ -18,12 +18,23 @@ import { SessionModelCredentials } from './SessionModelCredentials';
 import { SessionModelHttpClient } from './SessionModelHttpClient';
 import { ArkTsDeepSeekHttpClient } from './DeepSeekHttpClient';
 import { createDeepSeekProvider } from './DeepSeekProvider';
+import { DeepSeekToolTransport, ModelTurnPort, ToolTurnLimits } from './DeepSeekToolTransport';
+import { ModelDocumentToolsPort } from '../documents/DocumentToolContracts';
 import { startupModelProfile, startupModelPrice } from './RuntimeStartupAssembly';
 import { SearchAuthorizationPreviews } from './SearchAuthorizationPreview';
 import { ShuviRuntimeSession, ShuviRuntimeSessionFactory, ShuviRuntimeSessionPort, ShuviSessionResources } from './ShuviRuntimeSession';
 
 export const CHAT_POLICY: string = 'shuvi-model-only-v1';
+/** User turns per enable, for every chat purpose. */
 export const CHAT_MAX_REQUESTS: number = 10;
+// One tool-capable assistant turn may chain several model requests; these caps bound the whole turn.
+export const TOOL_TURN_TIMEOUT_MS: number = 110000;
+export const TOOL_TURN_WALL_MS: number = 120000;
+export const TOOL_TURN_MAX_INPUT_TOKENS: number = 32768;
+export const TOOL_TURN_MAX_OUTPUT_TOKENS: number = 2048;
+export const TOOL_TURN_MAX_COST_MICROS: number = 20000;
+/** Model HTTP requests one tool-capable assistant session may send across all of its turns. */
+export const ASSISTANT_MAX_MODEL_REQUESTS: number = 30;
 // App-owned composition scope; the default public-chat/search scope remains unchanged.
 export enum ChatPurpose { PUBLIC_CHAT, CALENDAR_DRAFT, ASSISTANT }
 function chatPrivacy(purpose: ChatPurpose): PrivacyClass {
@@ -32,6 +43,22 @@ function chatPrivacy(purpose: ChatPurpose): PrivacyClass {
 export interface ChatContextPort {
   systemPrompt(): string;
   promptFor(intent: string): string | undefined;
+}
+/**
+ * Tools for the PERSONAL assistant: document tools run inside the model loop as authorized Runtime tasks; the turn
+ * port supplies proposal tools (calendar) that end the loop and hand off to the confirmed native chain.
+ */
+export class ChatToolKit {
+  readonly documents: () => ModelDocumentToolsPort;
+  readonly turn: ModelTurnPort;
+  constructor(documents: () => ModelDocumentToolsPort, turn: ModelTurnPort) { this.documents = documents; this.turn = turn; }
+}
+export function assistantToolLimits(): ToolTurnLimits {
+  const limits: ToolTurnLimits = new ToolTurnLimits();
+  limits.maxUserChars = 2000; limits.maxOutputTokens = TOOL_TURN_MAX_OUTPUT_TOKENS;
+  limits.maxInputTokens = TOOL_TURN_MAX_INPUT_TOKENS; limits.maxAttempts = ASSISTANT_MAX_MODEL_REQUESTS;
+  limits.historyChars = 12000;
+  return limits;
 }
 export class ChatAnswer {
   schemaVersion: string = '1.0';
@@ -46,8 +73,8 @@ export function parseChatAnswer(json: string): ChatAnswer | undefined {
     const value: ChatAnswer = JSON.parse(json);
     if (value === null || typeof value !== 'object' || Array.isArray(value) || value.schemaVersion !== '1.0' ||
       value.kind !== 'modelAnswer' || typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 ||
-      !Number.isSafeInteger(value.inputTokens) || value.inputTokens < 0 || value.inputTokens > 8192 ||
-      !Number.isSafeInteger(value.outputTokens) || value.outputTokens < 0 || value.outputTokens > 1024) return undefined;
+      !Number.isSafeInteger(value.inputTokens) || value.inputTokens < 0 || value.inputTokens > TOOL_TURN_MAX_INPUT_TOKENS ||
+      !Number.isSafeInteger(value.outputTokens) || value.outputTokens < 0 || value.outputTokens > TOOL_TURN_MAX_OUTPUT_TOKENS) return undefined;
     return value;
   } catch { return undefined; }
 }
@@ -55,13 +82,16 @@ export function parseChatAnswer(json: string): ChatAnswer | undefined {
 // Deterministic routing for the explicitly selected single-turn chat feature, not a mock answer/planner.
 export class ChatPlanner implements SemanticPlannerPort, ToolInvocationPreparerPort {
   private readonly purpose: ChatPurpose;
-  constructor(purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT) { this.purpose = purpose; }
+  private readonly tools: boolean;
+  constructor(purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT, tools: boolean = false) { this.purpose = purpose; this.tools = tools; }
   async plan(request: PlanningRequest): Promise<PlanningResult> {
     const result = new PlanningResult();
     if (!request.envelope.userIntent.trim() || request.envelope.userIntent.length > 500 ||
       request.envelope.privacyClass !== chatPrivacy(this.purpose)) { result.rejectionCode = 'CHAT_INPUT_REJECTED'; return result; }
     const step = new WorkflowStep(); step.stepId = 'chat-answer'; step.kind = WorkflowStepKind.LLM;
-    step.goal = this.purpose === ChatPurpose.PUBLIC_CHAT ? '回答本次公开问题，不调用工具' : '识别用户意图并提议日程草稿或回答，不直接调用工具'; step.timeoutMs = 30000;
+    step.goal = this.tools ? '理解用户意图；按需调用本地文档工具或提议待确认日程，并使用真实执行结果回答' :
+      this.purpose === ChatPurpose.PUBLIC_CHAT ? '回答本次公开问题，不调用工具' : '识别用户意图并提议日程草稿或回答，不直接调用工具';
+    step.timeoutMs = this.tools ? TOOL_TURN_TIMEOUT_MS : 30000;
     step.expectedOutputSchemaJson = '{"type":"object"}'; step.retryPolicyRef = 'no-retry'; step.verificationPolicyRef = 'validated-model-answer-v1';
     const graph = new WorkflowGraph(); graph.taskId = request.envelope.taskId;
     graph.workflowId = 'chat-' + request.envelope.taskId; graph.workflowVersion = '1';
@@ -83,21 +113,24 @@ export class ChatModelAdapter implements StepDispatchPort {
   private calls: number = 0;
   private readonly purpose: ChatPurpose;
   private readonly context?: ChatContextPort;
+  private readonly tools: boolean;
   constructor(provider: ModelProvider, model: RegisteredModelProvider, sink: RuntimeToolOutcomeSinkPort, digest: AgentHostDigest,
-    context?: ChatContextPort, purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT) {
+    context?: ChatContextPort, purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT, tools: boolean = false) {
     this.provider = provider; this.model = model; this.sink = sink; this.digest = digest;
-    this.context = context; this.purpose = purpose;
+    this.context = context; this.purpose = purpose; this.tools = tools;
   }
   dispatch(request: StepDispatchRequest): StepDispatchReceipt {
     const receipt = new StepDispatchReceipt();
     const budget = request.task.executionBudget;
-    const estimate = Math.ceil((8192 * this.model.priceSnapshot().inputMicrosPerMillionTokens +
-      1024 * this.model.priceSnapshot().outputMicrosPerMillionTokens) / 1000000) + this.model.priceSnapshot().fixedCostMicros;
+    const maxInput = this.tools ? TOOL_TURN_MAX_INPUT_TOKENS : 8192;
+    const maxOutput = this.tools ? TOOL_TURN_MAX_OUTPUT_TOKENS : 1024;
+    const estimate = Math.ceil((maxInput * this.model.priceSnapshot().inputMicrosPerMillionTokens +
+      maxOutput * this.model.priceSnapshot().outputMicrosPerMillionTokens) / 1000000) + this.model.priceSnapshot().fixedCostMicros;
     if (request.toolInvocation !== undefined || request.step.kind !== WorkflowStepKind.LLM || request.step.stepId !== 'chat-answer' ||
       !request.task.userIntent.trim() || request.task.userIntent.length > 500 || request.task.privacyClass !== chatPrivacy(this.purpose) ||
       (this.purpose !== ChatPurpose.PUBLIC_CHAT && this.context === undefined) ||
-      this.active.size > 0 || this.calls >= CHAT_MAX_REQUESTS || budget.maxInputTokens < 8192 || budget.maxOutputTokens < 1024 ||
-      budget.maxMonetaryCostMicros < estimate || budget.maxWallTimeMs < 30000) {
+      this.active.size > 0 || this.calls >= CHAT_MAX_REQUESTS || budget.maxInputTokens < maxInput || budget.maxOutputTokens < maxOutput ||
+      budget.maxMonetaryCostMicros < estimate || budget.maxWallTimeMs < (this.tools ? TOOL_TURN_WALL_MS : 30000)) {
       receipt.rejectionCode = 'CHAT_SCOPE_OR_BUDGET_REJECTED'; return receipt;
     }
     const cancel = new ProviderCancellationSource(); this.active.set(request.dispatchId, cancel); this.calls++;
@@ -116,9 +149,10 @@ export class ChatModelAdapter implements StepDispatchPort {
       invocation.context.requestId = request.dispatchId; invocation.context.taskId = request.task.taskId;
       invocation.context.stepId = request.step.stepId; invocation.context.operationId = request.dispatchId;
       invocation.context.providerId = profile.providerId; invocation.context.region = profile.region;
-      invocation.context.priceSnapshotId = this.model.priceSnapshot().snapshotId; invocation.context.timeoutMs = 30000;
+      invocation.context.priceSnapshotId = this.model.priceSnapshot().snapshotId;
+      invocation.context.timeoutMs = this.tools ? TOOL_TURN_TIMEOUT_MS : 30000;
       invocation.modelId = profile.registryModelId; invocation.modelVersion = profile.modelVersion;
-      invocation.maxOutputTokens = 1024; invocation.responseSchemaJson = '{}';
+      invocation.maxOutputTokens = this.tools ? TOOL_TURN_MAX_OUTPUT_TOKENS : 1024; invocation.responseSchemaJson = '{}';
       const system = new ModelMessage(); system.role = 'system';
       system.content = '你是 Shuvi。仅回答当前问题。本次未联网搜索、未读取知识库，也没有日历等工具；不要声称执行了任何操作。不确定的信息明确说明。';
       const user = new ModelMessage(); user.role = 'user'; user.content = request.task.userIntent;
@@ -153,11 +187,14 @@ class ChatAdapterFactory implements ProductionRuntimeAdapterFactoryPort {
   private readonly provider: ModelProvider; private readonly model: RegisteredModelProvider; private readonly digest: AgentHostDigest;
   private readonly context?: ChatContextPort;
   private readonly purpose: ChatPurpose;
+  private readonly tools: boolean;
   constructor(provider: ModelProvider, model: RegisteredModelProvider, digest: AgentHostDigest, context?: ChatContextPort,
-    purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT) {
-    this.provider = provider; this.model = model; this.digest = digest; this.context = context; this.purpose = purpose;
+    purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT, tools: boolean = false) {
+    this.provider = provider; this.model = model; this.digest = digest; this.context = context; this.purpose = purpose; this.tools = tools;
   }
-  create(sink: RuntimeToolOutcomeSinkPort): StepDispatchPort { return new ChatModelAdapter(this.provider, this.model, sink, this.digest, this.context, this.purpose); }
+  create(sink: RuntimeToolOutcomeSinkPort): StepDispatchPort {
+    return new ChatModelAdapter(this.provider, this.model, sink, this.digest, this.context, this.purpose, this.tools);
+  }
 }
 // Explicitly disabled host capabilities: no memory query and no MCP connections exist in this composition.
 class DisabledChatResource implements SingleAgentHostResourcePort {
@@ -182,36 +219,53 @@ class ChatBackendFactory implements SingleAgentHostRuntimeFactoryPort {
     return createProductionAgentRuntime(config, this.ports);
   }
 }
-export function chatFrontendConfig(purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT): AgentApplicationBackendConfig {
+export function chatFrontendConfig(purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT, tools: boolean = false): AgentApplicationBackendConfig {
   const config = new AgentApplicationBackendConfig(); config.userId = 'shuvi-local-owner-v1'; config.privacyClass = chatPrivacy(purpose);
   config.requestedBudget.maxWallTimeMs = 45000; config.requestedBudget.maxInputTokens = 8192;
   config.requestedBudget.maxOutputTokens = 1024; config.requestedBudget.maxMonetaryCostMicros = 10000;
-  config.requestedBudget.maxAgentActivations = 1; // No tool calls, retries or replans.
+  config.requestedBudget.maxAgentActivations = 1; // One model step per turn; no Runtime tool calls, retries or replans.
+  if (tools) {
+    // The model step chains up to six requests and six document tool calls inside the tool transport.
+    config.requestedBudget.maxWallTimeMs = TOOL_TURN_WALL_MS; config.requestedBudget.maxInputTokens = TOOL_TURN_MAX_INPUT_TOKENS;
+    config.requestedBudget.maxOutputTokens = TOOL_TURN_MAX_OUTPUT_TOKENS; config.requestedBudget.maxMonetaryCostMicros = TOOL_TURN_MAX_COST_MICROS;
+    config.requestedBudget.maxToolCalls = 6;
+  }
   return config;
 }
 export class ChatRuntimeFactory implements ShuviRuntimeSessionFactory {
   private readonly opener: AgentRdbOpenPort; private readonly debugBuild: boolean;
   private readonly context?: ChatContextPort;
   private readonly purpose: ChatPurpose;
+  private readonly tools?: ChatToolKit;
+  /** True when the assistant session runs the tool loop (documents in the loop, calendar as a confirmed proposal). */
+  readonly documentToolsEnabled: boolean;
   constructor(opener: AgentRdbOpenPort, debugBuild: boolean, context?: ChatContextPort,
-    purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT) {
-    this.opener = opener; this.debugBuild = debugBuild; this.context = context; this.purpose = purpose;
+    purpose: ChatPurpose = ChatPurpose.PUBLIC_CHAT, tools?: ChatToolKit) {
+    this.opener = opener; this.debugBuild = debugBuild; this.context = context; this.purpose = purpose; this.tools = tools;
+    this.documentToolsEnabled = purpose === ChatPurpose.ASSISTANT && tools !== undefined;
   }
   create(): ShuviRuntimeSessionPort {
     if (!this.debugBuild) throw new Error('CHAT_DEBUG_ONLY');
     if (this.purpose !== ChatPurpose.PUBLIC_CHAT && this.context === undefined) throw new Error('CALENDAR_CONTEXT_REQUIRED');
+    if (this.tools !== undefined && this.purpose !== ChatPurpose.ASSISTANT) throw new Error('CHAT_TOOLS_SCOPE_REJECTED');
     const digest = new AgentHostDigest(); const resources = new ChatResources(this.opener, digest,
       this.purpose === ChatPurpose.CALENDAR_DRAFT, this.purpose === ChatPurpose.ASSISTANT);
     const http = new SessionModelHttpClient(new ArkTsDeepSeekHttpClient());
     const profile = startupModelProfile(); profile.privacyClasses = [chatPrivacy(this.purpose)];
-    const model = createDeepSeekProvider(profile, startupModelPrice(digest), digest, resources.credentials, http);
-    const ports = new ProductionAgentRuntimePorts(); const planner = new ChatPlanner(this.purpose);
+    const kit: ChatToolKit | undefined = this.tools;
+    const transport: DeepSeekToolTransport | undefined = kit === undefined ? undefined :
+      new DeepSeekToolTransport(profile, http, kit.documents(), kit.turn, assistantToolLimits());
+    // The tool transport owns the conversation turns and the document tools; the session closes it with its resources.
+    if (transport !== undefined) resources.memory = transport;
+    const model = createDeepSeekProvider(profile, startupModelPrice(digest), digest, resources.credentials, http, undefined, transport);
+    const tools = transport !== undefined;
+    const ports = new ProductionAgentRuntimePorts(); const planner = new ChatPlanner(this.purpose, tools);
     ports.clock = new ChatClock(); ports.ids = new ChatIds(); ports.planner = planner; ports.toolPreparer = planner;
     ports.collaboration = new SingleAgentCollaborationSelector(); ports.persistence = resources.execution;
-    ports.adapterFactory = new ChatAdapterFactory(model.provider, model.registered, digest, this.context, this.purpose);
+    ports.adapterFactory = new ChatAdapterFactory(model.provider, model.registered, digest, this.context, this.purpose, tools);
     const host = new SingleAgentHostPorts(); host.credentialStore = resources.credentials; host.executionStorage = resources.execution;
     host.memoryStorage = resources.memory; host.mcpClient = new DisabledChatResource(); host.runtimeFactory = new ChatBackendFactory(ports);
-    return new ShuviRuntimeSession(new AgentApplicationBackend(chatFrontendConfig(this.purpose), host), resources, http,
+    return new ShuviRuntimeSession(new AgentApplicationBackend(chatFrontendConfig(this.purpose, tools), host), resources, http,
       new McpClientManager(), new SearchAuthorizationPreviews());
   }
 }

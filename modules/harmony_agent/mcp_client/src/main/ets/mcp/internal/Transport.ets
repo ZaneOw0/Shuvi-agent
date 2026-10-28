@@ -17,6 +17,8 @@ export interface McpTransportRequest {
   requestTimeoutMs: number;
   maxResponseBytes: number;
   cancellation?: McpCancellationSignal;
+  /** Tool calls must use a fresh connection to avoid native stale-connection replay. */
+  reuseConnections?: boolean;
 }
 
 export interface McpTransportResponse {
@@ -86,6 +88,7 @@ export class ArkTsHttpTransport implements McpTransport {
       const responseBuffer: McpResponseBuffer = new McpResponseBuffer(request.maxResponseBytes);
       let statusCode: number = 0;
       let streamEnded: boolean = false;
+      let headersReceived: boolean = false;
       let settled: boolean = false;
       let responseHeaders: Record<string, string> = {};
       let cancellation: McpCancellationSubscription | undefined = undefined;
@@ -123,7 +126,7 @@ export class ArkTsHttpTransport implements McpTransport {
       this.activeRequests.push(active);
 
       const complete = (): void => {
-        if (settled || !streamEnded || statusCode === 0) {
+        if (settled || !streamEnded || !headersReceived || statusCode === 0) {
           return;
         }
         settled = true;
@@ -147,6 +150,8 @@ export class ArkTsHttpTransport implements McpTransport {
 
       httpRequest.on('headersReceive', (headers: Object): void => {
         responseHeaders = this.normalizeHeaders(headers);
+        headersReceived = true;
+        complete();
       });
       httpRequest.on('dataReceive', (data: ArrayBuffer): void => {
         if (settled) {
@@ -175,6 +180,8 @@ export class ArkTsHttpTransport implements McpTransport {
         connectTimeout: request.connectTimeoutMs,
         readTimeout: request.requestTimeoutMs,
         usingCache: false,
+        reuseConnections: request.reuseConnections !== false,
+        maxRedirects: request.reuseConnections === false ? 0 : undefined,
         expectDataType: http.HttpDataType.ARRAY_BUFFER
       };
 

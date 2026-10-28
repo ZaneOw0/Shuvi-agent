@@ -582,7 +582,7 @@ struct Index {
           Row({ space: 8 }) {
             Circle({ width: 8, height: 8 }).fill(this.runtimeChat.lifecycle === ShuviRuntimeState.READY ? Theme.ok : Theme.muted)
             Text(this.runtimeChat.lifecycle === ShuviRuntimeState.READY ?
-              `已启用 · 剩 ${Math.max(0, this.runtimeChat.maxRequests - this.runtimeChat.requestCount)}/${this.runtimeChat.maxRequests} 次` : '正在启用…')
+              `已启用 · 剩 ${Math.max(0, this.runtimeChat.maxRequests - this.runtimeChat.requestCount)}/${this.runtimeChat.maxRequests} 轮` : '正在启用…')
               .fontSize(13).fontColor(Theme.ink).layoutWeight(1).id('runtime-chat-status')
             Button('停止').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(18)
               .constraintSize({ minHeight: Theme.controlHeight, minWidth: 64 }).id('runtime-chat-stop')
@@ -591,7 +591,7 @@ struct Index {
           }.width('100%').padding({ left: 14, right: 6, top: 4, bottom: 4 }).backgroundColor(Theme.surface)
             .borderRadius(22).border({ width: 1, color: Theme.line })
           if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
-            Text('本次启用的请求次数已用完；点“停止”后可重新启用。').fontSize(Theme.noteSize).fontColor(Theme.amber).width('100%')
+            Text('本次启用的对话轮数已用完；点“停止”后可重新启用。').fontSize(Theme.noteSize).fontColor(Theme.amber).width('100%')
           }
         } else {
           if (this.runtimeChat.lifecycle !== ShuviRuntimeState.IDLE && this.runtimeChat.lifecycle !== ShuviRuntimeState.STOPPED) {
@@ -633,7 +633,7 @@ struct Index {
   }
   private composerHint(): string {
     return this.realChatMode ? (this.knowledgeEnabled ? '回答依据：我的知识库 · 来源可核对' :
-      (this.searchEnabled ? '联网搜索 · 每次搜索前会征求你的同意' : '可以直接说日程安排，创建前会让你确认')) :
+      (this.searchEnabled ? '联网搜索 · 每次搜索前会征求你的同意' : '可提问、安排日程或让我写文档；日程创建前会让你确认')) :
       (this.searchEnabled ? '演示模式 · 固定样例，未联网' : '演示模式 · 数据仅本次有效');
   }
 
