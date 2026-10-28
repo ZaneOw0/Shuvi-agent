@@ -1,6 +1,10 @@
 {
   "string": [
     {
+      "name": "speech_microphone_reason",
+      "value": "用于在你点击语音输入时录制并保存语音消息，在本机识别后供助手理解"
+    },
+    {
       "name": "calendar_read_reason",
       "value": "用于核查休比为你创建的日程，确认保存结果并避免重复创建"
     },
