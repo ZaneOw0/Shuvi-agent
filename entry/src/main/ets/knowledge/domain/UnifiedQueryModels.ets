@@ -43,6 +43,7 @@ export class UnifiedQueryScope {
   space: EmbeddingSpace | undefined; spaces: EmbeddingSpace[]=[]; unupgraded: number=0; includeArchived: boolean=false; complete: boolean=false;
 }
 export class UnifiedQueryApproval {
+  queryGrantRevision: number = 0;
   id: string=''; policy: string=UNIFIED_QUERY_POLICY; session: string=''; epoch: number=0; actual: string=''; inputHash: string='';
   configBinding: string=''; credentialRevision: number=0; settingsRevision: number=0; costRevision: number=0;
   scopeHash: string=''; spaceId: string=''; proofBinding: string=''; approved: boolean=false; costAccepted: boolean=false;

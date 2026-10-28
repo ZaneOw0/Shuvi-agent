@@ -5,6 +5,7 @@ import {
   ProviderErrorCode, ProviderFinishReason, ProviderOperationHandle, ProviderTransportError
 } from '@harmony_agent/agent-connectors';
 import { SingleAgentHostResourcePort } from '@harmony_agent/agent-runtime';
+import { ModelLoopToolsPort } from './ModelLoopTools';
 import { DOCUMENT_MODEL_TOOL_NAMES, ModelDocumentToolsPort, documentModelToolDefinitions } from '../documents/DocumentToolContracts';
 import { DeepSeekHttpClientPort, DeepSeekHttpRequest, DeepSeekHttpResponse, DeepSeekProfile,
   createDeepSeekModelProfile, parseDeepSeekResponse } from './DeepSeekProtocol';
@@ -156,19 +157,25 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
   private stopped: boolean = false;
   private closing?: Promise<void>;
   private active?: ProviderOperationHandle<ModelTransportResult>;
+  private readonly extra?: ModelLoopToolsPort;
+  private extraRevision: number = -1;
   constructor(profile: DeepSeekProfile, client: DeepSeekHttpClientPort, tools: ModelDocumentToolsPort,
-    turn?: ModelTurnPort, limits: ToolTurnLimits = new ToolTurnLimits()) {
+    turn?: ModelTurnPort, limits: ToolTurnLimits = new ToolTurnLimits(), extra?: ModelLoopToolsPort) {
     createDeepSeekModelProfile(profile);
     this.profile = JSON.parse(JSON.stringify(profile)) as DeepSeekProfile; this.client = client; this.tools = tools;
     this.turn = turn; this.limits = limits; this.epoch = turn === undefined ? 0 : turn.conversationEpoch();
+    this.extra = extra;
   }
   async open(): Promise<void> { if (this.stopped) throw failure(ProviderErrorCode.CANCELLED); }
   /** Idempotent: the session may close its memory resource through more than one owner. */
   async close(): Promise<void> {
     if (this.closing === undefined) {
-      this.stopped = true; this.active?.cancel(); this.turns = []; this.closing = this.tools.close();
+      this.stopped = true; this.active?.cancel(); this.turns = []; this.closing = this.closeTools();
     }
     await this.closing;
+  }
+  private async closeTools(): Promise<void> {
+    try { await this.extra?.close(); } finally { await this.tools.close(); }
   }
   start(request: ModelInvocation, credential: ProviderCredential, _observer?: ModelTransportObserver): ProviderOperationHandle<ModelTransportResult> {
     if (this.stopped || !this.profile.available || this.active !== undefined || request.modelId !== this.profile.modelId ||
@@ -188,6 +195,7 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
       (current: ProviderOperationHandle<DeepSeekHttpResponse>): void => { source = current; });
     const operation: ToolLoopOperation = new ToolLoopOperation(promise.finally((): void => { this.active = undefined; }), (): void => {
       if (cancelled) return; cancelled = true; source?.cancel(); void this.tools.cancel().catch((): void => { this.stopped = true; });
+      void this.extra?.cancel().catch((): void => { this.stopped = true; });
     });
     this.active = operation; return operation;
   }
@@ -208,24 +216,31 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
       this.turns = []; this.epoch = turnPort.conversationEpoch();
     }
     const proposals: string[] = turnPort === undefined ? [] : turnPort.proposalNames();
-    const allowed: string[] = DOCUMENT_MODEL_TOOL_NAMES.concat(proposals);
+    const extra: ModelLoopToolsPort | undefined = this.extra;
+    const extraRevision: number = extra?.revision() ?? 0;
+    if (this.extraRevision !== extraRevision) { this.turns = []; this.extraRevision = extraRevision; }
+    const extraNames: string[] = extra?.names() ?? [];
+    const allowed: string[] = DOCUMENT_MODEL_TOOL_NAMES.concat(proposals, extraNames);
     const system: ToolChatMessage = new ToolChatMessage(); system.role = 'system'; system.content = request.messages[0].content;
     const turn: ToolChatMessage[] = []; const user: ToolChatMessage = new ToolChatMessage();
     user.role = 'user'; user.content = request.messages[1].content; turn.push(user);
     const deadline: number = Date.now() + request.context.timeoutMs;
+    extra?.begin(request.messages[1].content, request.context.requestId, deadline);
+    if (extra !== undefined) { system.content += '\n' + extra.policy(); }
     let input: number = 0; let output: number = 0; let toolCount: number = 0; let blockTools: boolean = false;
     let blockWrites: boolean = false;
     const receipts: string[] = [];
     const errors: string[] = [];
     let readbacks: string[] = [];
     try {
-      for (let roundIndex: number = 0; roundIndex < TOOL_TURN_MAX_ROUNDS; roundIndex++) {
-        if (cancelled() || this.stopped) throw failure(ProviderErrorCode.CANCELLED);
+      for (let roundIndex: number = 0; roundIndex < (extra === undefined ? TOOL_TURN_MAX_ROUNDS : 3); roundIndex++) {
+        if (cancelled() || this.stopped || extra !== undefined && extra.revision() !== extraRevision) throw failure(ProviderErrorCode.CANCELLED);
         if (this.attempts >= this.limits.maxAttempts || Date.now() >= deadline || output >= request.maxOutputTokens) throw failure();
         const payload: ToolPayload = new ToolPayload(); payload.model = this.profile.modelId;
         payload.max_tokens = request.maxOutputTokens - output; payload.temperature = request.temperature;
         payload.tool_choice = blockTools ? 'none' : 'auto';
-        payload.tools = documentModelToolDefinitions(blockWrites).concat(turnPort === undefined ? [] : turnPort.proposalDefinitions());
+        payload.tools = documentModelToolDefinitions(blockWrites).concat(turnPort === undefined ? [] : turnPort.proposalDefinitions(), extra?.definitions() ?? []);
+        if (roundIndex === 2 && extra !== undefined) { payload.tool_choice = 'none'; blockTools = true; }
         while (this.turns.length > 0 && JSON.stringify(this.turns).length > this.limits.historyChars) this.turns.shift();
         payload.messages = [system, ...this.turns.flat(), ...turn];
         const body: string = JSON.stringify(payload);
@@ -235,7 +250,7 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
         outgoing.maxResponseBytes = this.profile.maxResponseBytes;
         this.attempts++; const operation = this.client.start(outgoing); current(operation);
         const response = await operation.result;
-        if (cancelled() || this.stopped) throw failure(ProviderErrorCode.CANCELLED);
+        if (cancelled() || this.stopped || extra !== undefined && extra.revision() !== extraRevision) throw failure(ProviderErrorCode.CANCELLED);
         const result: ToolRound = parseModelToolRound(response, this.profile.modelId, this.profile.maxResponseBytes, allowed);
         input += result.input; output += result.output;
         if (input > this.limits.maxInputTokens || output > request.maxOutputTokens) throw failure();
@@ -244,10 +259,12 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
           if (/<[｜|]*DSML[｜|]*\s+(?:calls|invoke|parameter)\b|<tool_call(?:>|\s)/i.test(result.message.content ?? '')) {
             result.message.content = '模型返回了未执行的工具调用文本；没有根据这些文本执行操作，本轮未完成这一步核查。';
           }
+          const answerText: string = extra === undefined ? (result.message.content ?? '') : await extra.finish(result.message.content ?? '');
+          if (extra !== undefined && extra.revision() !== extraRevision) { throw failure(ProviderErrorCode.CANCELLED); }
           this.remember(turn);
           const notes: string = turnNotes([], receipts, readbacks);
           const text: string = (errors.length > 0 ? '本轮有工具未完成：' + errors.join('；') + '\n\n' : '') +
-            (result.message.content ?? '') + (notes ? '\n\n' + notes : '');
+            answerText + (notes ? '\n\n' + notes : '');
           return this.result(turnPort === undefined ? text : turnPort.answer(text), input, output);
         }
         if (blockTools) throw failure();
@@ -265,6 +282,14 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
                 turnNotes(errors, receipts, readbacks));
               if (value.error) reply.content = JSON.stringify({ ok: false, error: 'PROPOSAL_REJECTED', reason: value.error });
               else { proposed = value; reply.content = value.toolReply; }
+            }
+          } else if (extraNames.includes(call.function.name) && extra !== undefined) {
+            if (blockTools || cancelled() || this.stopped || extra.revision() !== extraRevision || toolCount >= TOOL_TURN_MAX_TOOL_CALLS) {
+              reply.content = '{"status":"denied","hits":[]}';
+            } else {
+              toolCount++;
+              try { reply.content = await extra.invoke(call.function.name, call.function.arguments, call.id); }
+              catch { reply.content = '{"status":"failed","hits":[]}'; }
             }
           } else if (blockWrites && call.function.name !== 'document_read') {
             reply.content = '{"ok":false,"error":"WRITE_BLOCKED_PENDING_VERIFICATION","allowedTools":["document_read"]}';

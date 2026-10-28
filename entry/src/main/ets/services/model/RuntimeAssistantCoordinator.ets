@@ -1,7 +1,6 @@
 import common from '@ohos.app.ability.common';
 import { KnowledgeRagReadiness } from '../../knowledge/domain/KnowledgeRuntimePorts';
 import { KnowledgeAssembly } from '../../knowledge/infra/KnowledgeAssembly';
-import { KnowledgeRagSessionAdapter } from '../../knowledge/infra/KnowledgeRagSessionAdapter';
 import { AssistantContext } from '../calendar/AssistantIntent';
 import { AssistantToolPrompt, AssistantToolTurn } from '../calendar/AssistantTools';
 import { CalendarNativeTool } from '../calendar/CalendarNativeTool';
@@ -10,21 +9,18 @@ import { ModelDocumentToolsPort } from '../documents/DocumentToolContracts';
 import { modelDocumentTools } from '../documents/ModelDocumentTools';
 import { NativeAgentRdbOpen } from './AgentRdbResources';
 import { ChatPurpose, ChatRuntimeFactory, ChatToolKit } from './ChatRuntimeAssembly';
-import { knowledgeAnswerRuntimeFactory } from './KnowledgeAnswerRuntimeAssembly';
+import { KnowledgeAgentRuntime } from './KnowledgeAgentRuntime';
 import { RuntimeChatService } from './RuntimeChatService';
 import { RuntimeKnowledgeService } from './RuntimeKnowledgeService';
 import { ShuviRuntimeState } from './ShuviRuntimeController';
 
 /**
- * Coordinates one user-entered DeepSeek key across the calendar-capable assistant session and the PERSONAL RAG session.
- * The assistant session (ChatPurpose.ASSISTANT) lets the model choose per turn: answer, run document tools, or propose a
- * calendar event; writing the event still requires the user's confirmation and the authorized native calendar tool.
- * start() only prepares the RAG answer session; the knowledge store is opened by enableKnowledge().
- * The two sessions keep separate planners, adapters and execution stores.
+ * One PERSONAL model session chooses answers, authorized knowledge/document tools and calendar proposals.
+ * The knowledge store opens only on explicit authorization; it owns no separate model credential or model session.
  */
 export class RuntimeAssistantCoordinator {
   static async start(context: common.Context, debug: boolean, key: Uint8Array): Promise<void> {
-    const chatKey: Uint8Array = key.slice(); const ragKey: Uint8Array = key.slice(); key.fill(0);
+    const chatKey: Uint8Array = key.slice(); key.fill(0);
     try {
       const chatState: ShuviRuntimeState = RuntimeChatService.session.snapshot().lifecycle;
       if (chatState === ShuviRuntimeState.STARTING || chatState === ShuviRuntimeState.READY ||
@@ -32,28 +28,27 @@ export class RuntimeAssistantCoordinator {
       const knowledgeState: ShuviRuntimeState = RuntimeKnowledgeService.session.snapshot().lifecycle;
       if (knowledgeState === ShuviRuntimeState.STARTING || knowledgeState === ShuviRuntimeState.READY ||
         knowledgeState === ShuviRuntimeState.STOPPING || knowledgeState === ShuviRuntimeState.BLOCKED) {
-        try { await RuntimeKnowledgeService.session.stop(); } catch { /* The assistant session may still start; RAG stays fail-closed. */ }
+        await RuntimeKnowledgeService.session.stop();
       }
       const opener: NativeAgentRdbOpen = new NativeAgentRdbOpen(context);
-      // One tool loop: the model chooses document tools (run in the loop) or calendar_propose (ends the turn and opens
-      // the confirmation card); search and knowledge stay separate, explicitly enabled sessions.
+      // Knowledge and document tools return to this same loop; calendar_propose still ends at the confirmation card.
       const assistant: AssistantContext = RuntimeChatService.session.context;
+      const knowledge = RuntimeKnowledgeService.session;
+      const search = KnowledgeAssembly.forContext(context).createAgentSearch();
+      knowledge.prepare(search, new KnowledgeAgentRuntime(opener, search, (): boolean => knowledge.snapshot().consent),
+        (): Promise<void> => RuntimeChatService.session.cancel(),
+        (): Promise<void> => RuntimeChatService.session.send('请仅基于上一轮已返回的个人资料重试回答，禁止重新检索。'));
       const tools: ChatToolKit = new ChatToolKit((): ModelDocumentToolsPort => modelDocumentTools(context),
-        new AssistantToolTurn(assistant));
+        new AssistantToolTurn(assistant), knowledge);
       await RuntimeChatService.session.start(
         new ChatRuntimeFactory(opener, debug, new AssistantToolPrompt(assistant), ChatPurpose.ASSISTANT, tools),
         new CalendarRuntimeFactory(opener, new CalendarNativeTool(), debug), chatKey);
-      if (RuntimeChatService.session.snapshot().lifecycle !== ShuviRuntimeState.READY) { return; }
-      await RuntimeKnowledgeService.session.prepareRag(
-        new KnowledgeRagSessionAdapter(KnowledgeAssembly.forContext(context)),
-        knowledgeAnswerRuntimeFactory(context, debug, RuntimeKnowledgeService.session.answerContext,
-          (taskId: string): void => { RuntimeKnowledgeService.session.answerOutcomeRejected(taskId); }),
-        ragKey);
-    } finally { chatKey.fill(0); ragKey.fill(0); }
+      if (RuntimeChatService.session.snapshot().lifecycle !== ShuviRuntimeState.READY) { await knowledge.stop(); return; }
+    } finally { chatKey.fill(0); }
   }
 
-  static async enableKnowledge(): Promise<KnowledgeRagReadiness> {
-    return await RuntimeKnowledgeService.session.activateRag();
+  static async enableKnowledge(queryEgress: boolean = true): Promise<KnowledgeRagReadiness> {
+    return await RuntimeKnowledgeService.session.activateRag(queryEgress);
   }
 
   static async disableKnowledge(): Promise<void> {

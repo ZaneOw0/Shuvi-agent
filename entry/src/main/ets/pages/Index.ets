@@ -194,7 +194,7 @@ struct Index {
   aboutToAppear(): void {
     this.alive = true;
     RuntimeSearchService.session.attach((view: RuntimeSearchView): void => { this.runtimeSearch = view; });
-    RuntimeKnowledgeService.session.attach((view: RuntimeKnowledgeView): void => { this.runtimeKnowledge = view; });
+    RuntimeKnowledgeService.session.attach((view: RuntimeKnowledgeView): void => { this.runtimeKnowledge = view; this.knowledgeEnabled = view.consent; });
     this.lastRuntimeReply = RuntimeChatService.session.snapshot().replyId;
     RuntimeChatService.session.attach((view: AssistantView): void => {
       const newCalendarCard = view.preview !== undefined && view.preview.requestId !== this.runtimeChat.preview?.requestId;
@@ -532,7 +532,7 @@ struct Index {
   }
 
   private async toggleKnowledge(): Promise<void> {
-    if (this.blocked()) return;
+    if (this.blocked() && !this.knowledgeEnabled) return;
     if (!this.realChatMode) { this.notice('请先打开真实功能', '知识库 RAG 不会回退为演示数据。请先切换到真实功能模式。'); return; }
     this.runtimeSwitching = true;
     try {
@@ -542,11 +542,19 @@ struct Index {
         return;
       }
       if (this.searchEnabled || this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
-        this.notice('请先启用普通对话', '请先使用同一份 DeepSeek Key 启用普通对话，再开启知识库 RAG。'); return;
+        this.notice('请先启用普通对话', '请先启用真实主对话，再授权助手按需使用个人知识库。'); return;
       }
+      const choice: number = await new Promise<number>((resolve: (value: number) => void): void => {
+        AlertDialog.show({ title: '允许助手按需使用个人知识库',
+          message: '允许本会话读取当前未归档资料，并将命中片段发送给 DeepSeek 回答。语义查询还会将提炼后的查询发送给已配置的 Embedding Provider，可能计费。授权不启动资料入库，关闭或新对话即撤销。',
+          primaryButton: { value: '允许语义查询', action: (): void => { resolve(1); } },
+          secondaryButton: { value: '仅本机检索', action: (): void => { resolve(0); } },
+          cancel: (): void => { resolve(-1); } });
+      });
+      if (choice < 0 || !this.alive || this.tab !== 0) { return; }
       this.ragPreparing = true;
-      const readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge();
-      if (!readiness.ready) { this.notice('知识库 RAG 尚不可用', readiness.message); return; }
+      const readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge(choice === 1);
+      if (!readiness.ready) { this.notice('个人知识库尚不可用', readiness.message); return; }
       if (this.alive && this.tab === 0) { this.knowledgeEnabled = true; this.searchEnabled = false; }
     } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
     finally { this.runtimeSwitching = false; this.ragPreparing = false; }
@@ -562,7 +570,8 @@ struct Index {
         .id('runtime-chat-mode').onClick((): void => { void this.switchChatMode(); })
       if (this.realChatMode && this.knowledgeEnabled) {
         RuntimeKnowledgePanel({ view: this.runtimeKnowledge, onDisable: (): void => { void this.toggleKnowledge(); } })
-      } else if (this.realChatMode && this.searchEnabled) {
+      }
+      if (this.realChatMode && this.searchEnabled) {
         RuntimeSearchPanel({ view: this.runtimeSearch, onStart: (key: Uint8Array): void => {
           void this.startRuntimeSearch(key).catch((): void => {});
         } })
@@ -622,7 +631,7 @@ struct Index {
       this.runtimeSearch.lifecycle === ShuviRuntimeState.READY || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.READY);
   }
   private composerHint(): string {
-    return this.realChatMode ? (this.knowledgeEnabled ? '回答依据：我的知识库 · 来源可核对' :
+    return this.realChatMode ? (this.knowledgeEnabled ? '已授权个人知识库 · 助手按需查询，实际使用时展示来源' :
       (this.searchEnabled ? '联网搜索 · 每次搜索前会征求你的同意' : '可提问、安排日程或让我写文档；日程创建前会让你确认')) :
       (this.searchEnabled ? '演示模式 · 固定样例，未联网' : '演示模式 · 数据仅本次有效');
   }
@@ -632,16 +641,6 @@ struct Index {
       return;
     }
     if (this.realChatMode) {
-      if (this.knowledgeEnabled) {
-        if (this.runtimeKnowledge.lifecycle !== ShuviRuntimeState.READY) {
-          this.notice('知识库问答尚未就绪', this.runtimeKnowledge.message); return;
-        }
-        const query: string = this.input.trim(); this.input = '';
-        void RuntimeKnowledgeService.session.send(query).then((sent: boolean): void => {
-          if (!sent && this.alive && this.input.length === 0) { this.input = query; }
-        });
-        return;
-      }
       if (this.searchEnabled) {
         if (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance) {
           this.notice('真实搜索尚不可用', this.runtimeSearch.message); return;
@@ -1209,9 +1208,9 @@ struct Index {
             chipId: 'chat-search-toggle',
             a11y: `${this.realChatMode ? '真实联网搜索' : '联网搜索演示'}，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`,
             onTap: (): void => { void this.toggleSearch(); } })
-          ModeChip({ icon: $r('app.media.chat_book'), label: this.ragPreparing ? '准备中…' : '知识库', on: this.knowledgeEnabled,
-            disabled: this.blocked(), chipId: 'chat-knowledge-toggle',
-            a11y: `本机知识库问答，${this.ragPreparing ? '正在打开本机知识库' : (this.knowledgeEnabled ? '已开启，点击关闭' : '已关闭，点击开启')}`,
+          ModeChip({ icon: $r('app.media.chat_book'), label: this.ragPreparing ? '准备中…' : '允许使用个人知识库', on: this.knowledgeEnabled,
+            disabled: this.blocked() && !this.knowledgeEnabled, chipId: 'chat-knowledge-toggle',
+            a11y: `个人知识库授权，${this.ragPreparing ? '正在只读恢复' : (this.knowledgeEnabled ? '已允许按需使用，点击撤销' : '未授权，点击允许读取及已说明的查询与片段外发')}`,
             onTap: (): void => { void this.toggleKnowledge(); } })
           Blank()
           Row() {

@@ -16,7 +16,7 @@ export struct RuntimeChatSetup {
         .id('runtime-chat-details').onClick((): void => { this.details = !this.details; })
       if (this.details) {
         Column({ space: 6 }) {
-          Text('文档：可创建、读取、更新 txt/md，保存在系统文件管理器的 Download/com.example.shuvi/，其他应用也可能访问，请勿保存敏感资料。本次对话和模型选中的文档正文会发送到 DeepSeek；不联网搜索、不读取知识库或已有日历。版本和执行记录保存在本机加密库。')
+          Text('文档：可创建、读取、更新 txt/md，保存在系统文件管理器的 Download/com.example.shuvi/，其他应用也可能访问，请勿保存敏感资料。本次对话和模型选中的文档正文会发送到 DeepSeek；不联网搜索或读取已有日历。个人知识库默认关闭，另行授权后可按需查询。版本和执行记录保存在本机加密库。')
             .fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
           Text('每次输入最多 500 字符；每轮模型最多连续 6 次请求、6 次文档工具调用、累计 2048 输出 tokens，最长 120 秒。每次启用最多 10 轮、累计 30 次模型请求，无自动重试。按已登记价格作每轮 USD 0.02 的本地估算检查，实际扣费以供应商账单为准。取消也可能计费，已保存的文档会保留。')
             .fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
