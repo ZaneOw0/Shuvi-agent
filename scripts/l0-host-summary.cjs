@@ -1,15 +1,15 @@
 'use strict';
 const cp=require('node:child_process');
 async function main() {
-  if(process.argv.includes('--model') || process.argv.includes('--speech') || process.argv.includes('--full-host')) {
-    const file=process.argv.includes('--speech')?'run-speech-tests.cjs':process.argv.includes('--full-host')?'run-host-tests.cjs':'run-direct-model-tests.cjs';
+  if(process.argv.includes('--model') || process.argv.includes('--speech') || process.argv.includes('--full-host') || process.argv.includes('--layout') || process.argv.includes('--calendar')) {
+    const file=process.argv.includes('--layout')?'run-responsive-layout-tests.cjs':process.argv.includes('--calendar')?'run-calendar-probe-tests.cjs':process.argv.includes('--speech')?'run-speech-tests.cjs':process.argv.includes('--full-host')?'run-host-tests.cjs':'run-direct-model-tests.cjs';
     const r=cp.spawnSync(process.execPath,['--test','--test-reporter=tap','entry/src/test/'+file],{encoding:'utf8',timeout:180000,maxBuffer:8*1024*1024});
     for(const line of (r.stdout||'').split(/\r?\n/)) if(/^# (tests|pass|fail|cancelled|skipped|duration_ms) |^not ok /.test(line)) console.log(line.replace(/token|secret|authorization/gi,'field'));
     if(process.argv.includes('--model')) {
       const rows=(r.stdout||'').split(/\r?\n/).filter(line=>/^(?:not )?ok \d+ - (?:L2 |PR26 image )/.test(line));
       console.log('RAG_L2_SUMMARY passed='+rows.filter(line=>line.startsWith('ok ')).length+' failed='+rows.filter(line=>line.startsWith('not ok ')).length);
     }
-    console.log((process.argv.includes('--speech')?'SPEECH_HOST_EXIT=':process.argv.includes('--full-host')?'FULL_HOST_EXIT=':'L0_MODEL_EXIT=')+r.status);if(r.status!==0 || !/^# tests [0-9]+$/m.test(r.stdout||''))process.exitCode=1;return;
+    console.log((process.argv.includes('--layout')?'LAYOUT_HOST_EXIT=':process.argv.includes('--calendar')?'CALENDAR_HOST_EXIT=':process.argv.includes('--speech')?'SPEECH_HOST_EXIT=':process.argv.includes('--full-host')?'FULL_HOST_EXIT=':'L0_MODEL_EXIT=')+r.status);if(r.status!==0 || !/^# tests [0-9]+$/m.test(r.stdout||''))process.exitCode=1;return;
   }
   if(process.argv.includes('--l1-only')) {
     const h=require('../entry/src/test/unified-host-entry.cjs').harness();let passed=0,failed=0;

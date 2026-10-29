@@ -79,6 +79,7 @@ import { ImageKnowledgeView } from '../knowledge/ui/ImageKnowledgeView';
 import { KnowledgeMigrationView } from '../knowledge/ui/KnowledgeMigrationView';
 import { UnifiedSearchCard } from '../knowledge/domain/UnifiedQueryModels';
 import { FloatingAssistantPlacement } from '../model/FloatingAssistantPlacement';
+import { ResponsiveLayoutPolicy } from '../model/ResponsiveLayoutPolicy';
 import { SearchResultCard } from '../components/SearchResultCard';
 import { MockSearchSession } from '../mock/MockSearchSession';
 import { SEARCH_SAMPLE, SEARCH_SCENARIOS, SearchScenario, SearchSource, SearchState, SearchTurn,
@@ -198,6 +199,9 @@ struct Index {
   private knowledgeListener: () => void=(): void=> { if (this.alive && this.knowledgeAssembly!==undefined) { this.knowledgeState=this.knowledgeAssembly.service.viewState(); } };
   private parseAssembly: DocumentParseAssembly | undefined = undefined;
   @State drawerOpen: boolean = false;
+  @State windowWidth: number = 0;
+  @State contentWidth: number = 0;
+  @State wideLayout: boolean = false;
   @State floatingAssistantEnabled: boolean = true;
   @State floatingPlacement: FloatingAssistantPlacement = new FloatingAssistantPlacement();
   @State contentHeight: number = 0;
@@ -621,7 +625,17 @@ struct Index {
     catch { await assembly.close(); this.parseAssembly = undefined; this.parseService = undefined; this.parseState = assembly.service.viewState(); }
   }
 
+  private resizeWindow(width: number): void {
+    if (!Number.isFinite(width) || width <= 0 || this.windowWidth === width) return;
+    const embedded: boolean = ResponsiveLayoutPolicy.embedded(width);
+    if (this.wideLayout !== embedded) { this.drawerOpen = false; }
+    this.windowWidth = width; this.wideLayout = embedded;
+  }
+
+  private contentLimit(): number { return ResponsiveLayoutPolicy.contentLimit(this.windowWidth, this.tab === 0); }
+
   private resizeFloatingHost(width: number, height: number): void {
+    if (Number.isFinite(width) && width > 0) { this.contentWidth = width; }
     this.floatingHostWidth = width;
     this.floatingHostHeight = height;
     this.floatingPlacement.resize(width, height, this.floatingHeaderHeight);
@@ -1126,6 +1140,7 @@ struct Index {
           AppIcon({ source: $r('app.media.chat_menu'), size: 24 })
         }.width(44).height(44).backgroundColor(Theme.surface)
           .shadow({ radius: 16, color: Theme.shadow, offsetY: 3 })
+          .visibility(this.wideLayout ? Visibility.Hidden : Visibility.Visible)
           .accessibilityText('打开导航菜单').id('chat-menu')
           .onClick(() => {
             this.inputController.stopEditing();
@@ -1651,7 +1666,7 @@ struct Index {
             chipId: 'chat-search-toggle',
             a11y: `联网搜索，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`,
             onTap: (): void => { void this.toggleSearch(); } })
-          ModeChip({ icon: $r('app.media.chat_book'), label: this.ragPreparing ? '准备中…' : '允许使用个人知识库', on: this.knowledgeEnabled,
+          ModeChip({ icon: $r('app.media.chat_book'), label: this.ragPreparing ? '准备中…' : (ResponsiveLayoutPolicy.compactActions(this.contentWidth) ? '知识库授权' : '允许使用个人知识库'), on: this.knowledgeEnabled,
             disabled: this.blocked() && !this.knowledgeEnabled, chipId: 'chat-knowledge-toggle',
             a11y: `个人知识库授权，${this.ragPreparing ? '正在只读恢复' : (this.knowledgeEnabled ? '已允许按需使用，点击撤销' : '未授权，点击允许读取及已说明的查询与片段外发')}`,
             onTap: (): void => { void this.toggleKnowledge(); } })
@@ -1694,7 +1709,7 @@ struct Index {
       }
       Text(this.composerHint()).fontSize(11).fontColor(Theme.muted).textAlign(TextAlign.Center).width('100%')
         .id('chat-composer-hint')
-    }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%').backgroundColor(Theme.surface)
+    }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%').constraintSize({ maxWidth: this.contentLimit() }).backgroundColor(Theme.surface)
   }
 
   @Builder
@@ -1743,7 +1758,7 @@ struct Index {
         Button({ type: ButtonType.Circle }) {
           AppIcon({ source: $r('app.media.ui_close'), size: 22 })
         }.width(44).height(44)
-          .backgroundColor(Color.Transparent).accessibilityText('关闭导航菜单')
+          .backgroundColor(Color.Transparent).visibility(this.wideLayout ? Visibility.Hidden : Visibility.Visible).accessibilityText('关闭导航菜单')
           .onClick(() => this.drawerOpen = false)
       }.width('100%').padding({ bottom: 24 })
       Scroll() {
@@ -1758,6 +1773,7 @@ struct Index {
                 }
               }.width('100%').padding(14).constraintSize({ minHeight: 52 })
             }.width('100%').borderRadius(15).backgroundColor(this.tab === index ? Theme.soft : Color.Transparent)
+              .id('drawer-tab-' + index.toString())
               .accessibilityText(`${name}${this.tab === index ? '，已选中' : ''}`).onClick(() => this.changeTab(index))
           }, (name: string) => name)
           if (this.realChatMode) {
@@ -1768,7 +1784,7 @@ struct Index {
       Text('资料和 API Key 只保存在本机').fontSize(11).fontColor(Theme.muted)
         .width('100%').padding({ top: 16 })
     }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
-      .backgroundColor(Theme.inputSurface).borderRadius({ topRight: 26, bottomRight: 26 })
+      .backgroundColor(Theme.inputSurface).borderRadius({ topRight: this.wideLayout ? 0 : 26, bottomRight: this.wideLayout ? 0 : 26 })
   }
 
   @Builder
@@ -1926,7 +1942,7 @@ struct Index {
                onVisionSettings: (): void => { this.openVisionSettings(); },
                onParseSettings: (): void => { this.openParse(true); }, onEmbeddingSettings: (): void => { this.openEmbedding(); } })
           }
-        }.width('100%').constraintSize({ maxWidth: 640,
+        }.width('100%').constraintSize({ maxWidth: this.contentLimit(),
           minHeight: this.tab === 0 && this.messages.length === 0 && !this.showScenarios ? this.contentHeight : 0 })
           .justifyContent(FlexAlign.Center)
           // 让末尾内容可以完整滚动到悬浮入口上方；菜单打开时保持内容尺寸。
@@ -1945,31 +1961,38 @@ struct Index {
   }
 
   build() {
-    SideBarContainer(SideBarContainerType.Overlay) {
-      Column() {
-        this.navigationDrawer()
-      }
-      Stack({ alignContent: Alignment.TopStart }) {
+    Stack({ alignContent: Alignment.TopStart }) {
+      SideBarContainer(this.wideLayout ? SideBarContainerType.Embed : SideBarContainerType.Overlay) {
         Column() {
-          this.pageContent()
-        }.width('100%').height('100%').enabled(!this.drawerOpen)
-          .accessibilityLevel(this.drawerOpen ? 'no-hide-descendants' : 'auto')
-        if (this.floatingAssistantEnabled && this.floatingPlacement.canPlace &&
-          this.tab !== 0 && !this.showScenarios && !this.drawerOpen) {
-          this.floatingAssistant()
+          this.navigationDrawer()
         }
-        if (this.drawerOpen) {
-          Button({ type: ButtonType.Normal }) {
-            Row().width('100%').height('100%')
-          }.width('100%').height('100%').backgroundColor(Theme.overlay).borderRadius(0)
-            .accessibilityText('关闭导航菜单').onClick(() => this.drawerOpen = false)
-        }
-        PdfJsSurface()
-      }.width('100%').height('100%')
-        .onAreaChange((_oldArea: Area, area: Area) => this.resizeFloatingHost(Number(area.width), Number(area.height)))
-    }.width('100%').height('100%').showSideBar(this.drawerOpen).showControlButton(false)
-      .sideBarWidth('84%').minSideBarWidth(200).maxSideBarWidth(320).minContentWidth(0)
-      .divider({ strokeWidth: 0 }).onChange((visible: boolean) => this.drawerOpen = visible)
+        Stack({ alignContent: Alignment.TopStart }) {
+          Column() {
+            this.pageContent()
+          }.width('100%').height('100%').enabled(this.wideLayout || !this.drawerOpen)
+            .accessibilityLevel(!this.wideLayout && this.drawerOpen ? 'no-hide-descendants' : 'auto')
+          if (this.floatingAssistantEnabled && this.floatingPlacement.canPlace &&
+            this.tab !== 0 && !this.showScenarios && (this.wideLayout || !this.drawerOpen)) {
+            this.floatingAssistant()
+          }
+          if (!this.wideLayout && this.drawerOpen) {
+            Button({ type: ButtonType.Normal }) {
+              Row().width('100%').height('100%')
+            }.width('100%').height('100%').backgroundColor(Theme.overlay).borderRadius(0)
+              .accessibilityText('关闭导航菜单').onClick(() => this.drawerOpen = false)
+          }
+        }.width('100%').height('100%')
+          .onAreaChange((_oldArea: Area, area: Area) => this.resizeFloatingHost(Number(area.width), Number(area.height)))
+      }.width('100%').height('100%').showSideBar(this.wideLayout || this.drawerOpen).showControlButton(false)
+        .sideBarWidth(this.wideLayout ? ResponsiveLayoutPolicy.sideWidth(this.windowWidth) : '84%')
+        .minSideBarWidth(this.wideLayout ? 240 : 200).maxSideBarWidth(this.wideLayout ? 280 : 320).minContentWidth(0)
+        .divider({ strokeWidth: this.wideLayout ? 1 : 0, color: Theme.line })
+        .onChange((visible: boolean): void => { if (!this.wideLayout) { this.drawerOpen = visible; } })
+        .backgroundColor(Theme.paper)
+      // One Web surface above BOTH navigation and content; responsive sidebar changes never recreate the engine.
+      PdfJsSurface()
+    }.width('100%').height('100%').id('responsive-shell')
+      .onAreaChange((_oldArea: Area, area: Area): void => { this.resizeWindow(Number(area.width)); })
       .backgroundColor(Theme.paper)
   }
 }
