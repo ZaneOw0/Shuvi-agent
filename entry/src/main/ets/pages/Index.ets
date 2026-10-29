@@ -14,6 +14,10 @@
  */
 import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { Theme } from '../components/Theme';
+import { VoiceMessageBubble } from '../components/VoiceMessageBubble';
+import { VoiceClip, composeVoiceMessage } from '../services/speech/VoiceAudio';
+import { SpeechService } from '../services/speech/SpeechService';
+import { SpeechView, SpeechPhase } from '../services/speech/SpeechSession';
 import { WorkbenchPage, ProfilePage } from '../components/FeaturePages';
 import { TextKnowledgeView } from '../knowledge/ui/TextKnowledgeView';
 import { TextKnowledgeAssembly } from '../knowledge/infra/TextKnowledgeAssembly';
@@ -129,6 +133,17 @@ struct Index {
   @State calendarOpen: boolean = false;
   @State realCalendarOpen: boolean = false;
   @State input: string = '';
+  @State speech: SpeechView = new SpeechView();
+  private lastSpeechResult: number = 0;
+  @State voiceDraft: VoiceClip | undefined = undefined;
+  private voiceText: string = '';
+  @State voiceArchive: VoiceClip[] = [];
+  @State voiceArchiveOpen: boolean = false;
+  @State voicePlayingId: string = '';
+  @State voiceMessage: string = '';
+  private hiddenVoiceQueries: Set<string> = new Set<string>();
+  @State searchVoiceQuery: boolean = false;
+  @State knowledgeVoiceQuery: boolean = false;
   @State messages: ChatMessage[] = [];
   @State draft: CalendarDraft | undefined = undefined;
   @State result: OperationResult | undefined = undefined;
@@ -193,8 +208,35 @@ struct Index {
 
   aboutToAppear(): void {
     this.alive = true;
-    RuntimeSearchService.session.attach((view: RuntimeSearchView): void => { this.runtimeSearch = view; });
-    RuntimeKnowledgeService.session.attach((view: RuntimeKnowledgeView): void => { this.runtimeKnowledge = view; this.knowledgeEnabled = view.consent; });
+    this.refreshVoiceArchive();
+    SpeechService.playback.attach((id: string, message: string): void => {
+      if (this.alive) { this.voicePlayingId = id; this.voiceMessage = message; }
+    });
+    this.lastSpeechResult = SpeechService.session.snapshot().resultId;
+    SpeechService.session.attach((view: SpeechView): void => {
+      if (!this.alive) return;
+      this.speech = view;
+      if (view.clip !== undefined) this.refreshVoiceArchive();
+      if (view.phase === SpeechPhase.Ready && view.resultId > this.lastSpeechResult) {
+        this.lastSpeechResult = view.resultId;
+        // The transcript is private dispatch data; never bind it to any text control or message bubble.
+        if (this.tab === 0 && this.input.trim().length === 0) {
+          this.voiceDraft = view.clip; this.voiceText = view.text;
+        }
+        this.refreshVoiceArchive();
+      }
+    });
+    RuntimeSearchService.session.attach((view: RuntimeSearchView): void => {
+      if (this.searchVoiceQuery) {
+        if (view.query.length > 0) this.hiddenVoiceQueries.add(view.query);
+        if (view.preview !== undefined) this.hiddenVoiceQueries.add(view.preview.query);
+      }
+      this.runtimeSearch = view;
+    });
+    RuntimeKnowledgeService.session.attach((view: RuntimeKnowledgeView): void => {
+      if (this.knowledgeVoiceQuery && view.query.length > 0) this.hiddenVoiceQueries.add(view.query);
+      this.runtimeKnowledge = view; this.knowledgeEnabled = view.consent;
+    });
     this.lastRuntimeReply = RuntimeChatService.session.snapshot().replyId;
     RuntimeChatService.session.attach((view: AssistantView): void => {
       const newCalendarCard = view.preview !== undefined && view.preview.requestId !== this.runtimeChat.preview?.requestId;
@@ -212,6 +254,8 @@ struct Index {
   aboutToDisappear(): void {
     PdfJsRuntime.shared.closePreview();
     this.alive = false;
+    SpeechService.session.detach();
+    SpeechService.playback.detach();
     RuntimeChatService.session.detach();
     RuntimeSearchService.session.detach();
     RuntimeKnowledgeService.session.detach();
@@ -229,7 +273,10 @@ struct Index {
     await this.parseAssembly?.close(); await this.sharedKnowledge?.release();
   }
 
+  onPageHide(): void { void SpeechService.session.cancel(); void SpeechService.playback.stop().catch((): void => {}); }
+
   onBackPress(): boolean {
+    if (this.speech.busy) { SpeechService.session.cancel(); return true; }
     if (PdfJsRuntime.shared.expanded) { PdfJsRuntime.shared.closePreview(); return true; }
     if (this.drawerOpen) {
       this.drawerOpen = false;
@@ -273,6 +320,7 @@ struct Index {
   }
 
   private changeTab(index: number): void {
+    if (index !== this.tab) SpeechService.session.cancel();
     if (index !== this.tab && this.tab === 0) {
       void RuntimeSearchService.session.stop();
       void RuntimeAssistantCoordinator.stop().catch((): void => {});
@@ -569,10 +617,11 @@ struct Index {
           this.runtimeChat.lifecycle !== ShuviRuntimeState.STOPPING)
         .id('runtime-chat-mode').onClick((): void => { void this.switchChatMode(); })
       if (this.realChatMode && this.knowledgeEnabled) {
-        RuntimeKnowledgePanel({ view: this.runtimeKnowledge, onDisable: (): void => { void this.toggleKnowledge(); } })
+        RuntimeKnowledgePanel({ view: this.runtimeKnowledge, hideQuery: this.knowledgeVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeKnowledge.query), onDisable: (): void => { void this.toggleKnowledge(); } })
       }
       if (this.realChatMode && this.searchEnabled) {
-        RuntimeSearchPanel({ view: this.runtimeSearch, onStart: (key: Uint8Array): void => {
+        RuntimeSearchPanel({ view: this.runtimeSearch, hideQuery: this.searchVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeSearch.query) ||
+          this.hiddenVoiceQueries.has(this.runtimeSearch.preview?.query ?? ''), onStart: (key: Uint8Array): void => {
           void this.startRuntimeSearch(key).catch((): void => {});
         } })
       } else if (this.realChatMode) {
@@ -608,7 +657,7 @@ struct Index {
   }
 
   private blocked(): boolean {
-    return this.generating || this.executing || this.searchBusy || this.draft !== undefined || this.runtimeChat.busy ||
+    return this.speech.busy || this.generating || this.executing || this.searchBusy || this.draft !== undefined || this.runtimeChat.busy ||
       this.runtimeSearch.busy || this.runtimeSwitching || this.runtimeSearch.lifecycle === ShuviRuntimeState.STARTING ||
       this.runtimeSearch.lifecycle === ShuviRuntimeState.STOPPING || this.runtimeKnowledge.busy ||
       this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STARTING || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STOPPING;
@@ -637,9 +686,11 @@ struct Index {
   }
 
   private async send(): Promise<void> {
+    if (this.voiceDraft !== undefined) { await this.sendVoice(); return; }
     if (this.blocked() || this.input.trim().length === 0 || this.input.length > 500) {
       return;
     }
+    this.searchVoiceQuery = false; this.knowledgeVoiceQuery = false;
     if (this.realChatMode) {
       if (this.searchEnabled) {
         if (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance) {
@@ -716,6 +767,7 @@ struct Index {
   }
 
   private openScenarios(): void {
+    SpeechService.session.cancel();
     if (this.realChatMode) { this.notice('当前为真实对话', '切换为演示模式后可选择演示场景。'); return; }
     if (this.generating || this.executing || this.searchBusy) {
       return;
@@ -727,6 +779,7 @@ struct Index {
   }
 
   private newConversation(): void {
+    if (this.speech.busy) SpeechService.session.cancel();
     if (this.blocked()) {
       return;
     }
@@ -744,6 +797,7 @@ struct Index {
   }
 
   private resetConversation(): void {
+    SpeechService.session.cancel();
     RuntimeSearchService.session.clearConversation();
     RuntimeKnowledgeService.session.clearConversation();
     if (this.blocked()) {
@@ -758,7 +812,8 @@ struct Index {
     this.requestId = '';
     this.operationId = '';
     this.messages = [];
-    this.input = '';
+    this.input = ''; this.voiceDraft = undefined; this.voiceText = '';
+    this.searchVoiceQuery = false; this.knowledgeVoiceQuery = false;
     this.result = undefined;
     this.requestState = RequestState.Unsupported;
     this.scenario = DemoScenario.Normal;
@@ -950,8 +1005,8 @@ struct Index {
           Button({ type: ButtonType.Circle }) {
             AppIcon({ source: $r('app.media.chat_newchat') })
           }.width(44).height(44).backgroundColor(Color.Transparent)
-            .accessibilityText(this.blocked() ? '开始新对话，请先处理当前任务' : '开始新对话')
-            .id('chat-new').enabled(!this.blocked()).opacity(this.blocked() ? 0.4 : 1)
+            .accessibilityText(this.speech.busy ? '取消语音并开始新对话' : (this.blocked() ? '开始新对话，请先处理当前任务' : '开始新对话'))
+            .id('chat-new').enabled(!this.blocked() || this.speech.busy).opacity(this.blocked() && !this.speech.busy ? 0.4 : 1)
             .onClick(() => this.newConversation())
         }.padding({ left: 3, right: 3 }).borderRadius(28).backgroundColor(Theme.surface)
           .shadow({ radius: 16, color: Theme.shadow, offsetY: 3 })
@@ -971,9 +1026,21 @@ struct Index {
         if (message.isUser) {
           Row() {
             Blank().width('8%')
-            Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
-              .backgroundColor(Theme.bubble).borderRadius({ topLeft: 20, topRight: 20, bottomLeft: 20, bottomRight: 6 })
-              .constraintSize({ maxWidth: '92%' }).accessibilityText(`你：${message.text}`)
+            if (message.voice !== undefined) {
+              Column({ space: 6 }) {
+                VoiceMessageBubble({ recording: message.voice, playingId: this.voicePlayingId,
+                  onPlay: (clip: VoiceClip): void => this.playVoice(clip) })
+                if (message.text.length > 0) {
+                  Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
+                    .backgroundColor(Theme.bubble).borderRadius(20).width('100%')
+                    .accessibilityText(`你补充的文字：${message.text}`)
+                }
+              }.constraintSize({ maxWidth: '92%' }).alignItems(HorizontalAlign.End)
+            } else {
+              Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
+                .backgroundColor(Theme.bubble).borderRadius({ topLeft: 20, topRight: 20, bottomLeft: 20, bottomRight: 6 })
+                .constraintSize({ maxWidth: '92%' }).accessibilityText(`你：${message.text}`)
+            }
           }.width('100%').justifyContent(FlexAlign.End)
         } else if (message.searchId !== undefined) {
           Column({ space: 12 }) {
@@ -1186,10 +1253,140 @@ struct Index {
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ bottom: 20 })
   }
 
+  private refreshVoiceArchive(): void {
+    try { this.voiceArchive = SpeechService.archive.list(); } catch (_) { this.voiceMessage = '读取已保存录音失败，请重试。'; }
+  }
+
+  private playVoice(clip: VoiceClip): void {
+    if (this.speech.busy) return;
+    void SpeechService.playback.play(clip).catch((): void => { this.voiceMessage = '录音播放或释放失败，请重试。'; });
+  }
+
+  private deleteVoice(clip: VoiceClip): void {
+    this.getUIContext().showAlertDialog({ title: '删除这条录音？', message: '只删除这条本机录音，删除后无法恢复。',
+      primaryButton: { value: '保留', action: (): void => {} },
+      secondaryButton: { value: '删除', action: (): void => {
+        void SpeechService.playback.stop().then((): void => {
+          SpeechService.archive.remove(clip);
+          if (this.voiceDraft?.id === clip.id) { this.voiceDraft = undefined; this.voiceText = ''; }
+          this.refreshVoiceArchive();
+        }).catch((): void => { this.voiceMessage = '录音删除失败，文件仍保留。'; });
+      } }
+    });
+  }
+
+  private composerLength(): number {
+    return this.voiceDraft === undefined ? this.input.length : composeVoiceMessage(this.voiceText, this.input).length;
+  }
+
+  private async sendVoice(): Promise<void> {
+    const clip = this.voiceDraft; const transcript = this.voiceText; const supplement = this.input;
+    const text = composeVoiceMessage(transcript, supplement);
+    if (clip === undefined || this.blocked() || text.length === 0 || text.length > 500) return;
+    if (!this.realChatMode) { this.notice('请先启用真实对话', '录音已保存在本机。启用助手后可发送语音消息，转写不会显示。'); return; }
+    if (this.searchEnabled && (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance)) {
+      this.notice('真实搜索尚不可用', '录音已保存，请先准备搜索会话。'); return;
+    }
+    if (!this.searchEnabled && (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY ||
+      this.runtimeChat.requestCount >= this.runtimeChat.maxRequests)) {
+      this.notice('真实对话尚不可用', '录音已保存，请启用有剩余次数的会话后发送。'); return;
+    }
+    const message: ChatMessage = { id: this.service.nextId('message'), isUser: true, text: supplement.trim(), voice: clip };
+    this.messages = this.messages.concat([message]); this.voiceDraft = undefined; this.voiceText = ''; this.input = '';
+    this.hiddenVoiceQueries.add(text);
+    this.searchVoiceQuery = this.searchEnabled; this.knowledgeVoiceQuery = this.knowledgeEnabled && !this.searchEnabled;
+    try {
+      if (this.searchEnabled) { await RuntimeSearchService.session.send(text); }
+      else { await RuntimeChatService.session.send(text); }
+    } catch {
+      if (this.alive) {
+        this.messages = this.messages.filter((item: ChatMessage): boolean => item.id !== message.id);
+        if (this.voiceDraft === undefined && this.input.length === 0) {
+          this.voiceDraft = clip; this.voiceText = transcript; this.input = supplement;
+        }
+        this.notice('本次语音消息未确认接收', '草稿已保留；请核对会话状态后重试。');
+      }
+    }
+    this.scroller.scrollEdge(Edge.Bottom);
+  }
+
+  @Builder
+  voiceArchivePanel() {
+    Column({ space: 8 }) {
+      Row() {
+        Button(this.voiceArchiveOpen ? '收起录音' : `已保存语音 · ${this.voiceArchive.length}`)
+          .height(44).fontSize(12).fontColor(Theme.accent).backgroundColor(Color.Transparent).id('voice-archive-toggle')
+          .enabled(!this.speech.busy).onClick((): void => { this.refreshVoiceArchive(); this.voiceArchiveOpen = !this.voiceArchiveOpen; })
+        Blank()
+        if (this.voiceArchiveOpen) { Text('仅本机保存').fontSize(11).fontColor(Theme.muted) }
+      }.width('100%')
+      if (this.voiceMessage.length > 0) { Text(this.voiceMessage).fontSize(12).fontColor(Theme.danger) }
+      if (this.voiceArchiveOpen) {
+        Scroll() {
+          Column({ space: 8 }) {
+            ForEach(this.voiceArchive, (clip: VoiceClip): void => {
+              Row({ space: 6 }) {
+                VoiceMessageBubble({ recording: clip, playingId: this.voicePlayingId,
+                  onPlay: (item: VoiceClip): void => this.playVoice(item) })
+                Blank()
+                Button('删除').height(44).fontSize(12).fontColor(Theme.danger).backgroundColor(Color.Transparent)
+                  .id(`voice-delete-${clip.id}`).onClick((): void => this.deleteVoice(clip))
+              }.width('100%')
+            }, (clip: VoiceClip): string => clip.id)
+            if (this.voiceArchive.length === 0) { Text('还没有保存的录音').fontSize(12).fontColor(Theme.muted) }
+          }.width('100%')
+        }.constraintSize({ maxHeight: 180 }).width('100%')
+      }
+    }.width('100%')
+  }
+
+  private startSpeech(): void {
+    if (this.blocked() || this.input.trim().length > 0) return;
+    this.inputController.stopEditing();
+    void SpeechService.playback.stop().then((): void => {
+      if (!this.blocked()) void SpeechService.session.start();
+    }).catch((): void => { this.voiceMessage = '请先停止播放后再录音。'; });
+  }
+
+  @Builder
+  speechPanel() {
+    if (this.speech.busy || this.speech.message.length > 0) {
+      Column({ space: 8 }) {
+        Row({ space: 8 }) {
+          AppIcon({ source: $r('app.media.chat_wave'), size: 20 })
+          Text(this.speech.message).fontSize(13)
+            .fontColor(this.speech.phase === SpeechPhase.Error ? Theme.danger : Theme.accent).layoutWeight(1)
+          if (!this.speech.busy) {
+            Button({ type: ButtonType.Circle }) {
+              AppIcon({ source: $r('app.media.ui_close'), size: 14 })
+            }.width(40).height(40).backgroundColor(Color.Transparent)
+              .id('speech-dismiss').accessibilityText('关闭语音提示')
+              .onClick((): void => SpeechService.session.dismissMessage())
+          }
+        }.width('100%')
+        if (this.speech.busy) {
+          Row({ space: 8 }) {
+            Text('普通话 · 本机离线识别').fontSize(11).fontColor(Theme.muted).layoutWeight(1)
+            if (this.speech.phase === SpeechPhase.Listening) {
+              Button('结束').height(44).fontSize(14).fontColor(Color.White).backgroundColor(Theme.accent)
+                .id('speech-finish').accessibilityText('结束录音并整理文字')
+                .onClick(() => SpeechService.session.finish())
+            }
+            Button('取消').height(44).fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.inputSurface)
+              .id('speech-cancel').accessibilityText('取消语音输入并释放麦克风')
+              .onClick(() => SpeechService.session.cancel())
+          }.width('100%')
+        }
+      }.width('100%').padding(12).backgroundColor(Theme.soft).borderRadius(18).id('speech-status')
+    }
+  }
+
   @Builder
   composer() {
     Column({ space: 8 }) {
-      if (this.input.length === 0 && !this.blocked()) {
+      this.speechPanel()
+      this.voiceArchivePanel()
+      if (this.input.length === 0 && this.voiceDraft === undefined && !this.blocked()) {
         Row({ space: 6 }) {
           Text('试试').fontSize(Theme.noteSize).fontColor(Theme.muted)
           Text(this.sampleText()).fontSize(13).fontColor(Theme.accent).maxLines(1)
@@ -1198,11 +1395,23 @@ struct Index {
           .id('chat-sample').accessibilityText(`填入示例：${this.sampleText()}`).onClick(() => this.useSample())
       }
       Column({ space: 6 }) {
-        TextArea({ text: this.input, placeholder: '发消息，或说说你的想法…', controller: this.inputController })
+        if (this.voiceDraft !== undefined) {
+          Row({ space: 8 }) {
+            VoiceMessageBubble({ recording: this.voiceDraft, playingId: this.voicePlayingId,
+              onPlay: (clip: VoiceClip): void => this.playVoice(clip) })
+            Blank()
+            Button('移除草稿').height(44).fontSize(12).fontColor(Theme.muted).backgroundColor(Color.Transparent)
+              .id('voice-discard').enabled(!this.blocked())
+              .onClick((): void => { this.voiceDraft = undefined; this.voiceText = ''; void SpeechService.session.cancel(); })
+          }.width('100%')
+        }
+        TextArea({ text: this.input, placeholder: this.voiceDraft === undefined ? '发消息，或说说你的想法…' :
+          '补充文字（可选），和语音一起发送…', controller: this.inputController })
           .fontSize(Theme.bodySize).fontColor(Theme.ink).placeholderColor(Theme.muted).backgroundColor(Color.Transparent)
           .constraintSize({ minHeight: 40, maxHeight: 120 }).width('100%').padding({ left: 6, right: 6, top: 4, bottom: 4 })
           .enabled(!this.blocked()).onChange((value: string) => this.input = value)
-          .accessibilityText('写下想做的事，最多 500 字').id('chat-input')
+          .accessibilityText(this.voiceDraft === undefined ? '写下想做的事，最多 500 字' :
+            '补充文字，与语音合计最多 500 字；转写内容不显示').id('chat-input')
         Row({ space: 6 }) {
           ModeChip({ icon: $r('app.media.chat_globe'), label: '搜索', on: this.searchEnabled, disabled: this.blocked(),
             chipId: 'chat-search-toggle',
@@ -1216,30 +1425,31 @@ struct Index {
           Row() {
             Button({ type: ButtonType.Circle }) {
               AppIcon({ source: $r('app.media.chat_plus'), size: 26 })
-            }.width(44).height(44).backgroundColor(Color.Transparent).onClick(() => this.attachments())
+            }.width(44).height(44).backgroundColor(Color.Transparent).enabled(!this.blocked()).onClick(() => this.attachments())
               .accessibilityText('添加图片或文件，待接入')
-            if (this.input.trim().length > 0) {
+            if (this.input.trim().length > 0 || this.voiceDraft !== undefined) {
               Button({ type: ButtonType.Circle }) {
                 AppIcon({ source: $r('app.media.chat_up'), size: 22})
               }.width(44).height(44).backgroundColor(Theme.accent).accessibilityText('发送消息').id('chat-send')
-                .enabled(!this.blocked() && this.input.length <= 500).onClick(() => this.send())
+                .enabled(!this.blocked() && this.composerLength() <= 500 &&
+                  (this.voiceDraft === undefined || this.voiceText.trim().length > 0)).onClick(() => this.send())
             } else {
               Button({ type: ButtonType.Circle }) {
                 AppIcon({ source: $r('app.media.chat_wave'), size: 26 })
-              }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('语音输入，待接入')
-                .onClick(() => this.notice('语音输入待接入', '本次不会开启麦克风或录音。可以点上方「试试」体验确认流程。'))
+              }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('开始普通话语音输入')
+                .id('chat-speech').enabled(!this.blocked()).onClick(() => this.startSpeech())
             }
           }
         }.width('100%').alignItems(VerticalAlign.Center)
-        if (this.input.length >= 400) {
-          Text(`${this.input.length} / 500`).fontSize(11)
-            .fontColor(this.input.length > 500 ? Theme.danger : Theme.muted).width('100%').textAlign(TextAlign.End)
+        if (this.composerLength() >= 400) {
+          Text(`${this.composerLength()} / 500${this.voiceDraft === undefined ? '' : '（含语音）'}`).fontSize(11)
+            .fontColor(this.composerLength() > 500 ? Theme.danger : Theme.muted).width('100%').textAlign(TextAlign.End)
         }
       }.width('100%').padding({ left: 10, right: 8, top: 8, bottom: 6 })
         .backgroundColor(Theme.inputSurface).borderRadius(24)
-        .border({ width: 1, color: this.input.length > 500 ? Theme.danger : Theme.line })
-      if (this.input.length > 500) {
-        Text('最多 500 字，请缩短后发送。').fontSize(12).fontColor(Theme.danger).width('100%')
+        .border({ width: 1, color: this.composerLength() > 500 ? Theme.danger : Theme.line })
+      if (this.composerLength() > 500) {
+        Text(this.voiceDraft === undefined ? '最多 500 字，请缩短后发送。' : '语音与补充文字合计最多 500 字，请减少补充文字或分段录音。').fontSize(12).fontColor(Theme.danger).width('100%')
       }
       Text(this.composerHint()).fontSize(11).fontColor(Theme.muted).textAlign(TextAlign.Center).width('100%')
         .id('chat-composer-hint')

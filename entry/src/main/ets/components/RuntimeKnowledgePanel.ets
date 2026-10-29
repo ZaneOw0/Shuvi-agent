@@ -6,9 +6,14 @@ import { Theme } from './Theme';
 /** Authorization status and actual evidence; the answer stays in the ordinary conversation. */
 @Component
 export struct RuntimeKnowledgePanel {
-  @Prop view: RuntimeKnowledgeView = new RuntimeKnowledgeView();
+  @Prop @Watch('viewChanged') view: RuntimeKnowledgeView = new RuntimeKnowledgeView();
+  @Prop hideQuery: boolean = false;
   @State sourcesOpen: boolean = false;
   onDisable: () => void = (): void => {};
+  private shownQuery: string = '';
+  private viewChanged(): void {
+    if (this.view.query !== this.shownQuery) { this.shownQuery = this.view.query; this.sourcesOpen = false; }
+  }
   build() {
     Column({ space: 10 }) {
       Row({ space: 8 }) {
@@ -33,7 +38,7 @@ export struct RuntimeKnowledgePanel {
           ForEach(this.view.citations, (hit: KnowledgeRuntimeCitation) => {
             Column({ space: 6 }) {
               Text('[' + hit.citationId.toString() + '] ' + hit.title).fontSize(14).fontColor(Theme.ink)
-              Text(hit.kind + ' · ' + (hit.evidence === 'Vector' ? '语义检索' : '字面命中'))
+              Text(hit.kind + ' · ' + (hit.evidence === 'Vector' ? '语义检索' : hit.matchKind === 'Keyword' ? '关键词命中' : '字面命中'))
                 .fontSize(12).fontColor(Theme.muted)
               Text(hit.excerpt).fontSize(13).fontColor(Theme.muted).lineHeight(19).width('100%')
             }.alignItems(HorizontalAlign.Start).width('100%').padding(10)
