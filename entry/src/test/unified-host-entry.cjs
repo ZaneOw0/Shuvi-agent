@@ -9,6 +9,8 @@ const { toPosix, relativePosix, readTextLf } = require('./lib/portable.cjs');
 const project = path.resolve(__dirname, '../../..');
 const root = path.join(project, 'entry/src/main/ets/knowledge');
 const allowed = [
+  'domain/KnowledgeAgentPorts','application/KnowledgeAgentSearchAdapter','application/KnowledgeSemanticRuntimeSearchAdapter','application/KnowledgeQueryAuthorization',
+  'domain/KnowledgeLexicalPorts','pipeline/KnowledgeLexicalPolicy','infra/KnowledgeLexicalRepository',
   'domain/ParsedDocumentModels', 'domain/ParsedDocumentPorts', 'domain/KnowledgeDatabasePorts', 'domain/KnowledgeRuntimePorts', 'domain/UnifiedKnowledgeModels', 'domain/VisionModels',
   'domain/KnowledgeStorageScope', 'domain/PdfKnowledgeModels', 'domain/TextKnowledgeModels',
   'domain/TextKnowledgePorts', 'domain/DocumentParseModels', 'domain/KnowledgePorts',
@@ -152,7 +154,7 @@ exports.run = async () => {
   if (process.env.CAPTURE_SAFE_HOST !== '1' || process.env.CAPTURE_HOST_ONLY !== '1') throw Error('CaptureHostBoundaryRequired');
   const h=exports.harness(); let passed=0, failed=0;
   if (new Set(allowed).size!==allowed.length || new Set(exports.changedEts).size!==exports.changedEts.length) throw Error('DuplicateCanonicalInput');
-  for (const [id,run] of require('./unified-store-host-cases.cjs').cases(h).concat(require('./knowledge-database-adapter-host-cases.cjs').cases(h),require('./unified-parsing-host-cases.cjs').cases(h),require('./unified-automation-host-cases.cjs').cases(h),require('./unified-migration-host-cases.cjs').cases(h),require('./unified-search-host-cases.cjs').cases(h),require('./unified-lifecycle-host-cases.cjs').cases(h),require('./unified-interruption-host-cases.cjs').cases(h),require('./pdf-flow-host-cases.cjs').cases(h),require('./pdfjs-host-cases.cjs').cases(h))) {
+  for (const [id,run] of require('./unified-store-host-cases.cjs').cases(h).concat(require('./knowledge-lexical-host-cases.cjs').cases(h),require('./knowledge-database-adapter-host-cases.cjs').cases(h),require('./unified-parsing-host-cases.cjs').cases(h),require('./unified-automation-host-cases.cjs').cases(h),require('./unified-migration-host-cases.cjs').cases(h),require('./unified-search-host-cases.cjs').cases(h),require('./unified-lifecycle-host-cases.cjs').cases(h),require('./unified-interruption-host-cases.cjs').cases(h),require('./pdf-flow-host-cases.cjs').cases(h),require('./pdfjs-host-cases.cjs').cases(h))) {
     let watchdog;
     try { await Promise.race([run(),new Promise((resolve,reject)=>{watchdog=setTimeout(()=>reject(Error('HostCaseTimeout')),15000);})]); passed++; console.log(`UPD_HOST PASS case=${id}`); }
     catch (error) { failed++; console.log(`UPD_HOST FAIL case=${id} category=${error?.constructor?.name || 'Error'}`); }

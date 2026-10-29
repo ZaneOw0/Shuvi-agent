@@ -110,7 +110,7 @@ export class ModelKnowledgeTools implements ModelLoopToolsPort {
   private modelHits(): KnowledgeModelHit[] {
     return this.view.citations.map((hit: KnowledgeRuntimeCitation): KnowledgeModelHit => {
       const value: KnowledgeModelHit = new KnowledgeModelHit(); value.citation = hit.citationId; value.title = hit.title;
-      value.excerpt = hit.excerpt; value.evidenceType = hit.kind; value.matchKind = hit.evidence === 'Vector' ? 'Semantic' : 'Literal'; return value;
+      value.excerpt = hit.excerpt; value.evidenceType = hit.evidenceType || hit.kind; value.matchKind = hit.matchKind || (hit.evidence === 'Vector' ? 'Semantic' : 'Literal'); return value;
     });
   }
   private async invokeOnce(name: string, json: string, callId: string): Promise<string> {
@@ -136,7 +136,7 @@ export class ModelKnowledgeTools implements ModelLoopToolsPort {
       const wire: KnowledgeModelResult = new KnowledgeModelResult(); wire.status = result.status; wire.route = result.route;
       wire.fallbackReason = result.fallbackReason; wire.partial = !result.complete; wire.hasMore = result.hasMore; wire.hits = this.modelHits();
       this.view.stage = 'answering'; this.view.message = result.route === 'semantic' ? '语义检索完成，正在整理回答。' :
-        '本机字面检索（FTS5 尚未接入）已返回；' + (result.fallbackReason ? '语义不可用，' : '') + '正在整理回答。';
+        (result.complete ? '关键词检索已返回；' : '关键词检索返回部分范围；') + '正在整理回答。';
       this.publish(); return JSON.stringify(wire);
     } catch {
       this.view.stage = 'retrievalFailed'; this.view.message = '本次知识库工具未完成，未自动重试可能计费的请求。'; this.publish();

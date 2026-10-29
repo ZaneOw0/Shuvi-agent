@@ -1,3 +1,4 @@
+import { KnowledgeLexicalRepository } from './KnowledgeLexicalRepository';
 import { common } from '@kit.AbilityKit';
 import { KnowledgePlatformIdentity } from './KnowledgeIdentity';
 import { KnowledgeAgentSearchAdapter } from '../application/KnowledgeAgentSearchAdapter';
@@ -98,6 +99,7 @@ export class KnowledgeAssembly {
   unifiedSettings: UnifiedSettingsService;
   migration: ParsedDocumentMigrationService;
   querySession: KnowledgeQuerySession;
+  private lexical: KnowledgeLexicalRepository;
   unifiedHistory: UnifiedKnowledgeHistoryRepository;
   knowledgeDatabase: KnowledgeDatabaseAdapter;
   runtimeSearch: KnowledgeRuntimeSearchAdapter;
@@ -191,6 +193,7 @@ export class KnowledgeAssembly {
     const queryEngine: UnifiedQueryService=new UnifiedQueryService(queryRepository,queryRepository,this.unified,this.vectors,unifiedConfig,counter,transport,new KnowledgePlatformIdentity()); this.runtimeQueryEngine=queryEngine;
     queryRepository.queryAuthorization = this.queryAuthorization; queryEngine.queryAuthorization = this.queryAuthorization;
     this.unifiedHistory=new UnifiedKnowledgeHistoryRepository(this.unified,this.unifiedAssets,queryRepository);
+    this.lexical=new KnowledgeLexicalRepository(this.host,this.unified,new KnowledgePlatformIdentity());
     this.querySession=this.createQuerySession();
     this.unifiedLifecycle=new ParsedDocumentLifecycle(this.unified,this.unifiedAssets,this.unifiedVectors,(): void=> { this.querySession.invalidate(); },(): void=> { this.changed(); });
     this.unifiedQueue.attachSettled(async (): Promise<void>=> { await this.unifiedLifecycle.sync(); });
@@ -226,17 +229,17 @@ export class KnowledgeAssembly {
   changed(): void { for (const listener of this.listeners) { listener(); } }
   createQuerySession(): KnowledgeQuerySession {
     return new KnowledgeQuerySession(this.runtimeQueryRepository,this.runtimeQueryEngine,this.runtimeUnifiedConfig,
-      this.unifiedHistory,new KnowledgePlatformIdentity());
+      this.unifiedHistory,new KnowledgePlatformIdentity(),this.lexical);
   }
   /** Chat RAG: same scope, engine and config, but nothing is written to the knowledge page search history. */
   createRagQuerySession(): KnowledgeQuerySession {
     return new KnowledgeQuerySession(this.runtimeQueryRepository,this.runtimeQueryEngine,this.runtimeUnifiedConfig,
-      new EphemeralQueryHistory(),new KnowledgePlatformIdentity());
+      new EphemeralQueryHistory(),new KnowledgePlatformIdentity(),this.lexical);
   }
   createAgentSearch(): KnowledgeAgentSearchAdapter {
     return new KnowledgeAgentSearchAdapter(this.runtimeQueryRepository, this.runtimeUnifiedConfig,
       (): KnowledgeQuerySession => this.createRagQuerySession(),
-      (): Promise<void> => this.acquire(true), (): Promise<void> => this.release(), this.queryAuthorization);
+      (): Promise<void> => this.acquire(true), (): Promise<void> => this.release(), this.queryAuthorization, this.lexical);
   }
   async ragReadiness(): Promise<KnowledgeRagReadiness> {
     const result: KnowledgeRagReadiness=new KnowledgeRagReadiness();

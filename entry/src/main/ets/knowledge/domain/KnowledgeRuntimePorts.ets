@@ -6,6 +6,7 @@ export class KnowledgeRuntimeSearchRequest {
 }
 
 export class KnowledgeRuntimeCitation {
+  engine: string=''; matchKind: string=''; evidenceType: string='';
   citationId: number = 0;
   evidenceId: string = '';
   documentId: string = '';

@@ -1,3 +1,4 @@
+import { KnowledgeLexicalSearchPort, KnowledgeLexicalRequest, KnowledgeLexicalResult } from '../domain/KnowledgeLexicalPorts';
 import { KnowledgeAgentCapabilities, KnowledgeAgentContext, KnowledgeAgentQuery, KnowledgeAgentResult,
   KnowledgeAgentSearchPort } from '../domain/KnowledgeAgentPorts';
 import { KnowledgeRuntimeCitation } from '../domain/KnowledgeRuntimePorts';
@@ -28,8 +29,10 @@ export class KnowledgeAgentSearchAdapter implements KnowledgeAgentSearchPort {
   private closing?: Promise<void>;
   private readonly evidence: Map<string, UnifiedSearchCard> = new Map<string, UnifiedSearchCard>();
   private readonly queryAuthorization?: KnowledgeQueryAuthorization;
+  private readonly lexical?: KnowledgeLexicalSearchPort;
   constructor(scope: UnifiedQueryScopePort, config: UnifiedEmbeddingConfigPort, createSession: () => KnowledgeQuerySession,
-    acquire: () => Promise<void>, release: () => Promise<void>, queryAuthorization?: KnowledgeQueryAuthorization) {
+    acquire: () => Promise<void>, release: () => Promise<void>, queryAuthorization?: KnowledgeQueryAuthorization, lexical?: KnowledgeLexicalSearchPort) {
+    this.lexical=lexical;
     this.scope = scope; this.config = config; this.createSession = createSession; this.acquire = acquire; this.release = release;
     this.queryAuthorization = queryAuthorization;
   }
@@ -47,6 +50,7 @@ export class KnowledgeAgentSearchAdapter implements KnowledgeAgentSearchPort {
   async capabilities(): Promise<KnowledgeAgentCapabilities> {
     const result: KnowledgeAgentCapabilities = new KnowledgeAgentCapabilities();
     try {
+      if (this.lexical!==undefined && this.opened) { const local=await this.lexical.capabilities(); result.directReady=local.directReady; result.storeState='ready'; result.reasonCode='LocalLexicalReady'; const config=this.config.currentConfig(); result.semanticReady=!config.mutationPending && config.provider==='SiliconFlow' && config.modelId==='BAAI/bge-m3'; return result; }
       const scope: UnifiedQueryScope = await this.local(new ParsedCancellation());
       result.storeState = scope.complete ? 'ready' : 'partial'; result.directReady = scope.complete;
       const config = this.config.currentConfig();
@@ -57,7 +61,7 @@ export class KnowledgeAgentSearchAdapter implements KnowledgeAgentSearchPort {
   }
   async search(query: KnowledgeAgentQuery, context: KnowledgeAgentContext, cancel: ParsedCancellation): Promise<KnowledgeAgentResult> {
     if (!context.excerptEgressAllowed || this.active !== undefined) { throw new Error('KNOWLEDGE_DENIED'); }
-    cancel.check(); const scope: UnifiedQueryScope = await this.local(cancel);
+    cancel.check(); if (!this.opened) { throw new Error('KNOWLEDGE_STORE_UNAVAILABLE'); } const scope: UnifiedQueryScope = this.lexical===undefined?await this.local(cancel):new UnifiedQueryScope(); if (this.lexical!==undefined) { scope.complete=true; }
     const result: KnowledgeAgentResult = new KnowledgeAgentResult(); result.scopeRevision = scope.localHash;
     result.complete = scope.complete;
     const documents: Set<string> = new Set<string>();
@@ -88,9 +92,20 @@ export class KnowledgeAgentSearchAdapter implements KnowledgeAgentSearchPort {
       } finally { this.active = undefined; await session.close(); }
     } else if (query.mode !== 'direct') { result.fallbackReason = 'QueryConsentMissing'; }
     if (candidates.length === 0) {
-      // Existing unified literal policy. FTS5 is a separately tracked spec 14 prerequisite, never mislabel this as FTS.
-      for (const word of query.keywords) { for (const card of unifiedLocalDirect(scope, word)) { add(card); } }
-      result.route = 'direct'; result.engine = 'literal-scan';
+      // Page and Agent share the lexical application port; legacy callers retain their literal policy.
+      if (this.lexical!==undefined) {
+        const request: KnowledgeLexicalRequest=new KnowledgeLexicalRequest(); request.query=query.query; request.keywords=query.keywords;
+        let local: KnowledgeLexicalResult=await this.lexical.search(request,cancel);
+        // One bounded continuation also covers descriptions when the body pass was exhausted.
+        for (const card of local.cards) { add(card); }
+        if (local.hasMore && candidates.length<query.topK) { request.cursor=local.cursor; request.scopeRevision=local.scopeRevision; local=await this.lexical.search(request,cancel); for (const card of local.cards) { add(card); } }
+        result.engine=local.engine; result.scopeRevision=local.scopeRevision; result.complete=!local.hasMore; result.hasMore=local.hasMore; result.readableDocuments=local.readableDocuments; result.unupgraded=local.scope.unupgraded;
+        if (local.fallbackReason.length>0) { result.fallbackReason=local.fallbackReason; }
+      } else {
+        for (const word of query.keywords) { for (const card of unifiedLocalDirect(scope, word)) { add(card); } }
+        result.engine = 'literal-scan';
+      }
+      result.route = 'direct';
     }
     let remaining: number = 3200;
     for (let pass: number = 0; pass < 2; pass++) {
@@ -99,11 +114,13 @@ export class KnowledgeAgentSearchAdapter implements KnowledgeAgentSearchPort {
         if (result.hits.length >= query.topK || remaining <= 0) { result.hasMore = true; break; }
         if (!card.current || !await this.scope.visible(card, false) || ragHeadingLike(card.text, card.title) !== (pass === 1)) { continue; }
         const vector: boolean = card.reasons.some((reason): boolean => reason.route === 'Vector');
-        const direct: boolean = card.reasons.some((reason): boolean => reason.route === 'BodyDirect' || reason.route === 'OcrDirect');
+        const direct: boolean = card.reasons.some((reason): boolean => reason.route === 'BodyDirect' || reason.route === 'OcrDirect' || reason.route === 'Keyword');
         if (!vector && !direct || !card.text.trim()) { continue; }
         const hit: KnowledgeRuntimeCitation = new KnowledgeRuntimeCitation(); hit.citationId = result.hits.length + 1;
         hit.evidenceId = card.key; hit.documentId = card.documentKey; hit.generation = card.generation;
-        hit.title = card.title.slice(0, 256); hit.excerpt = card.text.trim().slice(0, Math.min(800, remaining));
+        const lexicalReason=card.reasons.find((reason): boolean=>reason.route==='Keyword'); const evidenceText: string=lexicalReason?.text ?? card.text;
+        hit.title = card.title.slice(0, 256); hit.excerpt = evidenceText.trim().slice(0, Math.min(800, remaining));
+        hit.matchKind=vector?'Semantic':lexicalReason?.matchKind ?? 'Literal'; hit.evidenceType=lexicalReason?.evidenceType ?? (vector?'Vector':'Body'); hit.engine=lexicalReason?.engine ?? result.engine;
         hit.kind = card.kind; hit.evidence = vector ? 'Vector' : 'BodyDirect';
         result.truncated = result.truncated || hit.excerpt.length < card.text.trim().length;
         this.evidence.set(hit.evidenceId, card); result.hits.push(hit); remaining -= hit.excerpt.length;
@@ -111,15 +128,14 @@ export class KnowledgeAgentSearchAdapter implements KnowledgeAgentSearchPort {
     }
     cancel.check();
     if (!await this.validate(result.hits, cancel)) { throw new Error('KNOWLEDGE_EVIDENCE_CHANGED'); }
-    result.status = result.hits.length > 0 ? 'ok' : 'empty'; return result;
+    result.status = !result.complete?'partial':result.hits.length > 0 ? 'ok' : 'empty'; return result;
   }
   async validate(hits: KnowledgeRuntimeCitation[], cancel: ParsedCancellation): Promise<boolean> {
-    const scope: UnifiedQueryScope = await this.local(cancel);
-    if (!scope.complete) { return false; }
+    if (this.lexical===undefined) { const scope: UnifiedQueryScope = await this.local(cancel); if (!scope.complete) { return false; } }
     for (const hit of hits) {
       const card: UnifiedSearchCard | undefined = this.evidence.get(hit.evidenceId);
       if (card === undefined || card.documentKey !== hit.documentId || card.generation !== hit.generation ||
-        !card.text.includes(hit.excerpt) || !await this.scope.visible(card, false)) { return false; }
+        !(card.text.includes(hit.excerpt) || card.reasons.some((reason): boolean=>reason.text.includes(hit.excerpt))) || !await this.scope.visible(card, false) || this.lexical!==undefined && !await this.lexical.validate([card],false,cancel)) { return false; }
       cancel.check();
     }
     return true;
