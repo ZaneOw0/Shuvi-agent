@@ -31,6 +31,11 @@ export struct RuntimeKnowledgePanel {
 
   private sourcesVisible(): boolean { return this.sourcesOpen || !knowledgeAnswerIsModel(this.view); }
 
+  private statusText(): string {
+    return this.view.lifecycle === ShuviRuntimeState.READY && !this.view.busy && this.view.query.length === 0 ?
+      '已开启：只依据你导入的资料回答，并标出来源。' : this.view.message;
+  }
+
   build() {
     Column({ space: 10 }) {
       Row({ space: 8 }) {
@@ -49,10 +54,10 @@ export struct RuntimeKnowledgePanel {
       }.width('100%')
       if (!knowledgeAnswerIsModel(this.view)) {
         // Once the labelled answer and the stage line are shown, the backend's status sentence only repeats them.
-        Text(this.view.message).fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-knowledge-status')
+        Text(this.statusText()).fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-knowledge-status')
       }
       if (this.stopped()) {
-        Text('知识库问答已停止，本次的 DeepSeek 凭据不再可用。要继续使用：停止真实对话后重新输入 Key 启用；如仍不可用，请检查 Embedding 设置与向量数据。')
+        Text('知识库问答已停止。点下方按钮回到普通对话，需要时再打开「知识库」。')
           .fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-knowledge-restart-hint')
         Button('返回普通对话').constraintSize({ minHeight: Theme.controlHeight }).borderRadius(Theme.radius)
           .backgroundColor(Theme.accent).fontColor(Color.White).id('runtime-knowledge-enable')

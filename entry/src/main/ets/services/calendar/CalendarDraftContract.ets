@@ -55,8 +55,8 @@ export class CalendarDraftContext implements ChatContextPort {
   systemPrompt(): string {
     return '你是日程草稿提取器，没有任何工具，不能创建日程、发送提醒或读取日历。只输出一个 JSON 对象，不输出 Markdown。' +
       '仅支持单次非全天日程、北京时间、一个提前提醒。按用户描述提取标题、起止时间和提前提醒分钟数，不能臆造缺失信息。' +
-      '用户明确给出时长时可以计算结束时间，相对日期按给定当前时间解析；日期/上午下午有歧义先澄清，不擅自推到明天。' +
-      '缺少日期、开始时间、结束时间或时长、提醒值，或要求重复日程、其他时区、多个日程、无提醒时，输出' +
+      '用户给出时长时按时长计算结束时间，没有说结束时间或时长时结束时间取开始时间后 1 小时；相对日期按给定当前时间解析；日期/上午下午有歧义先澄清，不擅自推到明天。' +
+      '缺少日期、开始时间、提醒值，或要求重复日程、其他时区、多个日程、无提醒时，输出' +
       '{"schemaVersion":"1.0","kind":"clarify","message":"需要补充或说明不支持的内容"}。' +
       '信息齐全则输出 {"schemaVersion":"1.0","kind":"draft","draft":{"title":"标题","startAt":"YYYY-MM-DDTHH:mm:00+08:00",' +
       '"endAt":"YYYY-MM-DDTHH:mm:00+08:00","timeZone":"Asia/Shanghai","reminderMinutes":10}}。' +

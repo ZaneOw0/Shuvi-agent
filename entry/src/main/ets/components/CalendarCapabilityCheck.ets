@@ -23,11 +23,13 @@ function groupKey(group: CalendarRecordGroup): string {
 }
 
 /**
- * Workbench calendar: Shuvi's schedules grouped by day (one line each, expanding in place), a folded "new schedule"
+ * The 日程 page: Shuvi's schedules grouped by day (one line each, expanding in place), a folded "new schedule"
  * form with pickers, and the same confirm → write → read-back session as before. Session rules are unchanged.
  */
 @Component
 export struct CalendarCapabilityCheck {
+  /** Opens 我的 → API Key 管理 when the one-sentence draft needs the DeepSeek key. */
+  onKeys: () => void = (): void => {};
   @State result: CalendarProbeResult = new CalendarProbeResult();
   @State sections: CalendarRecordSections = new CalendarRecordSections();
   @State title: string = '';
@@ -227,7 +229,7 @@ export struct CalendarCapabilityCheck {
           }.width('100%')
           if (DEBUG) {
             Row() {
-              Text('用一句话安排（DeepSeek）').fontSize(14).fontColor(Theme.accent)
+              Text('用一句话安排').fontSize(14).fontColor(Theme.accent)
               Blank()
               Text(this.quickOpen ? '▴' : '▾').fontSize(14).fontColor(Theme.accent)
             }.width('100%').constraintSize({ minHeight: Theme.controlHeight }).padding({ left: 12, right: 12 })
@@ -237,7 +239,8 @@ export struct CalendarCapabilityCheck {
             if (this.quickOpen) {
               CalendarDraftPanel({
                 onBusy: (busy: boolean): void => { this.draftBusy = busy; },
-                onDraft: (draft: CalendarProbeDraft): void => { this.fillForm(draft); CalendarProbeService.session.preview(draft); }
+                onDraft: (draft: CalendarProbeDraft): void => { this.fillForm(draft); CalendarProbeService.session.preview(draft); },
+                onKeys: (): void => { this.onKeys(); }
               })
             }
           }

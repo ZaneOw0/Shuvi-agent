@@ -18,7 +18,9 @@ import { VoiceMessageBubble } from '../components/VoiceMessageBubble';
 import { VoiceClip, composeVoiceMessage } from '../services/speech/VoiceAudio';
 import { SpeechService } from '../services/speech/SpeechService';
 import { SpeechView, SpeechPhase } from '../services/speech/SpeechSession';
-import { WorkbenchPage, ProfilePage } from '../components/FeaturePages';
+import { ProfilePage } from '../components/FeaturePages';
+import { ApiKeysView } from '../components/ApiKeysView';
+import { DeepSeekKeyService, DeepSeekKeyStatus } from '../services/model/DeepSeekCredentialStore';
 import { TextKnowledgeView } from '../knowledge/ui/TextKnowledgeView';
 import { TextKnowledgeAssembly } from '../knowledge/infra/TextKnowledgeAssembly';
 import { TextKnowledgeService } from '../knowledge/application/TextKnowledgeService';
@@ -50,7 +52,6 @@ import {
   OperationResult, OperationState, RequestState
 } from '../model/AssistantModels';
 import { MockAssistantService } from '../mock/MockAssistantService';
-import { KnowledgePlatformDiagnostics } from '../knowledge/ui/KnowledgePlatformDiagnostics';
 import { PdfPageReferenceState, ResultPageReference } from '../knowledge/domain/PdfLocalModels';
 import { KnowledgeCancellation } from '../knowledge/domain/PdfKnowledgeModels';
 import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
@@ -85,7 +86,6 @@ import { SEARCH_SAMPLE, SEARCH_SCENARIOS, SearchScenario, SearchSource, SearchSt
   searchIsBusy } from '../model/SearchModels';
 import { SourceLinkService } from '../services/SourceLinkService';
 import { DEBUG } from 'BuildProfile';
-import { RuntimeChatSetup } from '../components/RuntimeChatSetup';
 import { RuntimeChatService } from '../services/model/RuntimeChatService';
 import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { RuntimeSearchView } from '../services/model/RuntimeSearchSession';
@@ -104,11 +104,18 @@ import { RuntimeKnowledgeView } from '../services/model/RuntimeKnowledgeSession'
 import { ShuviRuntimeState } from '../services/model/ShuviRuntimeController';
 import { RuntimeAssistantCoordinator } from '../services/model/RuntimeAssistantCoordinator';
 import { KnowledgeRagReadiness } from '../knowledge/domain/KnowledgeRuntimePorts';
+import { EmbeddingCredentialStatus, EmbeddingDetectionStatus } from '../knowledge/domain/EmbeddingModels';
+import { ApiKeySync } from '../services/model/ApiKeySync';
 
 @Entry
 @Component
 struct Index {
-  @State realChatMode: boolean = false;
+  // The demo mode has no entry in the product UI any more; its code stays for the host tests and later removal.
+  @State realChatMode: boolean = true;
+  @State deepSeekStatus: DeepSeekKeyStatus = DeepSeekKeyStatus.Checking;
+  @State connecting: boolean = false;
+  @State apiKeysOpen: boolean = false;
+  @State apiKeysReady: boolean = false;
   @State runtimeChat: AssistantView = new AssistantView();
   @State runtimeSearch: RuntimeSearchView = new RuntimeSearchView();
   @State runtimeKnowledge: RuntimeKnowledgeView = new RuntimeKnowledgeView();
@@ -119,7 +126,6 @@ struct Index {
   @State imageKnowledgeOpen: boolean=false;
   @State imageKnowledgeOccurrence: string='';
   @State parsedImportOpen: boolean = false;
-  @State developerToolsOpen: boolean = false;
   @State parsedOpen: boolean = false;
   @State knowledgeOpening: boolean = false;
   @State knowledgeMessage: string = '';
@@ -173,7 +179,6 @@ struct Index {
   private pdfDocumentsPort: KnowledgeDocumentListPort | undefined = undefined;
   private embeddingService: EmbeddingService | undefined = undefined;
   @State embeddingClearEpoch: number = 0;
-  @State platformDiagnosticsOpen: boolean = false;
   @State imageIngestionOpen: boolean = false;
   @State imageSourceOpen: boolean = false;
   @State docxIngestionOpen: boolean = false;
@@ -205,9 +210,9 @@ struct Index {
   private alive: boolean = true;
   private scroller: Scroller = new Scroller();
   private inputController: TextAreaController = new TextAreaController();
-  private tabNames: string[] = ['助手', '工作台', '知识库', '我的'];
+  private tabNames: string[] = ['助手', '日程', '知识库', '我的'];
   private tabIcons: Resource[] = [
-    $r('app.media.chat_chat'), $r('app.media.chat_grid'), $r('app.media.chat_book'), $r('app.media.chat_user')
+    $r('app.media.chat_chat'), $r('app.media.chat_calendar'), $r('app.media.chat_book'), $r('app.media.chat_user')
   ];
 
   aboutToAppear(): void {
@@ -253,6 +258,14 @@ struct Index {
       if (this.alive && newCalendarCard) this.scroller.scrollEdge(Edge.Bottom);
     });
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+    void this.ensureAssistant();
+  }
+
+  // Going to the background ends every model session (EntryAbility); coming back reconnects with the stored key.
+  onPageShow(): void { void this.ensureAssistant(); }
+  onPageHide(): void {
+    this.knowledgeEnabled = false;
+    void SpeechService.session.cancel(); void SpeechService.playback.stop().catch((): void => {});
   }
 
   aboutToDisappear(): void {
@@ -275,14 +288,13 @@ struct Index {
     await this.parseAssembly?.close(); await this.sharedKnowledge?.release();
   }
 
-  onPageHide(): void { void SpeechService.session.cancel(); void SpeechService.playback.stop().catch((): void => {}); }
-
   onBackPress(): boolean {
     if (this.speech.busy) { SpeechService.session.cancel(); return true; }
     if (this.drawerOpen) {
       this.drawerOpen = false;
       return true;
     }
+    if (this.apiKeysOpen) { this.apiKeysOpen = false; return true; }
     if (this.migrationOpen) { this.migrationOpen=false; return true; }
     if (this.visionSettingsOpen) { this.visionSettingsOpen=false; return true; }
     if (this.imageKnowledgeOpen) { this.imageKnowledgeOpen=false; return true; }
@@ -291,7 +303,6 @@ struct Index {
     if (this.docxIngestionOpen) { this.docxIngestionOpen = false; this.docxIngestionService?.pause(); return true; }
     if (this.imageSourceOpen) { this.imageSourceOpen = false; this.sharedKnowledge?.imageSources.close().catch((): void => {}); return true; }
     if (this.imageIngestionOpen) { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); return true; }
-    if (this.platformDiagnosticsOpen) { this.platformDiagnosticsOpen = false; return true; }
     if (this.pdfSourceOpen) { this.pdfSourceOpen = false; return true; }
     if (this.pdfIngestionOpen) { this.pdfIngestionOpen = false; return true; }
     if (this.embeddingOpen) { this.closeEmbedding(); return true; }
@@ -323,12 +334,16 @@ struct Index {
 
   private changeTab(index: number): void {
     if (index !== this.tab) SpeechService.session.cancel();
+    const entering: boolean = index === 0 && this.tab !== 0;
     if (index !== this.tab && this.tab === 0) {
       void RuntimeSearchService.session.stop();
       void RuntimeAssistantCoordinator.stop().catch((): void => {});
       this.runtimeChat.clearEpoch++;
+      // Stopping the assistant also ends knowledge-base answering; the chip comes back off.
+      this.knowledgeEnabled = false;
     }
     this.floatingPlacement.cancelDrag();
+    if (index !== this.tab) { this.apiKeysOpen = false; }
     if (index!==this.tab) { this.migrationOpen=false; }
     if (index!==this.tab) { this.visionSettingsOpen=false; this.imageKnowledgeOpen=false; }
     if (index !== this.tab) { this.parsedOpen = false; }
@@ -351,6 +366,55 @@ struct Index {
     this.showScenarios = false;
     this.drawerOpen = false;
     this.scroller.scrollEdge(Edge.Top);
+    if (entering) { void this.ensureAssistant(); }
+  }
+
+  private openApiKeys(): void {
+    if (this.tab !== 3) { this.changeTab(3); }
+    void this.openApiKeysPage();
+  }
+  private async openApiKeysPage(): Promise<void> {
+    this.apiKeysReady = false; this.apiKeysOpen = true; this.scroller.scrollEdge(Edge.Top);
+    // The SiliconFlow and MinerU cards need their services; open them without showing their own pages.
+    try {
+      if (this.embeddingService === undefined) { await this.openEmbedding(); this.embeddingOpen = false; }
+      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+    } finally { this.apiKeysReady = true; }
+  }
+  private sessionState(): ShuviRuntimeState {
+    return this.searchEnabled ? this.runtimeSearch.lifecycle : this.runtimeChat.lifecycle;
+  }
+  private async refreshDeepSeekStatus(): Promise<void> {
+    try { this.deepSeekStatus = await DeepSeekKeyService.store.status(); }
+    catch { this.deepSeekStatus = DeepSeekKeyStatus.Unavailable; }
+  }
+
+  /**
+   * Connects the assistant — or the search session while 搜索 is on — with the DeepSeek key saved in 我的 → API Key 管理.
+   * Connecting sends no model request. A failed start is retried only when the user asks (retry), never in a loop.
+   */
+  private async ensureAssistant(retry: boolean = false): Promise<void> {
+    if (!DEBUG || !this.realChatMode || this.connecting || this.runtimeSwitching || !this.alive || this.tab !== 0 ||
+      this.knowledgeEnabled) { return; }
+    // Leaving and re-entering the assistant quickly can find the previous session still stopping.
+    for (let i = 0; i < 40 && this.alive && this.tab === 0 && this.sessionState() === ShuviRuntimeState.STOPPING; i++) {
+      await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 100); });
+    }
+    if (this.connecting || !this.alive || this.tab !== 0 || this.knowledgeEnabled) { return; }
+    const state: ShuviRuntimeState = this.sessionState();
+    if (state !== ShuviRuntimeState.IDLE && state !== ShuviRuntimeState.STOPPED && !(retry && state === ShuviRuntimeState.FAILED)) {
+      return;
+    }
+    this.connecting = true;
+    try {
+      await this.refreshDeepSeekStatus();
+      if (this.deepSeekStatus !== DeepSeekKeyStatus.Saved || !this.alive || this.tab !== 0) { return; }
+      const key: Uint8Array | undefined = await DeepSeekKeyService.store.load();
+      if (key === undefined) { await this.refreshDeepSeekStatus(); return; }
+      if (this.searchEnabled) { await this.startRuntimeSearch(key); } else { await this.startRuntimeChat(key); }
+    } catch {
+      // The session view carries the failure message; the key stays only in the device store.
+    } finally { this.connecting = false; }
   }
 
   private async openKnowledge(): Promise<void> {
@@ -438,7 +502,11 @@ struct Index {
     } catch (error) { this.parsedMessage = error instanceof Error ? error.message : '统一服务打开失败，资料保留'; }
     finally { this.parsedOpening = false; }
   }
-  private async openVisionSettings(): Promise<void> { await this.openParsed(); this.parsedOpen=false; this.visionSettingsOpen=true; }
+  private async openVisionSettings(): Promise<void> {
+    await this.openParsed(); this.parsedOpen=false;
+    await ApiKeySync.fillVisionKey(this.sharedKnowledge?.unifiedSettings);
+    this.visionSettingsOpen=true;
+  }
   private async openImageKnowledge(): Promise<void> { await this.openParsed(); this.parsedOpen=false; this.imageKnowledgeOpen=true; }
   private async openUnifiedCard(card: UnifiedSearchCard): Promise<void> {
     if (!card.current) { return; }
@@ -541,9 +609,8 @@ struct Index {
     this.messages = this.messages.concat([message]);
   }
   private openCalendarRecords(): void {
-    // Leaving the assistant tab ends the chat session as before; the workbench lists the verified native records.
+    // Leaving the assistant tab ends the chat session as before; the 日程 tab lists the verified native records.
     this.changeTab(1);
-    this.realCalendarOpen = true;
   }
 
   private async startRuntimeChat(key: Uint8Array): Promise<void> {
@@ -585,8 +652,10 @@ struct Index {
     try {
       await RuntimeSearchService.session.stop(); await RuntimeAssistantCoordinator.stop();
       if (this.alive && this.tab === 0) { this.searchEnabled = !this.searchEnabled; this.knowledgeEnabled = false; }
-    } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
+    } catch { this.notice('切换没有完成', '请稍后重试；如果一直这样，请重启应用。'); return; }
     finally { this.runtimeSwitching = false; }
+    // 搜索 on connects the search session, off reconnects the assistant; both use the saved DeepSeek key.
+    await this.ensureAssistant();
   }
 
   private async toggleKnowledge(): Promise<void> {
@@ -599,60 +668,89 @@ struct Index {
         if (this.alive && this.tab === 0) { this.knowledgeEnabled = false; }
         return;
       }
-      if (this.searchEnabled || this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
-        this.notice('请先启用普通对话', '请先使用同一份 DeepSeek Key 启用普通对话，再开启知识库 RAG。'); return;
+      if (this.searchEnabled) { this.notice('请先关闭搜索', '联网搜索和知识库问答不能同时开启。'); return; }
+      if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
+        this.notice('助手还没有连接', this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再试。' :
+          '请先在「我的 → API Key 管理」保存 DeepSeek Key。'); return;
       }
       this.ragPreparing = true;
-      const readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge();
-      if (!readiness.ready) { this.notice('知识库 RAG 尚不可用', readiness.message); return; }
+      let readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge();
+      // A saved SiliconFlow key that has not been confirmed yet (for example saved before this version) is confirmed
+      // here once with the fixed sentence, instead of asking the user to test it.
+      if (!readiness.ready && readiness.code === 'EmbeddingDetectionRequired' && await this.confirmEmbeddingKey()) {
+        readiness = await RuntimeAssistantCoordinator.enableKnowledge();
+      }
+      if (!readiness.ready) { this.notice('知识库问答暂不可用', this.ragReadinessText(readiness)); return; }
       if (this.alive && this.tab === 0) { this.knowledgeEnabled = true; this.searchEnabled = false; }
-    } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
+    } catch { this.notice('切换没有完成', '请稍后重试；如果一直这样，请重启应用。'); }
     finally { this.runtimeSwitching = false; this.ragPreparing = false; }
+  }
+
+  private async confirmEmbeddingKey(): Promise<boolean> {
+    const context = this.getUIContext().getHostContext(); if (context === undefined) { return false; }
+    if (this.sharedKnowledge === undefined) {
+      const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
+      try { await assembly.acquire(); } catch { this.sharedKnowledge = undefined; return false; }
+    }
+    const shared: KnowledgeAssembly | undefined = this.sharedKnowledge;
+    if (shared === undefined || !shared.repository.ready()) { return false; }
+    const service: EmbeddingService = shared.embedding;
+    if (service.state.credential !== EmbeddingCredentialStatus.Configured || service.state.busy) { return false; }
+    try { await service.probe(true); } catch { return false; }
+    return service.state.detection.status === EmbeddingDetectionStatus.Passed;
+  }
+
+  private ragReadinessText(readiness: KnowledgeRagReadiness): string {
+    switch (readiness.code) {
+      case 'UnifiedStoreUnavailable': return '本机知识库还没打开，请稍后再试。';
+      case 'EmbeddingConfigRequired':
+      case 'EmbeddingCredentialRequired': return '请先在「我的 → API Key 管理」保存硅基流动 Key。';
+      case 'EmbeddingDetectionRequired':
+        return '硅基流动没有确认这个 Key（Key 无效、余额不足或网络不可用）。请在「我的 → API Key 管理」检查后重新保存。';
+      case 'EmbeddingSettingsRequired': return '请先在「我的 → 嵌入模型」开启自动入库。';
+      case 'VectorKnowledgeRequired': return '知识库里还没有处理完成的资料。请先在「知识库」导入资料，等处理完成后再试。';
+      default: return readiness.message;
+    }
   }
 
   @Builder
   private runtimeChatControls() {
     Column({ space: 10 }) {
-      Button(this.realChatMode ? '清空对话并切回演示' : '清空对话并打开真实功能')
-        .fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 })
-        .enabled(!this.blocked() && this.runtimeChat.lifecycle !== ShuviRuntimeState.STARTING &&
-          this.runtimeChat.lifecycle !== ShuviRuntimeState.STOPPING)
-        .id('runtime-chat-mode').onClick((): void => { void this.switchChatMode(); })
-      if (this.realChatMode && this.knowledgeEnabled) {
+      if (this.knowledgeEnabled) {
         RuntimeKnowledgePanel({ view: this.runtimeKnowledge, hideQuery: this.knowledgeVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeKnowledge.query), onDisable: (): void => { void this.toggleKnowledge(); } })
-      } else if (this.realChatMode && this.searchEnabled) {
+      } else if (this.searchEnabled) {
         RuntimeSearchPanel({ view: this.runtimeSearch, hideQuery: this.searchVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeSearch.query) ||
-          this.hiddenVoiceQueries.has(this.runtimeSearch.preview?.query ?? ''), onStart: (key: Uint8Array): void => {
-          void this.startRuntimeSearch(key).catch((): void => {});
-        } })
-      } else if (this.realChatMode) {
-        if (this.runtimeChat.lifecycle === ShuviRuntimeState.READY || this.runtimeChat.lifecycle === ShuviRuntimeState.STARTING) {
-          // Enabled session collapses to one status row instead of a full card.
-          Row({ space: 8 }) {
-            Circle({ width: 8, height: 8 }).fill(this.runtimeChat.lifecycle === ShuviRuntimeState.READY ? Theme.ok : Theme.muted)
-            Text(this.runtimeChat.lifecycle === ShuviRuntimeState.READY ?
-              `已启用 · 剩 ${Math.max(0, this.runtimeChat.maxRequests - this.runtimeChat.requestCount)}/${this.runtimeChat.maxRequests} 轮` : '正在启用…')
-              .fontSize(13).fontColor(Theme.ink).layoutWeight(1).id('runtime-chat-status')
-            Button('停止').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(18)
-              .constraintSize({ minHeight: Theme.controlHeight, minWidth: 64 }).id('runtime-chat-stop')
-              .accessibilityText('停止真实对话，清除本次会话凭据')
-              .onClick((): void => { void RuntimeAssistantCoordinator.stop().catch((): void => {}); })
-          }.width('100%').padding({ left: 14, right: 6, top: 4, bottom: 4 }).backgroundColor(Theme.surface)
-            .borderRadius(22).border({ width: 1, color: Theme.line })
-          if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
-            Text('本次启用的对话轮数已用完；点“停止”后可重新启用。').fontSize(Theme.noteSize).fontColor(Theme.amber).width('100%')
+          this.hiddenVoiceQueries.has(this.runtimeSearch.preview?.query ?? ''), keySaved: this.deepSeekStatus === DeepSeekKeyStatus.Saved,
+          connecting: this.connecting, onConnect: (): void => { void this.ensureAssistant(true); },
+          onKeys: (): void => { this.openApiKeys(); } })
+      } else if (this.deepSeekStatus === DeepSeekKeyStatus.Missing || this.deepSeekStatus === DeepSeekKeyStatus.Unavailable) {
+        // No key yet: the only setup step left in the assistant. Keys are managed in 我的 → API Key 管理.
+        Column({ space: 10 }) {
+          Text('设置 DeepSeek Key 后即可开始对话').fontSize(Theme.titleSize).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
+          Text(this.deepSeekStatus === DeepSeekKeyStatus.Unavailable ? '本机安全存储暂时不可用，请稍后重试。' :
+            '休比用 DeepSeek 回答问题、安排日程和读写文档。Key 只保存在本机，可以在「我的 → API Key 管理」随时修改或删除。')
+            .fontSize(13).fontColor(Theme.muted).width('100%').lineHeight(20)
+          Button('去设置').fontSize(15).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(Theme.radius)
+            .width('100%').constraintSize({ minHeight: Theme.controlHeight }).id('runtime-chat-open-keys')
+            .onClick((): void => { this.openApiKeys(); })
+        }.width('100%').padding(16).alignItems(HorizontalAlign.Start).backgroundColor(Theme.surface)
+          .borderRadius(Theme.cardRadius).border({ width: 1, color: Theme.line })
+      } else if (this.runtimeChat.lifecycle === ShuviRuntimeState.FAILED || this.runtimeChat.lifecycle === ShuviRuntimeState.BLOCKED ||
+        (this.runtimeChat.lifecycle === ShuviRuntimeState.STOPPED && !this.connecting && !this.runtimeSwitching)) {
+        Row({ space: 8 }) {
+          Text(this.runtimeChat.lifecycle === ShuviRuntimeState.BLOCKED ? '助手没能正常关闭，请重启应用。' :
+            (this.runtimeChat.lifecycle === ShuviRuntimeState.STOPPED ? '助手已断开。' : '助手没有连接上。'))
+            .fontSize(13).fontColor(Theme.ink).layoutWeight(1).id('runtime-chat-message')
+          if (this.runtimeChat.lifecycle !== ShuviRuntimeState.BLOCKED) {
+            Button('重新连接').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(18)
+              .constraintSize({ minHeight: Theme.controlHeight }).enabled(!this.connecting).id('runtime-chat-retry')
+              .onClick((): void => { void this.ensureAssistant(true); })
           }
-        } else {
-          if (this.runtimeChat.lifecycle !== ShuviRuntimeState.IDLE && this.runtimeChat.lifecycle !== ShuviRuntimeState.STOPPED) {
-            Text(this.runtimeChat.message).fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-chat-message')
-          }
-          if (this.runtimeChat.lifecycle === ShuviRuntimeState.IDLE || this.runtimeChat.lifecycle === ShuviRuntimeState.STOPPED ||
-            this.runtimeChat.lifecycle === ShuviRuntimeState.FAILED) {
-            RuntimeChatSetup({ clearEpoch: this.runtimeChat.clearEpoch, onStart: (key: Uint8Array): void => {
-              void this.startRuntimeChat(key).catch((): void => {});
-            } })
-          }
-        }
+        }.width('100%').padding({ left: 14, right: 6, top: 4, bottom: 4 }).backgroundColor(Theme.surface)
+          .borderRadius(22).border({ width: 1, color: Theme.line })
+      } else if (this.runtimeChat.lifecycle === ShuviRuntimeState.READY && this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
+        Text('这段对话已经很长了，点右上角「开始新对话」继续。').fontSize(Theme.noteSize).fontColor(Theme.amber).width('100%')
+          .id('runtime-chat-limit')
       }
     }.width('100%').padding({ bottom: 12 })
   }
@@ -680,6 +778,11 @@ struct Index {
     return this.realChatMode && (this.runtimeChat.lifecycle === ShuviRuntimeState.READY ||
       this.runtimeSearch.lifecycle === ShuviRuntimeState.READY || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.READY);
   }
+  private headerStatus(): string {
+    if (this.headerConnected()) { return '休比 · 已连接'; }
+    if (this.connecting || this.sessionState() === ShuviRuntimeState.STARTING) { return '休比 · 连接中'; }
+    return this.deepSeekStatus === DeepSeekKeyStatus.Missing ? '休比 · 未设置 Key' : '休比 · 未连接';
+  }
   private composerHint(): string {
     return this.realChatMode ? (this.knowledgeEnabled ? '回答依据：我的知识库 · 来源可核对' :
       (this.searchEnabled ? '联网搜索 · 每次搜索前会征求你的同意' : '可提问、安排日程或让我写文档；日程创建前会让你确认')) :
@@ -705,15 +808,16 @@ struct Index {
       }
       if (this.searchEnabled) {
         if (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance) {
-          this.notice('真实搜索尚不可用', this.runtimeSearch.message); return;
+          this.notice('联网搜索暂不可用', this.runtimeSearch.message); return;
         }
         const query = this.input.trim(); this.input = ''; void RuntimeSearchService.session.send(query); return;
       }
       if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
-        this.notice('真实对话尚未就绪', '请先启用会话。本次未发送，也不会回退为演示回答。'); return;
+        this.notice('助手还没有连接', (this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再发送。' :
+          '请先在「我的 → API Key 管理」保存 DeepSeek Key。') + '本次没有发送，内容保留在输入框。'); return;
       }
       if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
-        this.notice('本次请求次数已用完', '请停止真实对话后重新启用。本次未发送，内容保留在输入框。'); return;
+        this.notice('这段对话已经很长了', '请点右上角「开始新对话」继续。本次没有发送，内容保留在输入框。'); return;
       }
       const message = this.input; this.input = '';
       this.inputController.stopEditing(); this.addMessage(message, true);
@@ -829,6 +933,18 @@ struct Index {
     this.requestState = RequestState.Unsupported;
     this.scenario = DemoScenario.Normal;
     this.changeTab(0);
+    // A new conversation starts a fresh assistant session, so its turn limit starts over too.
+    if (this.realChatMode && !this.searchEnabled && !this.knowledgeEnabled && this.runtimeChat.requestCount > 0) {
+      void this.restartAssistant();
+    }
+  }
+  private async restartAssistant(): Promise<void> {
+    if (this.runtimeSwitching) { return; }
+    this.runtimeSwitching = true;
+    try { await RuntimeAssistantCoordinator.stop(); this.knowledgeEnabled = false; }
+    catch { /* The failure shows in the session state; 重新连接 stays available. */ }
+    finally { this.runtimeSwitching = false; }
+    await this.ensureAssistant(true);
   }
 
   private updateSearch(turn: SearchTurn): void {
@@ -914,15 +1030,6 @@ struct Index {
     });
   }
 
-  private attachments(): void {
-    this.inputController.stopEditing();
-    this.getUIContext().showAlertDialog({
-      title: '添加内容', message: '图片与文件输入待接入，本次不会读取设备内容。',
-      primaryButton: { value: '图片 · 待接入', action: () => this.notice('图片输入待接入', '本次不会打开相册或读取图片。') },
-      secondaryButton: { value: '文件 · 待接入', action: () => this.notice('文件输入待接入', '本次不会打开文件选择器或读取文件。') }
-    });
-  }
-
   private async confirm(): Promise<void> {
     if (!this.draft || this.executing) {
       return;
@@ -985,13 +1092,12 @@ struct Index {
         if (this.tab === 0 && !(this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen)) {
           Row({ space: 6 }) {
             Circle({ width: 7, height: 7 }).fill(this.headerConnected() ? Theme.ok : Theme.line)
-            Text(this.realChatMode ? (this.headerConnected() ? '休比 · 已连接' : '休比 · 未启用') : '休比 · 演示')
+            Text(this.realChatMode ? this.headerStatus() : '休比 · 演示')
               .fontSize(12).fontColor(Theme.ink)
           }.padding({ left: 10, right: 12, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
             .id('chat-header-status')
-        } else {
-          Text(this.tab === 2 || this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen ? '本机资料 · 未同步' :
-            (this.tab === 1 && this.realCalendarOpen ? '系统日历' : '演示模式')).fontSize(11).fontColor(Theme.muted)
+        } else if (this.tab === 1 || this.tab === 2) {
+          Text(this.tab === 1 ? '系统日历' : '本机资料').fontSize(11).fontColor(Theme.muted)
             .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
         }
       }.width('34%')
@@ -1008,11 +1114,6 @@ struct Index {
         Blank()
         if (this.tab === 0) {
         Row() {
-          Button({ type: ButtonType.Circle }) {
-            AppIcon({ source: $r('app.media.chat_sliders') })
-          }.width(44).height(44).backgroundColor(Color.Transparent)
-            .accessibilityText(`演示场景设置，当前${this.searchEnabled ? this.searchScenario : this.scenario}`).id('chat-scenarios')
-            .enabled(!this.generating && !this.executing && !this.searchBusy).onClick(() => this.openScenarios())
           Button({ type: ButtonType.Circle }) {
             AppIcon({ source: $r('app.media.chat_newchat') })
           }.width(44).height(44).backgroundColor(Color.Transparent)
@@ -1294,17 +1395,20 @@ struct Index {
     const clip = this.voiceDraft; const transcript = this.voiceText; const supplement = this.input;
     const text = composeVoiceMessage(transcript, supplement);
     if (clip === undefined || this.blocked() || text.length === 0 || text.length > 500) return;
-    if (!this.realChatMode) { this.notice('请先启用真实对话', '录音已保存在本机。启用助手后可发送语音消息，转写不会显示。'); return; }
+    if (!this.realChatMode) { this.notice('助手还没有连接', '录音已保存在本机，连接助手后再发送。'); return; }
     if (this.knowledgeEnabled && this.runtimeKnowledge.lifecycle !== ShuviRuntimeState.READY) {
-      this.notice('知识库问答尚未就绪', '录音已保存，请先准备知识库会话。'); return;
+      this.notice('知识库问答还没准备好', '录音已保存，请稍候再发送。'); return;
     }
     if (this.searchEnabled && !this.knowledgeEnabled &&
       (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance)) {
-      this.notice('真实搜索尚不可用', '录音已保存，请先准备搜索会话。'); return;
+      this.notice('联网搜索暂不可用', '录音已保存，搜索连接上后再发送。'); return;
     }
     if (!this.knowledgeEnabled && !this.searchEnabled && (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY ||
       this.runtimeChat.requestCount >= this.runtimeChat.maxRequests)) {
-      this.notice('真实对话尚不可用', '录音已保存，请启用有剩余次数的会话后发送。'); return;
+      if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
+        this.notice('这段对话已经很长了', '录音已保存，点右上角「开始新对话」后再发送。'); return;
+      }
+      this.notice('助手还没有连接', '录音已保存。请稍候再发送；如果还没保存 DeepSeek Key，请先到「我的 → API Key 管理」保存。'); return;
     }
     const message: ChatMessage = { id: this.service.nextId('message'), isUser: true, text: supplement.trim(), voice: clip };
     this.messages = this.messages.concat([message]); this.voiceDraft = undefined; this.voiceText = ''; this.input = '';
@@ -1326,13 +1430,16 @@ struct Index {
   @Builder
   voiceArchivePanel() {
     Column({ space: 8 }) {
-      Row() {
-        Button(this.voiceArchiveOpen ? '收起录音' : `已保存语音 · ${this.voiceArchive.length}`)
-          .height(44).fontSize(12).fontColor(Theme.accent).backgroundColor(Color.Transparent).id('voice-archive-toggle')
-          .enabled(!this.speech.busy).onClick((): void => { this.refreshVoiceArchive(); this.voiceArchiveOpen = !this.voiceArchiveOpen; })
-        Blank()
-        if (this.voiceArchiveOpen) { Text('仅本机保存').fontSize(11).fontColor(Theme.muted) }
-      }.width('100%')
+      // The saved-recordings row only appears once there is something to list.
+      if (this.voiceArchive.length > 0 || this.voiceArchiveOpen) {
+        Row() {
+          Button(this.voiceArchiveOpen ? '收起录音' : `已保存语音 · ${this.voiceArchive.length}`)
+            .height(44).fontSize(12).fontColor(Theme.accent).backgroundColor(Color.Transparent).id('voice-archive-toggle')
+            .enabled(!this.speech.busy).onClick((): void => { this.refreshVoiceArchive(); this.voiceArchiveOpen = !this.voiceArchiveOpen; })
+          Blank()
+          if (this.voiceArchiveOpen) { Text('仅本机保存').fontSize(11).fontColor(Theme.muted) }
+        }.width('100%')
+      }
       if (this.voiceMessage.length > 0) { Text(this.voiceMessage).fontSize(12).fontColor(Theme.danger) }
       if (this.voiceArchiveOpen) {
         Scroll() {
@@ -1428,7 +1535,7 @@ struct Index {
         Row({ space: 6 }) {
           ModeChip({ icon: $r('app.media.chat_globe'), label: '搜索', on: this.searchEnabled, disabled: this.blocked(),
             chipId: 'chat-search-toggle',
-            a11y: `${this.realChatMode ? '真实联网搜索' : '联网搜索演示'}，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`,
+            a11y: `联网搜索，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`,
             onTap: (): void => { void this.toggleSearch(); } })
           ModeChip({ icon: $r('app.media.chat_book'), label: this.ragPreparing ? '准备中…' : '知识库', on: this.knowledgeEnabled,
             disabled: this.blocked(), chipId: 'chat-knowledge-toggle',
@@ -1436,10 +1543,6 @@ struct Index {
             onTap: (): void => { void this.toggleKnowledge(); } })
           Blank()
           Row() {
-            Button({ type: ButtonType.Circle }) {
-              AppIcon({ source: $r('app.media.chat_plus'), size: 26 })
-            }.width(44).height(44).backgroundColor(Color.Transparent).enabled(!this.blocked()).onClick(() => this.attachments())
-              .accessibilityText('添加图片或文件，待接入')
             if (this.input.trim().length > 0 || this.voiceDraft !== undefined) {
               Button({ type: ButtonType.Circle }) {
                 AppIcon({ source: $r('app.media.chat_up'), size: 22})
@@ -1448,7 +1551,7 @@ struct Index {
                   (this.voiceDraft === undefined || this.voiceText.trim().length > 0)).onClick(() => this.send())
             } else {
               Button({ type: ButtonType.Circle }) {
-                AppIcon({ source: $r('app.media.chat_wave'), size: 26 })
+                AppIcon({ source: $r('app.media.ui_microphone'), size: 24 })
               }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('开始普通话语音输入')
                 .id('chat-speech').enabled(!this.blocked()).onClick(() => this.startSpeech())
             }
@@ -1475,7 +1578,7 @@ struct Index {
       Row({ space: 8 }) {
         Column({ space: 6 }) {
           Text('Shuvi 休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
-          Text(this.realChatMode ? '个人助理 · 真实功能' : '个人助理 · 演示模式').fontSize(12).fontColor(Theme.muted)
+          Text('个人助理').fontSize(12).fontColor(Theme.muted)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Button({ type: ButtonType.Circle }) {
           AppIcon({ source: $r('app.media.ui_close'), size: 22 })
@@ -1493,20 +1596,13 @@ struct Index {
                 if (index === 0 && this.draft !== undefined) {
                   Text(this.executing ? '处理中' : '待确认').fontSize(11).fontColor(Theme.amber)
                 }
-                if (index === 1 && this.records.length > 0) {
-                  Text(`${this.records.length}`).fontSize(12).fontColor(Theme.accent)
-                    .accessibilityText(`${this.records.length} 条演示日程`)
-                }
               }.width('100%').padding(14).constraintSize({ minHeight: 52 })
             }.width('100%').borderRadius(15).backgroundColor(this.tab === index ? Theme.soft : Color.Transparent)
               .accessibilityText(`${name}${this.tab === index ? '，已选中' : ''}`).onClick(() => this.changeTab(index))
           }, (name: string) => name)
         }.width('100%')
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
-      Button('演示场景设置  ›', { type: ButtonType.Normal }).width('100%').constraintSize({ minHeight: 44 })
-        .fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
-        .enabled(!this.generating && !this.executing && !this.searchBusy).onClick(() => this.openScenarios())
-      Text('演示模式不联网、不写日历；真实对话、搜索和日程在助手页开启\n知识库资料保存在本机').fontSize(11).fontColor(Theme.muted)
+      Text('资料和 API Key 只保存在本机').fontSize(11).fontColor(Theme.muted)
         .width('100%').padding({ top: 16 })
     }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
       .backgroundColor(Theme.inputSurface).borderRadius({ topRight: 26, bottomRight: 26 })
@@ -1555,10 +1651,20 @@ struct Index {
       }
       Scroll(this.scroller) {
         Column() {
-            if (this.migrationOpen) {
+            if (this.apiKeysOpen) {
+              if (this.apiKeysReady) {
+                ApiKeysView({ embedding: this.embeddingService, parse: this.parseService, parseCredential: this.parseState.credential,
+                  settings: this.sharedKnowledge?.unifiedSettings,
+                  onBack: (): void => { this.apiKeysOpen = false; this.scroller.scrollEdge(Edge.Top); },
+                  onDeepSeekChanged: (): void => { void this.refreshDeepSeekStatus(); } })
+              } else {
+                LoadingProgress().width(32).height(32).color(Theme.accent).margin({ top: 48 })
+              }
+            } else if (this.migrationOpen) {
               KnowledgeMigrationView({migration:this.sharedKnowledge?.migration,queue:this.sharedKnowledge?.unifiedQueue,vectors:this.sharedKnowledge?.unifiedVectors,onBack:(): void=> { this.migrationOpen=false; }})
             } else if (this.visionSettingsOpen) {
-              VisionSettingsView({service:this.sharedKnowledge?.unifiedSettings,queue:this.sharedKnowledge?.unifiedQueue,onBack:(): void=> { this.visionSettingsOpen=false; this.scroller.scrollEdge(Edge.Top); }})
+              VisionSettingsView({service:this.sharedKnowledge?.unifiedSettings,queue:this.sharedKnowledge?.unifiedQueue,onBack:(): void=> { this.visionSettingsOpen=false; this.scroller.scrollEdge(Edge.Top); },
+                onKeys: (): void => { this.openApiKeys(); }})
             } else if (this.imageKnowledgeOpen) {
               ImageKnowledgeView({service:this.sharedKnowledge?.imageKnowledge,previewService:this.parsedService,queue:this.sharedKnowledge?.unifiedQueue,initialOccurrence:this.imageKnowledgeOccurrence,onBack:(): void=> { this.imageKnowledgeOpen=false; this.imageKnowledgeOccurrence=''; }})
             } else if (this.parsedOpen) {
@@ -1592,8 +1698,6 @@ struct Index {
            } else if (this.imageIngestionOpen) {
               ImageIngestionView({ service: this.imageIngestionService, embedding: this.embeddingService, onBack: (): void => { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); }, onOriginal: (document: ImageDocument): void => { this.openImageOriginal(document); },
                onParseSettings: (): void => { this.imageIngestionOpen = false; this.openParse(true); }, onEmbeddingSettings: (): void => { this.imageIngestionOpen = false; this.openEmbedding(); } })
-           } else if (this.platformDiagnosticsOpen) {
-              KnowledgePlatformDiagnostics({ onBack: (): void => { this.platformDiagnosticsOpen = false; }, onImageHappyPath: (): void => { this.platformDiagnosticsOpen = false; this.openImages(); } })
           } else if (this.showScenarios) {
             this.scenarioPanel()
            } else if (this.pdfSourceOpen) {
@@ -1604,7 +1708,8 @@ struct Index {
              } else { Text('PDF 准备服务尚未就绪，原件和 ZIP 保留').width('100%') }
            } else if (this.embeddingOpen) {
              if (this.embeddingService !== undefined) {
-                EmbeddingSettingsView({ service: this.embeddingService, unifiedSettings:this.sharedKnowledge?.unifiedSettings, clearEpoch: this.embeddingClearEpoch, onBack: (): void => { this.closeEmbedding(); } })
+                EmbeddingSettingsView({ service: this.embeddingService, unifiedSettings:this.sharedKnowledge?.unifiedSettings, clearEpoch: this.embeddingClearEpoch, onBack: (): void => { this.closeEmbedding(); },
+                  onKeys: (): void => { this.openApiKeys(); } })
              } else {
                Text('本机配置服务尚未就绪或不可用，未发送请求').width('100%')
                Button('返回').onClick((): void => { this.closeEmbedding(); })
@@ -1614,7 +1719,8 @@ struct Index {
                DocumentParseView({ parseState: this.parseState, service: this.parseService,
                  settingsMode: this.parseSettings, clearEpoch: this.parseState.inputEpoch,
                    onClose: (): void => { this.closeParse(); }, onPreparePdf: (resultId: string): void => { this.preparePdf(resultId); },
-                    onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenImages: (): void => { this.closeParse(); this.openImages(); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); } })
+                    onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenImages: (): void => { this.closeParse(); this.openImages(); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); },
+                    onKeys: (): void => { this.openApiKeys(); } })
              } else {
                Column({ space: 12 }) {
                  Text(this.parseState.message || '正在打开独立解析准备区…').fontSize(14).width('100%')
@@ -1633,22 +1739,10 @@ struct Index {
               this.assistant()
             }
           } else if (this.tab === 1) {
-            if (this.realCalendarOpen) {
-              Row() {
-                Button('‹ 工作台').fontSize(14).fontColor(Theme.accent).backgroundColor(Color.Transparent)
-                  .constraintSize({ minHeight: Theme.controlHeight }).padding({ left: 4, right: 12 })
-                  .accessibilityText('返回工作台').id('calendar-back')
-                  .onClick((): void => { this.realCalendarOpen = false; })
-              }.width('100%')
-              CalendarCapabilityCheck()
-            } else if (this.calendarOpen) {
+            if (this.calendarOpen) {
               this.calendar()
             } else {
-              WorkbenchPage({ recordCount: this.records.length,
-                onDocuments: (): void => { this.changeTab(2); this.parsedDocumentId = ''; this.openParsed(); },
-                onCalendar: () => this.calendarOpen = true,
-                onRealCalendar: (): void => { this.realCalendarOpen = true; },
-                onNotice: (title: string, message: string) => this.notice(title, message) })
+              CalendarCapabilityCheck({ onKeys: (): void => { this.openApiKeys(); } })
             }
            } else if (this.tab === 2) {
              if (this.knowledgeReady) {
@@ -1665,14 +1759,11 @@ struct Index {
               }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 20, bottom: 20 })
             }
            } else {
-              if (this.developerToolsOpen) { Button('本机能力诊断').id('r2-open-diagnostics').onClick((): void => { this.platformDiagnosticsOpen = true; })
-              }
-
              ProfilePage({ floatingAssistantEnabled: this.floatingAssistantEnabled,
                onFloatingAssistantChange: (enabled: boolean): void => { this.floatingAssistantEnabled = enabled; }, onNotice: (title: string, message: string) => this.notice(title, message),
+               onApiKeys: (): void => { this.openApiKeys(); },
                onVisionSettings: (): void => { this.openVisionSettings(); },
                onParseSettings: (): void => { this.openParse(true); }, onEmbeddingSettings: (): void => { this.openEmbedding(); } })
-             Button(this.developerToolsOpen ? '收起高级诊断' : '高级诊断', { type: ButtonType.Normal }).fontSize(13).fontColor(Theme.muted).backgroundColor(Color.Transparent).constraintSize({ minHeight: 44 }).onClick((): void => { this.developerToolsOpen = !this.developerToolsOpen; })
           }
         }.width('100%').constraintSize({ maxWidth: 640,
           minHeight: this.tab === 0 && this.messages.length === 0 && !this.showScenarios ? this.contentHeight : 0 })

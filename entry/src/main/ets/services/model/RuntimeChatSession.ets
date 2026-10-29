@@ -76,7 +76,7 @@ export class RuntimeChatSession {
     const generation = ++this.generation; this.publish();
     this.timer = setTimeout((): void => {
       if (this.active(generation)) {
-        this.finish('等待超时，会话将关闭。请重新启用后手动重试；无法确认供应商是否已计费。');
+        this.finish('等待超时，助手已断开。请点「重新连接」后手动重试；无法确认供应商是否已计费。');
         void this.controller.stop().catch((): void => {});
       }
     }, this.documentTools ? 120000 : 45000);
@@ -94,7 +94,7 @@ export class RuntimeChatSession {
       this.apply(state.status, state.resultJson);
     } catch {
       if (this.active(generation)) {
-        this.finish('任务提交或状态读取失败，会话已停止。请重新启用后手动重试。');
+        this.finish('任务提交或状态读取失败，助手已断开。请点「重新连接」后手动重试。');
         void this.controller.stop().catch((): void => {});
       }
     }
