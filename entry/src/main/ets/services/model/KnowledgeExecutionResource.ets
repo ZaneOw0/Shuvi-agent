@@ -10,13 +10,15 @@ import {
   RuntimeExecutionRecoveryBridge, RuntimeExecutionRecoveryBridgeConfig, RuntimeOutcomeAccountingPort,
   createEncryptedRdbStoreConfigs
 } from '@harmony_agent/agent-storage';
+import { RuntimePendingInvoicePort } from '@harmony_agent/agent-storage';
 import { StoredOperation } from '@harmony_agent/agent-storage';
 import { AgentRdbOpenPort, OwnedAgentRdb } from './AgentRdbResources';
 import { AgentHostDigest } from './AgentHostDigest';
+import { copyToolOutcome } from './ChatSnapshotCopies';
 
-function knowledgeStoreConfig(): relationalStore.StoreConfig {
+function knowledgeStoreConfig(name: string): relationalStore.StoreConfig {
   const config = new EncryptedRdbConfigurationRequest();
-  config.executionStoreName = 'shuvi_knowledge_runtime_v1.db'; config.memoryStoreName = 'shuvi_knowledge_runtime_unused.db';
+  config.executionStoreName = name; config.memoryStoreName = 'shuvi_knowledge_runtime_unused.db';
   return createEncryptedRdbStoreConfigs(config).execution;
 }
 
@@ -28,17 +30,22 @@ class LocalKnowledgeAccounting implements RuntimeOutcomeAccountingPort {
 
 /** Durable authority and grant verifier for the zero-cost, local knowledge-read tool. */
 export class KnowledgeExecutionResource extends OwnedAgentRdb implements ProductionRuntimePersistencePort {
+  lastOutcome?: ToolOutcome;
+  beginOperation(): void { this.lastOutcome = undefined; }
   onOutcomeRejected: (taskId: string) => void = (_taskId: string): void => {};
   private durable?: DurableExecutionRecoveryStore;
   private bridge?: RuntimeExecutionRecoveryBridge;
   private readonly recoveryConfig: RuntimeExecutionRecoveryBridgeConfig;
   private consumed: string[] = [];
 
-  constructor(opener: AgentRdbOpenPort, ownerId: string, policyVersion: string, digest: AgentHostDigest) {
-    super(opener,knowledgeStoreConfig(),'KNOWLEDGE_RUNTIME_EXECUTION');
+  constructor(opener: AgentRdbOpenPort, ownerId: string, policyVersion: string, digest: AgentHostDigest,
+    accounting: RuntimeOutcomeAccountingPort = new LocalKnowledgeAccounting(), name: string = 'shuvi_knowledge_runtime_v1.db',
+    pendingInvoice?: RuntimePendingInvoicePort) {
+    super(opener,knowledgeStoreConfig(name),'KNOWLEDGE_RUNTIME_EXECUTION');
     const config: RuntimeExecutionRecoveryBridgeConfig = new RuntimeExecutionRecoveryBridgeConfig();
     config.ownerId = ownerId; config.policyVersion = policyVersion; config.leaseTtlMs = 60000;
-    config.outcomeAccounting = new LocalKnowledgeAccounting(); this.recoveryConfig = config; this.digest = digest;
+    config.outcomeAccounting = accounting; this.recoveryConfig = config; this.digest = digest;
+    config.pendingInvoice = pendingInvoice;
   }
 
   private readonly digest: AgentHostDigest;
@@ -48,7 +55,7 @@ export class KnowledgeExecutionResource extends OwnedAgentRdb implements Product
     if (!opened.accepted || opened.store === undefined) { throw new Error('KNOWLEDGE_RUNTIME_STORAGE_REJECTED'); }
     this.durable = opened.store; this.bridge = new RuntimeExecutionRecoveryBridge(opened.store,this.recoveryConfig);
   }
-  protected detach(): void { this.bridge = undefined; this.durable = undefined; this.consumed = []; }
+  protected detach(): void { this.bridge = undefined; this.durable = undefined; this.consumed = []; this.lastOutcome = undefined; }
   private current(): RuntimeExecutionRecoveryBridge {
     if (this.bridge === undefined) { throw new Error('KNOWLEDGE_RUNTIME_STORAGE_NOT_READY'); } return this.bridge;
   }
@@ -70,6 +77,7 @@ export class KnowledgeExecutionResource extends OwnedAgentRdb implements Product
       const result: RuntimePersistenceResult = await this.run((): Promise<RuntimePersistenceResult> =>
         this.current().recordOutcome(t,s,d,o,n));
       if (!result.accepted && !result.duplicate) { this.onOutcomeRejected(t); }
+      else { this.lastOutcome = copyToolOutcome(o); }
       return result;
     } catch (error) {
       this.onOutcomeRejected(t);

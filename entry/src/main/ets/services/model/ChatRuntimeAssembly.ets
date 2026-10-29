@@ -20,6 +20,7 @@ import { ArkTsDeepSeekHttpClient } from './DeepSeekHttpClient';
 import { createDeepSeekProvider } from './DeepSeekProvider';
 import { DeepSeekToolTransport, ModelTurnPort, ToolTurnLimits } from './DeepSeekToolTransport';
 import { ModelDocumentToolsPort } from '../documents/DocumentToolContracts';
+import { ModelLoopToolsPort } from './ModelLoopTools';
 import { startupModelProfile, startupModelPrice } from './RuntimeStartupAssembly';
 import { SearchAuthorizationPreviews } from './SearchAuthorizationPreview';
 import { ShuviRuntimeSession, ShuviRuntimeSessionFactory, ShuviRuntimeSessionPort, ShuviSessionResources } from './ShuviRuntimeSession';
@@ -28,13 +29,13 @@ export const CHAT_POLICY: string = 'shuvi-model-only-v1';
 /** User turns per enable, for every chat purpose. */
 export const CHAT_MAX_REQUESTS: number = 10;
 // One tool-capable assistant turn may chain several model requests; these caps bound the whole turn.
-export const TOOL_TURN_TIMEOUT_MS: number = 110000;
-export const TOOL_TURN_WALL_MS: number = 120000;
+export const TOOL_TURN_TIMEOUT_MS: number = 90000;
+export const TOOL_TURN_WALL_MS: number = 90000;
 export const TOOL_TURN_MAX_INPUT_TOKENS: number = 32768;
 export const TOOL_TURN_MAX_OUTPUT_TOKENS: number = 2048;
 export const TOOL_TURN_MAX_COST_MICROS: number = 20000;
 /** Model HTTP requests one tool-capable assistant session may send across all of its turns. */
-export const ASSISTANT_MAX_MODEL_REQUESTS: number = 30;
+export const ASSISTANT_MAX_MODEL_REQUESTS: number = 10;
 // App-owned composition scope; the default public-chat/search scope remains unchanged.
 export enum ChatPurpose { PUBLIC_CHAT, CALENDAR_DRAFT, ASSISTANT }
 function chatPrivacy(purpose: ChatPurpose): PrivacyClass {
@@ -51,7 +52,10 @@ export interface ChatContextPort {
 export class ChatToolKit {
   readonly documents: () => ModelDocumentToolsPort;
   readonly turn: ModelTurnPort;
-  constructor(documents: () => ModelDocumentToolsPort, turn: ModelTurnPort) { this.documents = documents; this.turn = turn; }
+  readonly extra?: ModelLoopToolsPort;
+  constructor(documents: () => ModelDocumentToolsPort, turn: ModelTurnPort, extra?: ModelLoopToolsPort) {
+    this.documents = documents; this.turn = turn; this.extra = extra;
+  }
 }
 export function assistantToolLimits(): ToolTurnLimits {
   const limits: ToolTurnLimits = new ToolTurnLimits();
@@ -254,7 +258,7 @@ export class ChatRuntimeFactory implements ShuviRuntimeSessionFactory {
     const profile = startupModelProfile(); profile.privacyClasses = [chatPrivacy(this.purpose)];
     const kit: ChatToolKit | undefined = this.tools;
     const transport: DeepSeekToolTransport | undefined = kit === undefined ? undefined :
-      new DeepSeekToolTransport(profile, http, kit.documents(), kit.turn, assistantToolLimits());
+      new DeepSeekToolTransport(profile, http, kit.documents(), kit.turn, assistantToolLimits(), kit.extra);
     // The tool transport owns the conversation turns and the document tools; the session closes it with its resources.
     if (transport !== undefined) resources.memory = transport;
     const model = createDeepSeekProvider(profile, startupModelPrice(digest), digest, resources.credentials, http, undefined, transport);

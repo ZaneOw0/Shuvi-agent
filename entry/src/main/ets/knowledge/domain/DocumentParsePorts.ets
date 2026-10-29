@@ -11,7 +11,6 @@ export interface DocumentAssetPort {
   remove(ids: string[]): Promise<void>;
   cancelLocal(): void;
 }
-export interface DocumentPreflightPort { inspect(original: DocumentOriginal, cancel: DocumentParseCancellation): Promise<DocumentOriginal>; cancelLocal(): void; }
 export interface MineruCredentialPort {
   status(): Promise<DocumentCredentialStatus>;
   save(input: string, replace: boolean): Promise<DocumentCredentialStatus>;

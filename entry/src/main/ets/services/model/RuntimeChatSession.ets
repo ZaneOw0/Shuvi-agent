@@ -79,7 +79,7 @@ export class RuntimeChatSession {
         this.finish('等待超时，会话将关闭。请重新启用后手动重试；无法确认供应商是否已计费。');
         void this.controller.stop().catch((): void => {});
       }
-    }, this.documentTools ? 120000 : 45000);
+    }, this.documentTools ? 90000 : 45000);
     const request = new AgentFrontendTaskRequest(); request.intent = text;
     try {
       const handle = await this.controller.submit(request);

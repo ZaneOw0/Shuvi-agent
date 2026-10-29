@@ -87,10 +87,30 @@ HarmonyPA/
 
 工作流约束：
 
-- `.ets` 文件改完先 `arkts_check`，再 `build_project`；构建失败出现 `ERROR` 时加载 `arkts-error-fixes` skill 修复后重跑。
+- `.ets` 文件改完先 `arkts_check`，再 `build_project`；构建失败出现 `ERROR` 时加载 `arkts-error-fixes` skill 修复后重跑（无 DevEco Code 运行时环境的替代方案见 5.1）。
 - **必须先 `build_project` 成功，才能 `start_app`**；任务结束前也必须保证 `build_project` 通过。
 - **每次测试必须落盘日志**（构建 / 模拟器 / 真机一律如此）：用 `scripts/capture-test-log.sh <scope> [窗口] [设备]`，结果写入 `.cache/test-logs/`，含设备原始日志、`meta.txt`（提交、未提交改动数、工作区指纹、设备）与 `index.tsv` 索引；并把日志路径与复现命令写进对应 spec。未落盘的测试不作为证据（见 [docs/01](docs/01-协作与工程约定.md) 第 7.0 节）。
 - ArkTS 严格规则由构建阶段（`CompileArkTS`）强制拦截，本地报错以构建输出为准。
+
+### 5.1 无 DevEco Code 运行时环境的替代方案
+
+`arkts-grammar-standards`、`arkts-error-fixes`、`arkts-runtime-fix` 等内置 skill 随 DevEco Code 运行时分发，Codex 等其他 agent 没有 `skill` 工具时无法加载。替代 skill 由 `devecocli` 从远端 skill 注册表安装到各 agent 自己的 skill 目录（Codex 为 `~/.codex/skills/`），不进仓库，仓库内不写任何本机路径：
+
+```bash
+devecocli skills add --agent codex --skill hmos-arkui-develop-skill
+devecocli skills add --agent codex --skill hmos-arkts-syntax-checker
+devecocli skills add --agent codex --skill hmos-runtime-fix-skill
+```
+
+| DevEco Code 内置 skill | 替代 skill | 使用场景 |
+|---|---|---|
+| `arkts-grammar-standards` | `hmos-arkui-develop-skill` | 写 / 改 `.ets` 之前（第 7 节） |
+| `arkts-error-fixes` | `hmos-arkts-syntax-checker` | 构建报 `ERROR` 后的修复与重跑 |
+| `arkts-runtime-fix` | `hmos-runtime-fix-skill` | 运行期闪退、白屏、jscrash |
+
+工具映射：`arkts_check` → `devecocli check lint <path>`（最终仍以 `devecocli build` 为准）；`build_project` → `devecocli build`；`start_app` → `devecocli run --skip-build`。`hmos-arkts-syntax-checker` 正文引用的 `mcp_codegenie-*` 工具在 Codex 中不存在，一律替换为上述 CLI。
+
+`--agent` 还支持 `trae-cn` / `opencode` / `deveco` / `cursor` / `codebuddy` / `qoder` / `claude-code` / `atomcode`；需指定目录时改用 `devecocli skills add --path <dir>`。替代 skill 首次安装需网络；Codex 无 `skill` 工具，靠 `SKILL.md` frontmatter 的 `description` 触发，未自动加载时在任务中显式要求读对应 `SKILL.md`。
 
 ## 6. 脚本与 Demo 启动方法
 
@@ -143,7 +163,7 @@ CI 已知限制：`codelinter.bat` 退出码恒为 1，脚本改读其 JSON 报�
 
 ## 7. ArkTS 编码约束
 
-ArkTS 不是任意 TypeScript，写 `.ets` 前加载 `arkts-grammar-standards` skill。红线：
+ArkTS 不是任意 TypeScript，写 `.ets` 前加载 `arkts-grammar-standards` skill（无 DevEco Code 运行时环境时改读 `hmos-arkui-develop-skill`，见 5.1）。红线：
 
 - 禁止 `any` / `unknown`（用户明确允许时除外）；禁止 `as` 类型断言。
 - 禁止结构化类型，用显式继承；禁止动态属性访问（`obj[dynamicKey]`）。

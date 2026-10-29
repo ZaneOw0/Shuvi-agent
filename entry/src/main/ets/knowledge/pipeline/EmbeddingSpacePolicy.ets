@@ -1,7 +1,29 @@
-import { EmbeddingSpace, EmbeddingProvider, EmbeddingRegion, EmbeddingAccess } from '../domain/EmbeddingModels';
+import { EmbeddingSpace, EmbeddingConfig, EmbeddingProvider, EmbeddingRegion, EmbeddingAccess } from '../domain/EmbeddingModels';
+import { embeddingConfigBinding } from './EmbeddingBasisPolicy';
 import { KnowledgeCancellation, KnowledgeFailure } from '../domain/PdfKnowledgeModels';
 import { BoundedDocumentJson } from './BoundedDocumentJson';
 import { pdfCodecUtf8 } from './PdfSnapshotCodec';
+
+/** Credential/config revisions authorize requests; they do not change an already stored vector's geometry. */
+export function unifiedQuerySpaceMatches(space: EmbeddingSpace, config: EmbeddingConfig): boolean {
+  const stored: string[] = space.configFingerprint.split('|');
+  const current: string[] = embeddingConfigBinding(config).split('|');
+  if (stored.length !== 8 || current.length !== 8 ||
+    !new RegExp('^(0|[1-9][0-9]*)$').test(stored[6]) || !new RegExp('^(0|[1-9][0-9]*)$').test(stored[7]) ||
+    !Number.isSafeInteger(Number(stored[6])) || !Number.isSafeInteger(Number(stored[7]))) { return false; }
+  for (let index: number = 0; index < 6; index++) { if (stored[index] !== current[index]) { return false; } }
+  return space.provider === config.provider && space.region === config.region && space.access === config.access &&
+    space.workspaceId === config.workspaceId && space.requestedModel === config.modelId && space.returnedModel === config.modelId;
+}
+
+/** Only spaces with identical semantic contracts may share a single query vector and distance ranking. */
+export function unifiedQuerySpacesCompatible(left: EmbeddingSpace, right: EmbeddingSpace): boolean {
+  return left.dimension === right.dimension && left.preprocessing === right.preprocessing &&
+    left.profileId === right.profileId && left.profileRevision === right.profileRevision &&
+    left.tokenizerSha256 === right.tokenizerSha256 && left.profileParameters === right.profileParameters &&
+    left.rolePair === right.rolePair && left.normalization === right.normalization && left.metric === right.metric &&
+    left.providerRevision === right.providerRevision && left.providerConsistency === right.providerConsistency;
+}
 
 export function embeddingSpaceCopy(source: EmbeddingSpace): EmbeddingSpace {
   return embeddingSpaceDecode(JSON.stringify(source));

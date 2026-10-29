@@ -456,10 +456,10 @@ function voiceSendFixture(kind = 'chat', sendResult = true) {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None }
   }).outputText;
   const calls = [], notices = [];
-  const runtime = name => ({ session: { async send(text) { calls.push({ name, text }); return await sendResult; } } });
+  const runtime = name => ({ session: { async send(text) { calls.push({ name, text }); const result = await sendResult; if (result === false) throw new Error('InjectedSendRejected'); return result; } } });
   const fixture = new Function('composeVoiceMessage', 'ShuviRuntimeState', 'RuntimeChatService', 'RuntimeSearchService',
     'RuntimeKnowledgeService', 'Edge', code + '; return new VoiceSendFixture();')(
-    h.load('VoiceAudio').composeVoiceMessage, { READY: 'ready' }, runtime('chat'), runtime('search'), runtime('knowledge'), { Bottom: 1 });
+    h.load('VoiceAudio').composeVoiceMessage, { READY: 'ready' }, runtime('chat'), runtime('search'), { session: {} }, { Bottom: 1 });
   const clip = { id: 'voice-test', path: '/local/voice.wav', durationMs: 1000, createdAt: 1 };
   Object.assign(fixture, { voiceDraft: clip, voiceText: '语音里的要求', input: '另外请列成三点',
     realChatMode: true, searchEnabled: kind === 'search', knowledgeEnabled: kind === 'knowledge',
@@ -496,7 +496,7 @@ test('search receives one combined request and registers the combined query as h
   assert.ok(fixture.hiddenVoiceQueries.has(calls[0].text)); assert.equal(fixture.searchVoiceQuery, true);
 });
 
-test('knowledge rejection restores the original voice and supplement without joining twice on retry', async () => {
+test('shared assistant rejection with knowledge enabled restores both drafts without joining twice on retry', async () => {
   const { fixture, calls, clip } = voiceSendFixture('knowledge', false); await fixture.sendVoice();
   assert.equal(fixture.voiceDraft, clip); assert.equal(fixture.voiceText, '语音里的要求');
   assert.equal(fixture.input, '另外请列成三点'); assert.equal(fixture.messages.length, 0);
@@ -550,4 +550,33 @@ test('dismiss does not hide active recording or an unconfirmed microphone releas
   h.shutdownError(true); await h.session.cancel(); const warning = h.session.snapshot().message;
   h.session.dismissMessage(); assert.equal(h.session.snapshot().message, warning);
   h.shutdownError(false); await h.session.cancel();
+});
+
+
+test('knowledge authorized voice uses the ordinary assistant loop and never the removed knowledge send API', async () => {
+  const { fixture, calls, clip } = voiceSendFixture('knowledge'); await fixture.sendVoice();
+  assert.deepEqual(calls, [{ name: 'chat', text: '语音里的要求\n\n另外请列成三点' }]);
+  assert.equal(fixture.messages[0].voice, clip); assert.equal(fixture.messages[0].text, '另外请列成三点');
+  assert.equal(fixture.knowledgeVoiceQuery, true); assert.equal(fixture.searchVoiceQuery, false);
+  assert.ok(fixture.hiddenVoiceQueries.has(calls[0].text));
+});
+
+test('knowledge readiness cannot bypass the shared assistant readiness or remaining request budget', async () => {
+  for (const reason of ['stopped', 'budget']) {
+    const { fixture, calls, clip } = voiceSendFixture('knowledge');
+    if (reason === 'stopped') fixture.runtimeChat.lifecycle = 'stopped'; else fixture.runtimeChat.requestCount = 10;
+    await fixture.sendVoice();assert.equal(calls.length, 0);assert.equal(fixture.messages.length, 0);
+    assert.equal(fixture.voiceDraft, clip);assert.equal(fixture.input, '另外请列成三点');
+  }
+});
+
+test('page back cancels active speech before closing PDF and preserves normal drawer navigation', () => {
+  const page=fs.readFileSync(path.resolve(root,'../../pages/Index.ets'),'utf8');
+  const method=page.match(/  onBackPress\(\): boolean \{[\s\S]*?\n  \}/);assert.ok(method);
+  const code=ts.transpileModule('class BackFixture {\n'+method[0]+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.None}}).outputText;
+  const calls=[],pdf={shared:{expanded:true,closePreview(){calls.push('pdf');}}};
+  const fixture=new Function('SpeechService','PdfJsRuntime',code+';return new BackFixture();')({session:{cancel(){calls.push('speech');}}},pdf);
+  fixture.speech={busy:true};assert.equal(fixture.onBackPress(),true);assert.deepEqual(calls,['speech']);
+  fixture.speech.busy=false;assert.equal(fixture.onBackPress(),true);assert.deepEqual(calls,['speech','pdf']);
+  pdf.shared.expanded=false;fixture.drawerOpen=true;assert.equal(fixture.onBackPress(),true);assert.equal(fixture.drawerOpen,false);
 });

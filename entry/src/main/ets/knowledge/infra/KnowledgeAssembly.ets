@@ -1,5 +1,8 @@
+import { KnowledgeLexicalRepository } from './KnowledgeLexicalRepository';
 import { common } from '@kit.AbilityKit';
 import { KnowledgePlatformIdentity } from './KnowledgeIdentity';
+import { KnowledgeAgentSearchAdapter } from '../application/KnowledgeAgentSearchAdapter';
+import { KnowledgeQueryAuthorization } from '../application/KnowledgeQueryAuthorization';
 import { KnowledgeReadLease } from '../domain/PdfKnowledgeModels';
 import { documentAssetPath, documentHashFile } from './DocumentFileOperations';
 import { DocumentParseCancellation } from '../domain/DocumentParseModels';
@@ -96,11 +99,13 @@ export class KnowledgeAssembly {
   unifiedSettings: UnifiedSettingsService;
   migration: ParsedDocumentMigrationService;
   querySession: KnowledgeQuerySession;
+  private lexical: KnowledgeLexicalRepository;
   unifiedHistory: UnifiedKnowledgeHistoryRepository;
   knowledgeDatabase: KnowledgeDatabaseAdapter;
   runtimeSearch: KnowledgeRuntimeSearchAdapter;
   private runtimeUnifiedConfig: UnifiedAssemblyEmbeddingConfig;
   private runtimeQueryRepository: UnifiedQueryRepository;
+  private readonly queryAuthorization: KnowledgeQueryAuthorization = new KnowledgeQueryAuthorization();
   private runtimeQueryEngine: UnifiedQueryService;
   unifiedLifecycle: ParsedDocumentLifecycle;
   unifiedMessage: string = '';
@@ -120,6 +125,7 @@ export class KnowledgeAssembly {
   extensionMessage: string = '';
   private leases: number = 0;
   private initializing: Promise<void> | undefined = undefined;
+  private processingReady: boolean = false;
   private closing: Promise<void> | undefined = undefined;
   private gate: Promise<void> = Promise.resolve();
   private listeners: Array<() => void> = [];
@@ -180,11 +186,14 @@ export class KnowledgeAssembly {
     this.unifiedEmbedding=new UnifiedEmbeddingService(this.unified,this.unifiedVectors,counter,transport,unifiedConfig,new KnowledgePlatformIdentity());
     this.unifiedQueue=new UnifiedProcessingQueue(this.unified,this.unified,this.unifiedAssets,new KnowledgePlatformIdentity(),this.imageKnowledge,this.unifiedEmbedding);
     this.unifiedSettings=new UnifiedSettingsService(this.unified,visionCredential,unifiedConfig,this.unifiedQueue);
+    this.embedding.attachConfigInvalidation(async (): Promise<void>=> { await this.unifiedSettings.invalidateEmbedding(); });
     const queryRepository: UnifiedQueryRepository=new UnifiedQueryRepository(this.host,this.unified,this.vectors,unifiedConfig,new KnowledgePlatformIdentity()); this.runtimeQueryRepository=queryRepository;
     this.runtimeSearch=new KnowledgeRuntimeSearchAdapter(queryRepository,unifiedConfig);
     this.sourceRegistry.attachUnifiedAdmission(queryRepository); transport.attachUnifiedQuery(counter,this.sourceRegistry);
     const queryEngine: UnifiedQueryService=new UnifiedQueryService(queryRepository,queryRepository,this.unified,this.vectors,unifiedConfig,counter,transport,new KnowledgePlatformIdentity()); this.runtimeQueryEngine=queryEngine;
+    queryRepository.queryAuthorization = this.queryAuthorization; queryEngine.queryAuthorization = this.queryAuthorization;
     this.unifiedHistory=new UnifiedKnowledgeHistoryRepository(this.unified,this.unifiedAssets,queryRepository);
+    this.lexical=new KnowledgeLexicalRepository(this.host,this.unified,new KnowledgePlatformIdentity());
     this.querySession=this.createQuerySession();
     this.unifiedLifecycle=new ParsedDocumentLifecycle(this.unified,this.unifiedAssets,this.unifiedVectors,(): void=> { this.querySession.invalidate(); },(): void=> { this.changed(); });
     this.unifiedQueue.attachSettled(async (): Promise<void>=> { await this.unifiedLifecycle.sync(); });
@@ -220,12 +229,17 @@ export class KnowledgeAssembly {
   changed(): void { for (const listener of this.listeners) { listener(); } }
   createQuerySession(): KnowledgeQuerySession {
     return new KnowledgeQuerySession(this.runtimeQueryRepository,this.runtimeQueryEngine,this.runtimeUnifiedConfig,
-      this.unifiedHistory,new KnowledgePlatformIdentity());
+      this.unifiedHistory,new KnowledgePlatformIdentity(),this.lexical);
   }
   /** Chat RAG: same scope, engine and config, but nothing is written to the knowledge page search history. */
   createRagQuerySession(): KnowledgeQuerySession {
     return new KnowledgeQuerySession(this.runtimeQueryRepository,this.runtimeQueryEngine,this.runtimeUnifiedConfig,
-      new EphemeralQueryHistory(),new KnowledgePlatformIdentity());
+      new EphemeralQueryHistory(),new KnowledgePlatformIdentity(),this.lexical);
+  }
+  createAgentSearch(): KnowledgeAgentSearchAdapter {
+    return new KnowledgeAgentSearchAdapter(this.runtimeQueryRepository, this.runtimeUnifiedConfig,
+      (): KnowledgeQuerySession => this.createRagQuerySession(),
+      (): Promise<void> => this.acquire(true), (): Promise<void> => this.release(), this.queryAuthorization, this.lexical);
   }
   async ragReadiness(): Promise<KnowledgeRagReadiness> {
     const result: KnowledgeRagReadiness=new KnowledgeRagReadiness();
@@ -261,7 +275,7 @@ export class KnowledgeAssembly {
   sourceReadLease(sourceId: string, generation: string): KnowledgeReadLease {
     const lease: KnowledgeReadLease = new KnowledgeReadLease(); lease.id = new KnowledgePlatformIdentity().id(); lease.sourceId = sourceId; lease.generation = generation; lease.sessionId = this.sessionId; return lease;
   }
-  private async start(): Promise<void> {
+  private async start(readOnly: boolean = false): Promise<void> {
     await this.text.initialize(true);
     this.extensionMessage = this.unifiedMessage;
     try { await this.repository.open(); await this.images.open(); }
@@ -270,12 +284,12 @@ export class KnowledgeAssembly {
       try { await this.docx.open(); }
       catch (error) { this.extensionMessage = 'DOCX扩展打开未完成：'+this.localFailure(error); }
     }
-    if (this.unified.ready() && this.unifiedMessage.length === 0) {
+    if (!readOnly && this.unified.ready() && this.unifiedMessage.length === 0) {
       try { await this.text.service.recoverLocal(); }
       catch { this.extensionMessage = '旧正文恢复未完成，原件与已存正文保留'; }
     }
     if (this.repository.ready() && this.images.ready()) {
-      try { await this.vectorMetadata.bootstrap(); await this.repository.reconcile(this.sessionId); await this.assets.reconcile(); await this.ingestion.refreshJobs(); }
+      try { await this.vectorMetadata.bootstrap(); if (!readOnly) { await this.repository.reconcile(this.sessionId); await this.assets.reconcile(); await this.ingestion.refreshJobs(); } }
       catch (error) { this.extensionMessage = '本机任务恢复待核，原件导入仍可使用：'+this.localFailure(error); }
       try { await this.embedding.initialize(); }
       catch (error) { this.extensionMessage = '嵌入设置初始化未完成，文件解析仍可使用：'+this.localFailure(error); }
@@ -283,7 +297,13 @@ export class KnowledgeAssembly {
     if (this.repository.ready()) { for (const document of await this.repository.list()) { if (!document.tombstone && document.activeVectorGeneration.length > 0) { try { await this.workflow.restoreActive(document.id); } catch { this.extensionMessage = '关键词可用；活动向量读回或镜像恢复未确认，向量路保持降级'; } } } }
     if (this.images.ready()) { for (const document of await this.images.list()) { if (!document.tombstone && document.chunkCount > 0) { try { await this.workflow.restoreActive(document.id); } catch { this.extensionMessage = '图片关键词保留；图片向量读回未确认'; } } } }
     if (this.docx.ready()) { for (const document of await this.docx.list()) { if (!document.tombstone && document.chunkCount > 0) { try { await this.workflow.restoreActive(document.id); } catch { this.extensionMessage = 'DOCX关键词保留；向量镜像读回未确认'; } } } }
-    if (this.unified.ready()) { try { await this.unifiedLifecycle.sync(); await this.unifiedQueue.initialize(); } catch { this.unifiedMessage='增强队列恢复失败；正文保留，可重试'; } try { await this.unifiedHistory.recoverPending(); } catch { this.unifiedMessage+='；历史回执恢复待重试，检索不受阻'; } }
+    if (this.unified.ready() && !readOnly) { await this.startProcessing(); }
+  }
+  private async startProcessing(): Promise<void> {
+    if (this.processingReady) { return; }
+    try { await this.unifiedSettings.reconcileEmbeddingConfig(); await this.unifiedLifecycle.sync(); await this.unifiedQueue.initialize(); this.processingReady = true; }
+    catch { this.unifiedMessage = '增强队列恢复失败；正文保留，可重试'; }
+    try { await this.unifiedHistory.recoverPending(); } catch { this.unifiedMessage += '；历史回执恢复待重试，检索不受阻'; }
   }
   private localFailure(error: Object): string {
     if (error instanceof DocxFailure || error instanceof KnowledgeFailure || error instanceof ImageKnowledgeFailure) {
@@ -302,15 +322,16 @@ export class KnowledgeAssembly {
     await this.text.service.recoverLocal(); this.unifiedMessage = ''; this.extensionMessage = ''; this.changed();
   }
   async retryUnifiedProcessing(): Promise<void> { await this.unifiedQueue.stop(); await this.retryUnifiedInitialization(); await this.unifiedLifecycle.sync(); await this.unifiedQueue.initialize(); await this.unifiedIngestion.refresh(); }
-  async acquire(): Promise<void> {
+  async acquire(readOnly: boolean = false): Promise<void> {
     const operation = this.gate.then(async (): Promise<void> => {
       let initializing: Promise<void> | undefined = this.initializing;
-      if (initializing === undefined) { initializing = this.start(); this.initializing = initializing; }
+      if (initializing === undefined) { initializing = this.start(readOnly); this.initializing = initializing; }
       try { await initializing; } catch (error) {
         if (this.initializing === initializing) { this.initializing = undefined; }
         if (error instanceof Error) { throw error; }
         throw new Error('KNOWLEDGE_INITIALIZATION_FAILED');
       }
+      if (!readOnly && this.unified.ready()) { await this.startProcessing(); }
       this.leases++;
     }); this.gate = operation.then((): void => {},(_error: Error): void => {}); await operation;
   }
@@ -350,9 +371,9 @@ export class KnowledgeAssembly {
         while (this.embedding.state.busy || this.ingestion.state.busy || this.ingestion.state.releasing || this.search.state.busy || this.pages.reading()) { if (Date.now() >= deadline) { throw new Error('KnowledgeSessionReleaseUnconfirmed'); } await new Promise<void>((resolve: () => void): void => { setTimeout(resolve,20); }); }
         await this.retrySourceReleases();
        this.pages.clearCache(); await this.vectors.close(); await this.docx.close(); await this.images.close(); await this.repository.close(); await this.unified.close(); await this.text.close();
-    } finally { this.initializing = undefined; }
+    } finally { this.initializing = undefined; this.processingReady = false; }
   }
    async quiesceUnified(): Promise<void> { this.unifiedIngestion.pause(); this.migration.pause(); await this.querySession.close(); await this.unifiedQueue.stop(); await this.migration.close(); await this.unifiedIngestion.stop(); }
-   static foreground(): void { for (const session of KnowledgeAssembly.sessions) { session.unifiedQueue.resumeForeground(); } }
+   static foreground(): void { for (const session of KnowledgeAssembly.sessions) { if (session.processingReady) { session.unifiedQueue.resumeForeground(); } } }
    static background(): void { for (const session of KnowledgeAssembly.sessions) { session.querySession.invalidate(); session.migration.pause(); session.unifiedQueue.background(); session.unifiedIngestion.pause(); session.unifiedIngestion.closePreview().catch((): void => {}); session.docxSources.invalidate(); session.docxSources.close().catch((): void => {}); session.imageSources.pause(); session.imageSources.close().catch((): void => {}); session.sources.background(); session.embedding.pause(); session.ingestion.pause(); session.search.pause(); session.pages.pause(); } }
 }

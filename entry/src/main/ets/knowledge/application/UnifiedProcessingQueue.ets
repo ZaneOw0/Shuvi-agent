@@ -9,6 +9,7 @@ import { parsedUtf8 } from '../pipeline/ParsedDocumentCodec';
 import { parsedEncodeSnapshot } from '../pipeline/ParsedDocumentCodec';
 import { ParsedUpgradeBatch, ParsedUpgradeTarget } from '../domain/ParsedMigrationModels';
 import { unifiedProxyInputs, unifiedProxyText } from '../pipeline/UnifiedTextPolicy';
+import { embeddingConfigBinding } from '../pipeline/EmbeddingBasisPolicy';
 
 export class UnifiedProcessingQueue {
   private repository: UnifiedProcessingRepositoryPort; private documents: ParsedRepositoryPort; private assets: ParsedAssetPort; private identity: ParsedIdentityPort;
@@ -87,6 +88,16 @@ export class UnifiedProcessingQueue {
     }
   }
   async retry(id: string, acceptsCost: boolean): Promise<void> { if (!acceptsCost) { throw new ParsedFailure('ExplicitRetryCostRequired','queue'); } await this.repository.retryUnknown(id); this.kick(); }
+  async awaitEmbeddingConfiguration(): Promise<void> {
+    for (const job of await this.repository.jobs()) {
+      if (job.settingsPurpose!=='Embedding' || job.origin===UnifiedJobOrigin.LocalMigration || job.expected<1 || job.expected!==job.inputs.length) { continue; }
+      const configFailure: boolean=['UnifiedConfigOrExpectedSet','UnifiedConfigChanged','ConfigChanged'].indexOf(job.failure)>=0;
+      if (job.state!==UnifiedJobState.Pending && job.state!==UnifiedJobState.AwaitingConfig && !(job.state===UnifiedJobState.Failed && configFailure)) { continue; }
+      if ((await this.repository.attempts(job.id)).some((a: UnifiedProcessingAttempt): boolean=>a.outcome==='Unknown' || a.outcome==='InFlight')) { continue; }
+      job.state=UnifiedJobState.AwaitingConfig; job.failure='UnifiedConfigChanged'; await this.repository.saveJob(job);
+    }
+    this.emit();
+  }
   async freezeUpgrade(ids: string[]): Promise<ParsedUpgradeBatch> {
     if (ids.length===0 || new Set<string>(ids).size!==ids.length) { throw new ParsedFailure('UpgradeSelection','upgrade'); }
     const batch: ParsedUpgradeBatch=new ParsedUpgradeBatch(); batch.id=this.identity.id(); const vision=await this.repository.settings('Vision'); const embedding=await this.repository.settings('Embedding');
@@ -148,6 +159,7 @@ export class UnifiedProcessingQueue {
     const until: number=Date.now()+900000;
     while (this.foreground && !this.paused && !this.stopping && Date.now()<until) {
       const settings: UnifiedProcessingSettings=await this.repository.settings(purpose);
+      if (purpose==='Embedding' && settings.configBinding.length>0 && (settings.configBinding!==embeddingConfigBinding(this.embedding.currentConfig()) || this.embedding.currentConfig().mutationPending)) { await this.awaitEmbeddingConfiguration(); return; }
       if (!settings.enabled || settings.paused || !settings.costAcknowledged || !settings.automatic) { return; }
       const job: UnifiedProcessingJob | undefined=await this.nextJob(purpose);
       if (job===undefined) { return; }
@@ -188,6 +200,7 @@ export class UnifiedProcessingQueue {
       } catch (error) {
         const pending: boolean=(await this.repository.attempts(job.id)).some((a: UnifiedProcessingAttempt): boolean=>a.outcome==='InFlight');
         job.state=launched && pending?UnifiedJobState.Unknown:cancel.invalid || !this.foreground || this.paused?UnifiedJobState.Paused:UnifiedJobState.Failed;
+        if (!pending && error instanceof ParsedFailure && (error.category==='UnifiedConfigChanged' || error.category==='ConfigChanged')) { job.state=UnifiedJobState.AwaitingConfig; }
         if (error instanceof VisionFailure && (error.stage==='response' || error.stage==='auth')) { job.state=UnifiedJobState.Failed; }
         job.failure=error instanceof ParsedFailure || error instanceof VisionFailure?error.category:'RequestOrReadbackUnknown';
         if (last!==undefined && last.launched) { const stored=(await this.repository.attempts(job.id)).find((a: UnifiedProcessingAttempt): boolean=>a.id===last?.id); if (stored?.outcome==='InFlight') { last.outcome=job.state; await this.repository.saveAttempt(last); } }

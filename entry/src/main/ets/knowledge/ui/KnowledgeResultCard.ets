@@ -41,7 +41,7 @@ function knowledgeResultCanOpen(hit: KnowledgeHit): boolean {
 
 function unifiedResultSegments(reason: UnifiedSearchReason): KnowledgeResultSegment[] {
   const hit: KnowledgeHit = new KnowledgeHit(); hit.text = reason.text;
-  if (reason.route === 'BodyDirect' || reason.route === 'OcrDirect') {
+  if (reason.route === 'BodyDirect' || reason.route === 'OcrDirect' || reason.route === 'Keyword' && reason.ranges.length>0) {
     hit.match.kind = KnowledgeMatchKind.Direct;
     for (const source of reason.ranges) {
       const range: KnowledgeResultRange = new KnowledgeResultRange(); range.start = source.start; range.end = source.end; hit.match.ranges.push(range);
@@ -76,7 +76,7 @@ export function UnifiedKnowledgeResultCard($$: UnifiedKnowledgeResultCardOptions
     if (!$$.card.current) { Text('来源为旧版或已失效').fontColor(Theme.ink).fontSize(12).width('100%') }
     ForEach($$.card.reasons, (r: UnifiedSearchReason): void => {
       Column({ space: 4 }) {
-        Text(r.route === 'BodyDirect' ? '正文直接命中' : r.route === 'OcrDirect' ? 'OCR直接命中' : r.route === 'Tag' ? '本机标签' : r.route === 'Vector' ? '语义相关' : r.route).fontColor(Theme.muted).fontSize(12).width('100%')
+        Text(r.route === 'Keyword' ? (r.matchKind === 'Literal' ? '原文字面命中' : '分词关键词命中') : r.route === 'BodyDirect' ? '正文直接命中' : r.route === 'OcrDirect' ? 'OCR直接命中' : r.route === 'Tag' ? '本机标签' : r.route === 'Vector' ? '语义相关' : r.route).fontColor(Theme.muted).fontSize(12).width('100%')
         Text() {
           ForEach(unifiedResultSegments(r), (s: KnowledgeResultSegment): void => {
             Span(s.text).fontColor(s.matched ? Theme.accent : Theme.ink).fontWeight(s.matched ? FontWeight.Bold : FontWeight.Normal)
