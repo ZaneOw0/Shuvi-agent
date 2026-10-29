@@ -123,7 +123,7 @@ export class VectorRdbRepository implements KnowledgeVectorPort, VectorWorkflowS
       this.boundary('BeforeDdl'); await this.completeCreation(space); this.spaces.set(space.id,space);
     });
   }
-  registeredSpaces(): EmbeddingSpace[] { const result: EmbeddingSpace[] = []; this.spaces.forEach((space: EmbeddingSpace): void => { result.push(embeddingSpaceCopy(space)); }); return result; }
+  registeredSpaces(): EmbeddingSpace[] { const result: EmbeddingSpace[] = []; this.spaces.forEach((space: EmbeddingSpace): void => { if (!this.unavailable.has(space.id)) { result.push(embeddingSpaceCopy(space)); } }); return result; }
   private space(id: string): EmbeddingSpace { const reason: string | undefined = this.unavailable.get(id); if (reason !== undefined) { throw new KnowledgeFailure(reason,'vector-store'); } const space: EmbeddingSpace | undefined = this.spaces.get(id); if (space === undefined) { throw new KnowledgeFailure('UnregisteredSpace','vector-store'); } return space; }
   spaceFailure(id: string): string { return this.unavailable.get(id) ?? ''; }
   async put(row: KnowledgeVectorRow): Promise<void> {

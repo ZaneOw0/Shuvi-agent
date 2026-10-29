@@ -1,5 +1,5 @@
-import { RuntimeKnowledgeSession } from './RuntimeKnowledgeSession';
+import { ModelKnowledgeTools } from './ModelKnowledgeTools';
 
 export class RuntimeKnowledgeService {
-  static readonly session: RuntimeKnowledgeSession = new RuntimeKnowledgeSession();
+  static readonly session: ModelKnowledgeTools = new ModelKnowledgeTools();
 }

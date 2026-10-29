@@ -5,6 +5,7 @@ import { VectorEligibility } from './VectorWorkflowModels';
 
 export class UnifiedSearchRange { start: number=0; end: number=0; }
 export class UnifiedSearchReason {
+  engine: string=''; matchKind: string=''; evidenceType: string=''; matchedTerms: string[]=[];
   id: string=''; route: string=''; text: string=''; version: string=''; inputId: string=''; occurrenceId: string='';
   ranges: UnifiedSearchRange[]=[]; distance?: number; rank: number=0;
   savedReason: string='';
@@ -23,6 +24,7 @@ export class UnifiedSearchGroup {
   exhausted: boolean=false; revision: number=0;
 }
 export class UnifiedSearchState {
+  lexicalPartial: boolean=false;
   session: string=''; question: string=''; epoch: number=0; includeArchived: boolean=false;
   direct: UnifiedSearchGroup=new UnifiedSearchGroup(); related: UnifiedSearchGroup=new UnifiedSearchGroup();
   semanticState: string='NotRequested'; semanticError: string=''; review: UnifiedQueryApproval | undefined;
@@ -40,9 +42,10 @@ export class UnifiedQueryTarget {
 }
 export class UnifiedQueryScope {
   hash: string=''; localHash: string=''; texts: UnifiedQueryTextSource[]=[]; images: UnifiedQueryImageSource[]=[]; targets: UnifiedQueryTarget[]=[];
-  space: EmbeddingSpace | undefined; unupgraded: number=0; includeArchived: boolean=false; complete: boolean=false;
+  space: EmbeddingSpace | undefined; spaces: EmbeddingSpace[]=[]; unupgraded: number=0; includeArchived: boolean=false; complete: boolean=false;
 }
 export class UnifiedQueryApproval {
+  queryGrantRevision: number = 0;
   id: string=''; policy: string=UNIFIED_QUERY_POLICY; session: string=''; epoch: number=0; actual: string=''; inputHash: string='';
   configBinding: string=''; credentialRevision: number=0; settingsRevision: number=0; costRevision: number=0;
   scopeHash: string=''; spaceId: string=''; proofBinding: string=''; approved: boolean=false; costAccepted: boolean=false;

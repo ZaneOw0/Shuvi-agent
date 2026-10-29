@@ -20,6 +20,7 @@ import { ArkTsDeepSeekHttpClient } from './DeepSeekHttpClient';
 import { createDeepSeekProvider } from './DeepSeekProvider';
 import { DeepSeekToolTransport, ModelTurnPort, ToolTurnLimits } from './DeepSeekToolTransport';
 import { ModelDocumentToolsPort } from '../documents/DocumentToolContracts';
+import { ModelLoopToolsPort } from './ModelLoopTools';
 import { startupModelProfile, startupModelPrice } from './RuntimeStartupAssembly';
 import { SearchAuthorizationPreviews } from './SearchAuthorizationPreview';
 import { ShuviRuntimeSession, ShuviRuntimeSessionFactory, ShuviRuntimeSessionPort, ShuviSessionResources } from './ShuviRuntimeSession';
@@ -57,7 +58,10 @@ export interface ChatContextPort {
 export class ChatToolKit {
   readonly documents: () => ModelDocumentToolsPort;
   readonly turn: ModelTurnPort;
-  constructor(documents: () => ModelDocumentToolsPort, turn: ModelTurnPort) { this.documents = documents; this.turn = turn; }
+  readonly extra?: ModelLoopToolsPort;
+  constructor(documents: () => ModelDocumentToolsPort, turn: ModelTurnPort, extra?: ModelLoopToolsPort) {
+    this.documents = documents; this.turn = turn; this.extra = extra;
+  }
 }
 export function assistantToolLimits(): ToolTurnLimits {
   const limits: ToolTurnLimits = new ToolTurnLimits();
@@ -263,7 +267,7 @@ export class ChatRuntimeFactory implements ShuviRuntimeSessionFactory {
     const kit: ChatToolKit | undefined = this.tools;
     if (kit !== undefined) { profile.maxInputTokens = TOOL_TURN_MAX_INPUT_TOKENS; profile.maxOutputTokens = TOOL_TURN_MAX_OUTPUT_TOKENS; }
     const transport: DeepSeekToolTransport | undefined = kit === undefined ? undefined :
-      new DeepSeekToolTransport(profile, http, kit.documents(), kit.turn, assistantToolLimits());
+      new DeepSeekToolTransport(profile, http, kit.documents(), kit.turn, assistantToolLimits(), kit.extra);
     // The tool transport owns the document tools (the conversation owns its history); the session closes it with its resources.
     if (transport !== undefined) resources.memory = transport;
     const model = createDeepSeekProvider(profile, startupModelPrice(digest), digest, resources.credentials, http, undefined, transport);

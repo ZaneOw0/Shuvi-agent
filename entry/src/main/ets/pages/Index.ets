@@ -31,15 +31,16 @@ import { DocumentParseViewState } from '../knowledge/domain/DocumentParseModels'
 import { DocumentParseView } from '../knowledge/ui/DocumentParseView';
 import { KnowledgeAssembly } from '../knowledge/infra/KnowledgeAssembly';
 import { EmbeddingSettingsView } from '../knowledge/ui/EmbeddingSettingsView';
+import { PdfJsSurface } from '../knowledge/ui/PdfJsSurface';
+import { PdfJsRuntime } from '../knowledge/infra/PdfJsRuntime';
+import { PdfJsSourcePreview } from '../knowledge/infra/PdfJsSourcePreview';
+import { KnowledgeReadLease } from '../knowledge/domain/PdfKnowledgeModels';
 import { EmbeddingService } from '../knowledge/application/EmbeddingService';
 import { PdfIngestionService } from '../knowledge/application/PdfIngestionService';
 import { PdfIngestionView } from '../knowledge/ui/PdfIngestionView';
 import { KnowledgeView } from '../knowledge/ui/KnowledgeView';
 import { KnowledgeSearchService } from '../knowledge/application/KnowledgeSearchService';
 import { KnowledgeHit, KnowledgeSourceKind } from '../knowledge/domain/KnowledgeSearchModels';
-import { PdfPageAdapter } from '../knowledge/infra/PdfPageAdapter';
-import { PdfSourceView } from '../knowledge/ui/PdfSourceView';
-import { PdfSourceBinding, PdfLocator, PdfKnowledgeDocument } from '../knowledge/domain/PdfKnowledgeModels';
 import { KnowledgeDerivedLifecycle } from '../knowledge/application/KnowledgeLifecycleService';
 import { KnowledgeDocumentListPort } from '../knowledge/domain/KnowledgePorts';
 import { AssistantWelcome, CalendarDraftCard } from '../components/ChatVisuals';
@@ -52,8 +53,6 @@ import {
   OperationResult, OperationState, RequestState
 } from '../model/AssistantModels';
 import { MockAssistantService } from '../mock/MockAssistantService';
-import { PdfPageReferenceState, ResultPageReference } from '../knowledge/domain/PdfLocalModels';
-import { KnowledgeCancellation } from '../knowledge/domain/PdfKnowledgeModels';
 import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
 import { ImageIngestionView } from '../knowledge/ui/ImageIngestionView';
 import { ImageSourceView } from '../knowledge/ui/ImageSourceView';
@@ -179,13 +178,10 @@ struct Index {
   @State parseOpen: boolean = false;
   @State parseSettings: boolean = false;
   @State embeddingOpen: boolean = false;
+  @State embeddingOpening: boolean = false;
   @State pdfIngestionOpen: boolean = false;
   private pdfIngestionService: PdfIngestionService | undefined = undefined;
   private unifiedSearchService: KnowledgeSearchService | undefined = undefined;
-  @State pdfSourceOpen: boolean = false;
-  @State pdfSourceBinding: PdfSourceBinding = new PdfSourceBinding();
-  @State pdfSourceLocator: PdfLocator = new PdfLocator();
-  private pdfPageAdapter: PdfPageAdapter | undefined = undefined;
   private derivedLifecycle: KnowledgeDerivedLifecycle | undefined = undefined;
   private pdfDocumentsPort: KnowledgeDocumentListPort | undefined = undefined;
   private embeddingService: EmbeddingService | undefined = undefined;
@@ -255,7 +251,7 @@ struct Index {
     });
     RuntimeKnowledgeService.session.attach((view: RuntimeKnowledgeView): void => {
       if (this.knowledgeVoiceQuery && view.query.length > 0) this.hiddenVoiceQueries.add(view.query);
-      this.runtimeKnowledge = view;
+      this.runtimeKnowledge = view; this.knowledgeEnabled = view.consent;
     });
     this.lastRuntimeReply = RuntimeChatService.session.snapshot().replyId;
     RuntimeChatService.session.attach((view: AssistantView): void => {
@@ -301,6 +297,7 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    PdfJsRuntime.shared.closePreview();
     this.alive = false;
     RuntimeChatService.conversations.detach();
     SpeechService.session.detach();
@@ -315,6 +312,7 @@ struct Index {
     this.embeddingService?.pause(); this.closeKnowledgeSession().catch((): void => { this.parsedMessage='会话释放未确认；保留本机持有，可重试释放'; });
   }
   private async closeKnowledgeSession(): Promise<void> {
+    await PdfJsRuntime.shared.closeAndWait();
     this.sharedKnowledge?.unsubscribe(this.knowledgeListener);
     await this.sharedKnowledge?.quiesceUnified();
     await this.docxIngestionService?.close(); await this.sharedKnowledge?.docxSources.close();
@@ -323,6 +321,7 @@ struct Index {
 
   onBackPress(): boolean {
     if (this.speech.busy) { SpeechService.session.cancel(); return true; }
+    if (PdfJsRuntime.shared.expanded) { PdfJsRuntime.shared.closePreview(); return true; }
     if (this.drawerOpen) {
       this.drawerOpen = false;
       return true;
@@ -336,7 +335,6 @@ struct Index {
     if (this.docxIngestionOpen) { this.docxIngestionOpen = false; this.docxIngestionService?.pause(); return true; }
     if (this.imageSourceOpen) { this.imageSourceOpen = false; this.sharedKnowledge?.imageSources.close().catch((): void => {}); return true; }
     if (this.imageIngestionOpen) { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); return true; }
-    if (this.pdfSourceOpen) { this.pdfSourceOpen = false; return true; }
     if (this.pdfIngestionOpen) { this.pdfIngestionOpen = false; return true; }
     if (this.embeddingOpen) { this.closeEmbedding(); return true; }
     if (this.parseOpen) { this.closeParse(); return true; }
@@ -501,22 +499,10 @@ struct Index {
       await this.knowledgeService?.openHit(text); return;
     }
     if (hit.sourceKind !== KnowledgeSourceKind.Pdf) { return; }
-    const doc: PdfKnowledgeDocument | undefined = await this.sharedKnowledge?.repository.get(hit.documentId); const context = this.getUIContext().getHostContext();
-    if (doc === undefined || doc.tombstone || context === undefined) { return; }
-    if (this.sharedKnowledge === undefined) { return; }
-    const sourceJob = await this.sharedKnowledge.repository.generationJob(hit.generation);
-    if (doc.activeContentGeneration !== hit.generation || doc.binding.originalHash !== hit.originalHash) { return; }
-    let pageReference: ResultPageReference;
-    try { pageReference = await this.sharedKnowledge.pages.resolve(hit,new KnowledgeCancellation()); if (pageReference.state !== PdfPageReferenceState.Verified) { return; } } catch { this.knowledgeState.message = '原页依据或原件已失效，未跳转'; return; }
-    if (sourceJob.binding === undefined || sourceJob.snapshotId !== hit.snapshotId || sourceJob.snapshotHash !== hit.snapshotHash || sourceJob.binding.originalHash !== hit.originalHash || sourceJob.binding.originalVersion !== hit.originalVersion) { return; }
-    this.pdfSourceBinding = sourceJob.binding; this.pdfSourceLocator = hit.locator.pdfRegions[0] ?? new PdfLocator();
-    const adapter: PdfPageAdapter = new PdfPageAdapter(context.filesDir);
-    if (this.sharedKnowledge === undefined) { return; }
-    adapter.attachLease(this.sharedKnowledge.repository,this.sharedKnowledge.sourceReadLease(sourceJob.sourceId,hit.generation));
-    adapter.attachSnapshot(this.sharedKnowledge.repository,this.sharedKnowledge.assets,hit.snapshotId,hit.snapshotHash);
-    adapter.attachPageReference(pageReference);
-    adapter.attachNodeIds(await this.sharedKnowledge.repository.chunkSources(hit.chunkId,hit.generation));
-    try { if (this.pdfPageAdapter !== undefined) { await this.sharedKnowledge.sources.release(this.pdfPageAdapter); } this.sharedKnowledge.sources.adopt(adapter); this.pdfPageAdapter = adapter; this.pdfSourceOpen = true; } catch { this.knowledgeState.message = '原件读租约释放待确认，请重试释放'; }
+    const shared=this.sharedKnowledge; const context=this.getUIContext().getHostContext();
+    if (shared===undefined || context===undefined) { return; }
+    try { await new PdfJsSourcePreview(context.filesDir+'/knowledge_parse_v1',shared.repository,shared.pages,shared.lifecycle,(source: string,generation: string): KnowledgeReadLease=>shared.sourceReadLease(source,generation)).open(hit); }
+    catch (error) { if (this.alive) { this.knowledgeState.message=error instanceof Error?error.message:'PDF原件预览未完成'; } }
   }
   private closeParse(): void {
     this.parseService?.clearInput(); this.parseOpen = false; this.scroller.scrollEdge(Edge.Top);
@@ -602,12 +588,16 @@ struct Index {
   }
   private closeEmbedding(): void { this.embeddingClearEpoch++; this.embeddingService?.clearInput(); this.embeddingOpen = false; this.scroller.scrollEdge(Edge.Top); }
   private async openEmbedding(): Promise<void> {
-    this.embeddingOpen = true; this.scroller.scrollEdge(Edge.Top);
-    if (this.sharedKnowledge !== undefined) { this.embeddingService = this.sharedKnowledge.repository.ready() ? this.sharedKnowledge.embedding : undefined; return; }
-    const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
-    const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
-    try { await assembly.acquire(); this.embeddingService = assembly.repository.ready() ? assembly.embedding : undefined; }
+    if (this.embeddingOpening) { return; }
+    this.embeddingOpen = true; this.embeddingOpening = true; this.scroller.scrollEdge(Edge.Top);
+    try {
+      if (this.sharedKnowledge !== undefined) { this.embeddingService = this.sharedKnowledge.repository.ready() ? this.sharedKnowledge.embedding : undefined; return; }
+      const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
+      const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
+      await assembly.acquire(); this.embeddingService = assembly.repository.ready() ? assembly.embedding : undefined;
+    }
     catch { this.sharedKnowledge = undefined; this.embeddingService = undefined; }
+    finally { this.embeddingOpening = false; }
   }
   private async preparePdf(resultId: string): Promise<void> {
     await this.consumeParsed(resultId);
@@ -692,7 +682,7 @@ struct Index {
   }
 
   private async toggleKnowledge(): Promise<void> {
-    if (this.blocked()) return;
+    if (this.blocked() && !this.knowledgeEnabled) return;
     if (!this.realChatMode) { this.notice('请先打开真实功能', '知识库 RAG 不会回退为演示数据。请先切换到真实功能模式。'); return; }
     this.runtimeSwitching = true;
     try {
@@ -706,44 +696,20 @@ struct Index {
         this.notice('助手还没有连接', this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再试。' :
           '请先在「我的 → API Key 管理」保存 DeepSeek Key。'); return;
       }
+      const choice: number = await new Promise<number>((resolve: (value: number) => void): void => {
+        AlertDialog.show({ title: '允许助手按需使用个人知识库',
+          message: '允许本会话读取当前未归档资料，并将命中片段发送给 DeepSeek 回答。语义查询还会将提炼后的查询发送给已配置的 Embedding Provider，可能计费。授权不启动资料入库，关闭或新对话即撤销。',
+          primaryButton: { value: '允许语义查询', action: (): void => { resolve(1); } },
+          secondaryButton: { value: '仅本机检索', action: (): void => { resolve(0); } },
+          cancel: (): void => { resolve(-1); } });
+      });
+      if (choice < 0 || !this.alive || this.tab !== 0) { return; }
       this.ragPreparing = true;
-      let readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge();
-      // A saved SiliconFlow key that has not been confirmed yet (for example saved before this version) is confirmed
-      // here once with the fixed sentence, instead of asking the user to test it.
-      if (!readiness.ready && readiness.code === 'EmbeddingDetectionRequired' && await this.confirmEmbeddingKey()) {
-        readiness = await RuntimeAssistantCoordinator.enableKnowledge();
-      }
-      if (!readiness.ready) { this.notice('知识库问答暂不可用', this.ragReadinessText(readiness)); return; }
+      const readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge(choice === 1);
+      if (!readiness.ready) { this.notice('个人知识库尚不可用', readiness.message); return; }
       if (this.alive && this.tab === 0) { this.knowledgeEnabled = true; this.searchEnabled = false; }
     } catch { this.notice('切换没有完成', '请稍后重试；如果一直这样，请重启应用。'); }
     finally { this.runtimeSwitching = false; this.ragPreparing = false; }
-  }
-
-  private async confirmEmbeddingKey(): Promise<boolean> {
-    const context = this.getUIContext().getHostContext(); if (context === undefined) { return false; }
-    if (this.sharedKnowledge === undefined) {
-      const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
-      try { await assembly.acquire(); } catch { this.sharedKnowledge = undefined; return false; }
-    }
-    const shared: KnowledgeAssembly | undefined = this.sharedKnowledge;
-    if (shared === undefined || !shared.repository.ready()) { return false; }
-    const service: EmbeddingService = shared.embedding;
-    if (service.state.credential !== EmbeddingCredentialStatus.Configured || service.state.busy) { return false; }
-    try { await service.probe(true); } catch { return false; }
-    return service.state.detection.status === EmbeddingDetectionStatus.Passed;
-  }
-
-  private ragReadinessText(readiness: KnowledgeRagReadiness): string {
-    switch (readiness.code) {
-      case 'UnifiedStoreUnavailable': return '本机知识库还没打开，请稍后再试。';
-      case 'EmbeddingConfigRequired':
-      case 'EmbeddingCredentialRequired': return '请先在「我的 → API Key 管理」保存硅基流动 Key。';
-      case 'EmbeddingDetectionRequired':
-        return '硅基流动没有确认这个 Key（Key 无效、余额不足或网络不可用）。请在「我的 → API Key 管理」检查后重新保存。';
-      case 'EmbeddingSettingsRequired': return '请先在「我的 → 嵌入模型」开启自动入库。';
-      case 'VectorKnowledgeRequired': return '知识库里还没有处理完成的资料。请先在「知识库」导入资料，等处理完成后再试。';
-      default: return readiness.message;
-    }
   }
 
   @Builder
@@ -751,7 +717,8 @@ struct Index {
     Column({ space: 10 }) {
       if (this.knowledgeEnabled) {
         RuntimeKnowledgePanel({ view: this.runtimeKnowledge, hideQuery: this.knowledgeVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeKnowledge.query), onDisable: (): void => { void this.toggleKnowledge(); } })
-      } else if (this.searchEnabled) {
+      }
+      if (this.searchEnabled) {
         RuntimeSearchPanel({ view: this.runtimeSearch, hideQuery: this.searchVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeSearch.query) ||
           this.hiddenVoiceQueries.has(this.runtimeSearch.preview?.query ?? ''), keySaved: this.deepSeekStatus === DeepSeekKeyStatus.Saved,
           connecting: this.connecting, onConnect: (): void => { void this.ensureAssistant(true); },
@@ -819,7 +786,7 @@ struct Index {
     return this.deepSeekStatus === DeepSeekKeyStatus.Missing ? '休比 · 未设置 Key' : '休比 · 未连接';
   }
   private composerHint(): string {
-    return this.realChatMode ? (this.knowledgeEnabled ? '回答依据：我的知识库 · 来源可核对' :
+    return this.realChatMode ? (this.knowledgeEnabled ? '已授权个人知识库 · 按需查询并展示来源' :
       (this.searchEnabled ? '联网搜索 · 每次搜索前会征求你的同意' : '可提问、安排日程、写文档，也能发图片；日程创建前会让你确认')) :
       (this.searchEnabled ? '演示模式 · 固定样例，未联网' : '演示模式 · 数据仅本次有效');
   }
@@ -832,16 +799,6 @@ struct Index {
     }
     this.searchVoiceQuery = false; this.knowledgeVoiceQuery = false;
     if (this.realChatMode) {
-      if (this.knowledgeEnabled) {
-        if (this.runtimeKnowledge.lifecycle !== ShuviRuntimeState.READY) {
-          this.notice('知识库问答尚未就绪', this.runtimeKnowledge.message); return;
-        }
-        const query: string = this.input.trim(); this.input = '';
-        void RuntimeKnowledgeService.session.send(query).then((sent: boolean): void => {
-          if (!sent && this.alive && this.input.length === 0) { this.input = query; }
-        });
-        return;
-      }
       if (this.searchEnabled) {
         if (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance) {
           this.notice('联网搜索暂不可用', this.runtimeSearch.message); return;
@@ -973,6 +930,7 @@ struct Index {
     SpeechService.session.cancel();
     this.inputController.stopEditing();
     this.discardImage(); this.voiceDraft = undefined; this.voiceText = '';
+    RuntimeKnowledgeService.session.clearConversation();
     RuntimeChatService.session.context.clear();
     const restored: ChatMessage[] | undefined = await RuntimeChatService.conversations.switchTo(id);
     if (!this.alive) return;
@@ -995,7 +953,7 @@ struct Index {
   private async removeConversation(id: string): Promise<void> {
     const current: boolean = id === this.conversations.currentId;
     if (current && this.blocked()) { this.notice('请稍候', '等这次回答完成后再删除当前对话。'); return; }
-    if (current) { RuntimeChatService.session.context.clear(); }
+    if (current) { RuntimeKnowledgeService.session.clearConversation(); RuntimeChatService.session.context.clear(); }
     const wasCurrent: boolean = await RuntimeChatService.conversations.remove(id);
     if (wasCurrent && this.alive) {
       this.showMessages([]); this.discardImage(); this.voiceDraft = undefined; this.voiceText = '';
@@ -1477,18 +1435,15 @@ struct Index {
   }
 
   private async sendVoice(): Promise<void> {
+    if (this.imageDraft !== undefined) { await this.sendImage(); return; }
     const clip = this.voiceDraft; const transcript = this.voiceText; const supplement = this.input;
     const text = composeVoiceMessage(transcript, supplement);
     if (clip === undefined || this.blocked() || text.length === 0 || text.length > 500) return;
-    if (!this.realChatMode) { this.notice('助手还没有连接', '录音已保存在本机，连接助手后再发送。'); return; }
-    if (this.knowledgeEnabled && this.runtimeKnowledge.lifecycle !== ShuviRuntimeState.READY) {
-      this.notice('知识库问答还没准备好', '录音已保存，请稍候再发送。'); return;
+    if (!this.realChatMode) { this.notice('请先启用真实对话', '录音已保存在本机。启用助手后可发送语音消息，转写不会显示。'); return; }
+    if (this.searchEnabled && (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance)) {
+      this.notice('真实搜索尚不可用', '录音已保存，请先准备搜索会话。'); return;
     }
-    if (this.searchEnabled && !this.knowledgeEnabled &&
-      (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance)) {
-      this.notice('联网搜索暂不可用', '录音已保存，搜索连接上后再发送。'); return;
-    }
-    if (!this.knowledgeEnabled && !this.searchEnabled && (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY ||
+    if (!this.searchEnabled && (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY ||
       this.runtimeChat.requestCount >= this.runtimeChat.maxRequests)) {
       if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
         this.notice('这段对话已经很长了', '录音已保存，点右上角「开始新对话」后再发送。'); return;
@@ -1498,17 +1453,19 @@ struct Index {
     const message: ChatMessage = { id: this.service.nextId('message'), isUser: true, text: supplement.trim(), voice: clip };
     this.messages = this.messages.concat([message]); this.voiceDraft = undefined; this.voiceText = ''; this.input = '';
     this.hiddenVoiceQueries.add(text);
-    this.searchVoiceQuery = this.searchEnabled && !this.knowledgeEnabled; this.knowledgeVoiceQuery = this.knowledgeEnabled;
-    if (this.knowledgeEnabled) {
-      const sent = await RuntimeKnowledgeService.session.send(text);
-      if (!sent && this.alive) {
+    this.searchVoiceQuery = this.searchEnabled; this.knowledgeVoiceQuery = this.knowledgeEnabled && !this.searchEnabled;
+    try {
+      if (this.searchEnabled) { await RuntimeSearchService.session.send(text); }
+      else { await RuntimeChatService.session.send(text); }
+    } catch {
+      if (this.alive) {
         this.messages = this.messages.filter((item: ChatMessage): boolean => item.id !== message.id);
         if (this.voiceDraft === undefined && this.input.length === 0) {
           this.voiceDraft = clip; this.voiceText = transcript; this.input = supplement;
         }
+        this.notice('本次语音消息未确认接收', '草稿已保留；请核对会话状态后重试。');
       }
-    } else if (this.searchEnabled) { await RuntimeSearchService.session.send(text); }
-    else { await RuntimeChatService.session.send(text); }
+    }
     this.scroller.scrollEdge(Edge.Bottom);
   }
 
@@ -1561,6 +1518,7 @@ struct Index {
     // The session takes ownership of the bytes (it zeroes them after the turn); the composer only forgets them.
     this.imageDraft = undefined; this.imageDraftUri = ''; this.voiceDraft = undefined; this.voiceText = ''; this.input = '';
     this.inputController.stopEditing();
+    if (clip !== undefined) { this.hiddenVoiceQueries.add(spoken); }
     await RuntimeChatService.session.send(spoken.length > 0 ? spoken : ASSISTANT_IMAGE_DEFAULT_PROMPT, image);
     this.scroller.scrollEdge(Edge.Bottom);
   }
@@ -1693,9 +1651,9 @@ struct Index {
             chipId: 'chat-search-toggle',
             a11y: `联网搜索，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`,
             onTap: (): void => { void this.toggleSearch(); } })
-          ModeChip({ icon: $r('app.media.chat_book'), label: this.ragPreparing ? '准备中…' : '知识库', on: this.knowledgeEnabled,
-            disabled: this.blocked(), chipId: 'chat-knowledge-toggle',
-            a11y: `本机知识库问答，${this.ragPreparing ? '正在打开本机知识库' : (this.knowledgeEnabled ? '已开启，点击关闭' : '已关闭，点击开启')}`,
+          ModeChip({ icon: $r('app.media.chat_book'), label: this.ragPreparing ? '准备中…' : '允许使用个人知识库', on: this.knowledgeEnabled,
+            disabled: this.blocked() && !this.knowledgeEnabled, chipId: 'chat-knowledge-toggle',
+            a11y: `个人知识库授权，${this.ragPreparing ? '正在只读恢复' : (this.knowledgeEnabled ? '已允许按需使用，点击撤销' : '未授权，点击允许读取及已说明的查询与片段外发')}`,
             onTap: (): void => { void this.toggleKnowledge(); } })
           Blank()
           Row({ space: 2 }) {
@@ -1905,8 +1863,6 @@ struct Index {
                onParseSettings: (): void => { this.imageIngestionOpen = false; this.openParse(true); }, onEmbeddingSettings: (): void => { this.imageIngestionOpen = false; this.openEmbedding(); } })
           } else if (this.showScenarios) {
             this.scenarioPanel()
-           } else if (this.pdfSourceOpen) {
-              PdfSourceView({ adapter: this.pdfPageAdapter, session: this.sharedKnowledge?.sources, binding: this.pdfSourceBinding, locator: this.pdfSourceLocator, onBack: (): void => { this.pdfSourceOpen = false; } })
            } else if (this.pdfIngestionOpen) {
              if (this.pdfIngestionService !== undefined) {
                PdfIngestionView({ service: this.pdfIngestionService, lifecycle: this.derivedLifecycle, onBack: (): void => { this.pdfIngestionOpen = false; } })
@@ -2008,6 +1964,7 @@ struct Index {
           }.width('100%').height('100%').backgroundColor(Theme.overlay).borderRadius(0)
             .accessibilityText('关闭导航菜单').onClick(() => this.drawerOpen = false)
         }
+        PdfJsSurface()
       }.width('100%').height('100%')
         .onAreaChange((_oldArea: Area, area: Area) => this.resizeFloatingHost(Number(area.width), Number(area.height)))
     }.width('100%').height('100%').showSideBar(this.drawerOpen).showControlButton(false)

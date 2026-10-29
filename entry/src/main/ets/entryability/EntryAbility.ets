@@ -23,6 +23,7 @@ import { DirectModelCheckService } from '../services/model/DirectModelCheckServi
 import { ShuviRuntimeService } from '../services/model/ShuviRuntimeService';
 import { RuntimeChatService } from '../services/model/RuntimeChatService';
 import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
+import { PdfJsRuntime } from '../knowledge/infra/PdfJsRuntime';
 import { RuntimeKnowledgeService } from '../services/model/RuntimeKnowledgeService';
 import { RuntimeVisionService } from '../services/model/RuntimeVisionService';
 import { DocumentParseAssembly } from '../knowledge/infra/DocumentParseAssembly';
@@ -50,6 +51,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    PdfJsRuntime.shared.detach();
     SpeechService.release();
     void CalendarDraftService.controller.onDestroy().catch((): void => {});
     CalendarProbeService.release();
@@ -88,6 +90,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    PdfJsRuntime.shared.detach();
     SpeechService.background();
     // Main window is destroyed, release UI related resources
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
@@ -108,6 +111,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onBackground(): void {
+    PdfJsRuntime.shared.closePreview();
     SpeechService.background();
     void CalendarDraftService.controller.onBackground().catch((): void => {});
     CalendarProbeService.background();

@@ -22,9 +22,48 @@ exports.cases=h=>{
     async function qualify(document){const chunks=await repo.chunks(document.documentKey),job=new U.UnifiedProcessingJob();Object.assign(job,{id:'body-'+document.documentKey,dedupKey:'body-'+document.documentKey,documentKey:document.documentKey,ownerId:document.documentKey,version:document.generation,stage:'BodyEmbedding',settingsPurpose:'Embedding',origin:U.UnifiedJobOrigin.Import,state:U.UnifiedJobState.Complete,configBinding:settings.configBinding,epoch:0,expected:chunks.length,completed:chunks.length});if(!chunks.length)return;for(const c of chunks){const i=new U.UnifiedTextInput();Object.assign(i,{id:c.id,documentKey:c.documentKey,ownerId:c.documentKey,version:c.generation,actualText:c.text,inputHash:c.inputHash,ordinal:c.ordinal,blockId:c.blockId,occurrenceId:c.occurrenceId,start:c.start,end:c.end,kind:c.evidence==='Ocr'?U.UnifiedInputKind.Ocr:U.UnifiedInputKind.Body});job.inputs.push(i);const r=new E.KnowledgeVectorRow();Object.assign(r,{spaceId:sp.id,chunkId:c.id,documentId:'upd:body:'+c.documentKey,contentGeneration:c.generation,vectorGeneration:job.id,inputHash:c.inputHash,epoch:0,eligible:true,values:new Float32Array([1,0,0])});numericRows.set(c.id+'|'+job.id,r);}job.inputHash=hash(job.inputs.map(i=>i.id+'|'+i.inputHash).join('\n'));await repo.saveJob(job);await repo.putMeta('vector-space:'+job.id,sp.id);const b=new U.UnifiedIndexBinding();Object.assign(b,{ownerNamespace:'upd-body',ownerId:document.documentKey,version:document.generation,expected:chunks.length,inputSetHash:job.inputHash,readbackHash:job.inputHash,vectorGeneration:job.id,state:U.UnifiedBindingState.Synced});await repo.saveBinding(b);}
     async function annotate(document,description='图片描述',tags=['问题'],lineage='global-shared',revision=1){const record=(await repo.imageRecords(document.documentKey))[0],a=new U.UnifiedEffectiveAnnotation();Object.assign(a,{id:'eff-'+hash(lineage+'|'+revision+description+tags.join('|')).slice(0,40),lineage,revision,imageHash:record.imageHash,description,tags,textHash:hash(h.load('pipeline/UnifiedTextPolicy').unifiedProxyText(description,tags))});assert(await repo.applyAnnotation(record,a,undefined));return a;}
     async function qualifyImage(document){const r=(await repo.imageRecords(document.documentKey))[0],a=await repo.annotation(r.effectiveId);const inputs=await h.load('pipeline/UnifiedTextPolicy').unifiedProxyInputs(document.documentKey,a.lineage,a.id,h.load('pipeline/UnifiedTextPolicy').unifiedProxyText(a.description,a.tags),h.identity);const j=new U.UnifiedProcessingJob();Object.assign(j,{id:'proxy-'+a.id,dedupKey:'proxy-'+a.id,documentKey:document.documentKey,ownerId:a.lineage,version:document.generation,stage:'ImageEmbedding',settingsPurpose:'Embedding',origin:U.UnifiedJobOrigin.Import,state:U.UnifiedJobState.Complete,configBinding:settings.configBinding,epoch:0,expected:inputs.length,completed:inputs.length,inputs,assetId:r.assetId,occurrenceId:r.occurrenceId,annotationId:a.id});j.inputHash=hash(inputs.map(i=>i.id+'|'+i.inputHash).join('\n'));if(!(await repo.jobs()).some(old=>old.id===j.id))await repo.saveJob(j);await repo.putMeta('vector-space:'+j.id,sp.id);const b=new U.UnifiedIndexBinding();Object.assign(b,{ownerNamespace:'upd-image',ownerId:a.lineage,version:a.id,expected:inputs.length,inputSetHash:j.inputHash,readbackHash:j.inputHash,vectorGeneration:j.id,state:U.UnifiedBindingState.Synced});await repo.saveBinding(b);for(const i of inputs){const row=new E.KnowledgeVectorRow();Object.assign(row,{spaceId:sp.id,chunkId:i.id,documentId:'upd:image:'+a.lineage,contentGeneration:a.id,vectorGeneration:j.id,inputHash:i.inputHash,epoch:0,eligible:true,values:new Float32Array([1,0,0])});numericRows.set(i.id+'|'+j.id,row);}}
-    return {repo,assets,source,engine,history,session,numeric,numericRows,spaces,sp,config,counter,transport,addDoc,qualify,annotate,qualifyImage,calls:()=>calls};
+    return {repo,assets,source,engine,history,session,numeric,numericRows,spaces,sp,config,settings,counter,transport,addDoc,qualify,annotate,qualifyImage,calls:()=>calls};
   }
   return [
+    ['l1_historical_credentials_do_not_hide_body_or_image_and_new_spaces_merge',async()=>{
+      const s=await setup(),old=await s.addDoc('historical-body','历史正文'),image=await s.addDoc('historical-image','',false,true);
+      await s.qualify(old);await s.annotate(image);await s.qualifyImage(image);
+      const originalJobs=JSON.stringify(await s.repo.jobs());
+      const preserved=Object.assign(new E.EmbeddingSpace(),s.sp);s.spaces.set(preserved.id,preserved);
+      s.config.revision=11;s.config.credentialRevision=3;
+      s.settings.configBinding=h.load('pipeline/EmbeddingBasisPolicy').embeddingConfigBinding(s.config);s.settings.credentialRevision=3;s.settings.revision++;await s.repo.saveSettings(s.settings);
+      let scope=await s.source.capture(s.config,false,new M.ParsedCancellation());assert.equal(scope.targets.length,2);assert.equal(scope.spaces.length,1);assert.equal(JSON.stringify(await s.repo.jobs()),originalJobs);
+      Object.assign(s.sp,{id:'kb-'+'e'.repeat(32),configFingerprint:s.settings.configBinding});s.spaces.set(s.sp.id,s.sp);
+      const fresh=await s.addDoc('new-body','新正文');await s.qualify(fresh);
+      scope=await s.source.capture(s.config,false,new M.ParsedCancellation());assert.equal(scope.spaces.length,2);assert.equal(scope.targets.length,3);
+      await s.session.start('检索资料');await s.session.review();await s.session.allowSemantic(true,true);
+      assert.equal(s.calls(),1);assert.equal(s.session.state.semanticState,'Complete');
+      const cards=s.session.state.related.cards;assert(cards.some(c=>c.documentKey===old.documentKey));assert(cards.some(c=>c.documentKey===image.documentKey));assert(cards.some(c=>c.documentKey===fresh.documentKey));
+      const {UnifiedQueryRepository}=h.load('infra/UnifiedQueryRepository');const reopened=new UnifiedQueryRepository({enqueue:fn=>fn()},s.repo,s.numeric,{currentConfig:()=>s.config},h.identity);
+      const restored=await reopened.capture(s.config,false,new M.ParsedCancellation());assert.equal(restored.hash,scope.hash);assert.equal(restored.targets.length,3);
+      const jobs=await s.repo.jobs();assert.equal(jobs.filter(j=>j.configBinding===preserved.configFingerprint).length,2);
+    }],
+    ['l1_semantic_compatibility_rejects_provider_model_workspace_and_malformed_bindings',async()=>{
+      const P=h.load('pipeline/EmbeddingSpacePolicy');const s=await setup();
+      assert(P.unifiedQuerySpaceMatches(s.sp,s.config));
+      for(const field of ['provider','region','access','workspaceId','requestedModel','returnedModel']){const invalid=Object.assign(new E.EmbeddingSpace(),s.sp);invalid[field]='other';assert.equal(P.unifiedQuerySpaceMatches(invalid,s.config),false,field);}
+      for(const raw of ['','bad','x|x|x|x|x|x|1|2','%|bad',s.sp.configFingerprint+'|extra',s.sp.configFingerprint.replace(/\|1\|1$/,'|-1|1')]){const invalid=Object.assign(new E.EmbeddingSpace(),s.sp,{configFingerprint:raw});assert.equal(P.unifiedQuerySpaceMatches(invalid,s.config),false);}
+      for(const field of ['dimension','preprocessing','profileId','profileRevision','tokenizerSha256','profileParameters','rolePair','normalization','metric','providerRevision','providerConsistency']){const invalid=Object.assign(new E.EmbeddingSpace(),s.sp);invalid[field]=field==='dimension'?4:'other';assert.equal(P.unifiedQuerySpacesCompatible(invalid,s.sp),false,field);}
+    }],
+    ['l1_incompatible_semantic_spaces_fail_closed_and_scope_change_revokes_query',async()=>{
+      const s=await setup(),d=await s.addDoc('conflict','候选');await s.qualify(d);
+      const incompatible=Object.assign(new E.EmbeddingSpace(),s.sp,{id:'kb-'+'c'.repeat(32),dimension:4});s.spaces.set(incompatible.id,incompatible);
+      const scope=await s.source.capture(s.config,false,new M.ParsedCancellation());assert.equal(scope.space,undefined);assert.equal(scope.targets.length,0);assert.equal(s.calls(),0);
+      s.spaces.delete(incompatible.id);await s.session.start('查询');await s.session.review();
+      s.config.credentialRevision++;await s.session.allowSemantic(true,true);assert.equal(s.calls(),0);
+    }],
+    ['l1_historical_job_cannot_claim_another_spaces_config_or_revive_archived_content',async()=>{
+      const s=await setup(),d=await s.addDoc('identity','内容');await s.qualify(d);
+      const job=(await s.repo.jobs())[0];job.configBinding=job.configBinding.replace(/\|1\|1$/,'|6|2');await s.repo.saveJob(job);
+      assert.equal((await s.source.capture(s.config,false,new M.ParsedCancellation())).targets.length,0);
+      job.configBinding=s.sp.configFingerprint;await s.repo.saveJob(job);await s.repo.setUnifiedArchived(d.documentKey,true);
+      assert.equal((await s.source.capture(s.config,false,new M.ParsedCancellation())).targets.length,0);assert.equal(s.calls(),0);
+    }],
     ['query_review_reports_disabled_cost_baseline_config_space_and_targets_without_network',async()=>{
       const variants=[['enabled',false,'UnifiedEmbeddingDisabled'],['costAcknowledged',false,'UnifiedEmbeddingCostRequired'],['paused',true,'UnifiedEmbeddingPaused'],['baselineAccepted',false,'UnifiedEmbeddingBaselineRequired'],['configBinding','changed','UnifiedEmbeddingConfigChanged']];
       for(const [field,value,category] of variants){const s=await setup();const setting=await s.repo.settings('Embedding');setting[field]=value;s.engine.repository={settings:async()=>setting};await s.session.start('诊断');await assert.rejects(s.session.review(),e=>e.category===category);assert.equal(s.calls(),0);}

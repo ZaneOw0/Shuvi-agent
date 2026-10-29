@@ -218,6 +218,33 @@ function countUrlFragments(slices: ChunkSlice[]): number {
   return fragments;
 }
 
+function fenceMarkerPositions(source: string): number[] {
+  const positions: number[] = [];
+  let index: number = source.indexOf('```');
+  while (index >= 0) {
+    positions.push(index);
+    index = source.indexOf('```', index + 3);
+  }
+  return positions;
+}
+
+function enclosingFenceBlockLength(source: string, position: number): number {
+  const markers: number[] = fenceMarkerPositions(source);
+  let openIndex: number = -1;
+  for (let i = 0; i < markers.length; i++) {
+    if (markers[i] < position) {
+      openIndex = i;
+    } else {
+      break;
+    }
+  }
+  if (openIndex < 0 || openIndex % 2 === 1) {
+    return -1;
+  }
+  const closePosition: number = openIndex + 1 < markers.length ? markers[openIndex + 1] : source.length;
+  return closePosition - markers[openIndex];
+}
+
 function findDoc(docs: CorpusDoc[], name: string): CorpusDoc {
   for (let i = 0; i < docs.length; i++) {
     if (docs[i].name === name) {
@@ -309,6 +336,34 @@ export function corpusCases(docs: CorpusDoc[]): CorpusTestCase[] {
       const fragments: number = countUrlFragments(slices);
       console.log(`[长链接] 无 scheme 的 URL 碎片块=${fragments}`);
       check(fragments === 0, `有 ${fragments} 块只包含 URL 的一部分且丢失 scheme`);
+    }
+  });
+  cases.push({
+    name: '代码块 · 切点不应落在代码围栏内部',
+    run: async () => {
+      const names: string[] = ['deepseek-chat-completions.md', 'engineering-readme-mixed.md'];
+      for (let n = 0; n < names.length; n++) {
+        const doc: CorpusDoc = findDoc(docs, names[n]);
+        const markers: number[] = fenceMarkerPositions(doc.text);
+        check(markers.length % 2 === 0, `${doc.name}: 语料自身围栏数不为偶数（${markers.length}）`);
+        const slices: ChunkSlice[] = chunkText(doc.text, 512, DEFAULT_RATIO);
+        let splittable: number = 0;
+        let oversized: number = 0;
+        for (let i = 0; i < slices.length - 1; i++) {
+          const cut: number = rawEnd(doc.text, slices[i]);
+          const blockLength: number = enclosingFenceBlockLength(doc.text, cut);
+          if (blockLength < 0) {
+            continue;
+          }
+          if (blockLength > 512) {
+            oversized++;
+          } else {
+            splittable++;
+          }
+        }
+        console.log(`[代码块] ${doc.name} 切点落在围栏内且整块可容纳=${splittable} 落在围栏内但整块超上限(不可避免)=${oversized} 块数=${slices.length}`);
+        check(splittable === 0, `${doc.name}: 有 ${splittable} 个切点落在本可整体容纳的代码围栏内部`);
+      }
     }
   });
   cases.push({

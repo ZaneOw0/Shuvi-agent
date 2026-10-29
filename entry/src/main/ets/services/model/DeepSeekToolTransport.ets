@@ -5,6 +5,7 @@ import {
   ProviderErrorCode, ProviderFinishReason, ProviderOperationHandle, ProviderTransportError
 } from '@harmony_agent/agent-connectors';
 import { SingleAgentHostResourcePort } from '@harmony_agent/agent-runtime';
+import { ModelLoopToolsPort } from './ModelLoopTools';
 import { DOCUMENT_MODEL_TOOL_NAMES, ModelDocumentToolsPort, documentModelToolDefinitions } from '../documents/DocumentToolContracts';
 import { DeepSeekHttpClientPort, DeepSeekHttpRequest, DeepSeekHttpResponse, DeepSeekProfile,
   createDeepSeekModelProfile, parseDeepSeekResponse } from './DeepSeekProtocol';
@@ -217,22 +218,32 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
   /** History of a transport without a turn port; with a port the conversation owns its history. */
   private turns: ToolChatMessage[][] = [];
   private attempts: number = 0;
+  private readonly extra?: ModelLoopToolsPort;
+  private extraRevision: number = -1;
+  // Knowledge-derived context is session-only, excluded from durable memory and compaction.
+  private knowledgeHistory: ToolChatMessage[][] = [];
+  private knowledgeLineage: boolean = false;
+  private knowledgeAttempts: number = 0;
   private stopped: boolean = false;
   private closing?: Promise<void>;
   private active?: ProviderOperationHandle<ModelTransportResult>;
   constructor(profile: DeepSeekProfile, client: DeepSeekHttpClientPort, tools: ModelDocumentToolsPort,
-    turn?: ModelTurnPort, limits: ToolTurnLimits = new ToolTurnLimits()) {
+    turn?: ModelTurnPort, limits: ToolTurnLimits = new ToolTurnLimits(), extra?: ModelLoopToolsPort) {
     createDeepSeekModelProfile(profile);
     this.profile = JSON.parse(JSON.stringify(profile)) as DeepSeekProfile; this.client = client; this.tools = tools;
-    this.turn = turn; this.limits = limits;
+    this.turn = turn; this.limits = limits; this.extra = extra;
   }
   async open(): Promise<void> { if (this.stopped) throw failure(ProviderErrorCode.CANCELLED); }
   /** Idempotent: the session may close its memory resource through more than one owner. */
   async close(): Promise<void> {
     if (this.closing === undefined) {
-      this.stopped = true; this.active?.cancel(); this.turns = []; this.closing = this.tools.close();
+      this.stopped = true; this.active?.cancel(); this.turns = []; this.knowledgeHistory = [];
+      this.closing = this.closeResources();
     }
     await this.closing;
+  }
+  private async closeResources(): Promise<void> {
+    try { await this.extra?.close(); } finally { await this.tools.close(); }
   }
   start(request: ModelInvocation, credential: ProviderCredential, _observer?: ModelTransportObserver): ProviderOperationHandle<ModelTransportResult> {
     if (this.stopped || !this.profile.available || this.active !== undefined || request.modelId !== this.profile.modelId ||
@@ -261,10 +272,16 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
       (current: ProviderOperationHandle<DeepSeekHttpResponse>): void => { source = current; }, image);
     const operation: ToolLoopOperation = new ToolLoopOperation(promise.finally((): void => { this.active = undefined; }), (): void => {
       if (cancelled) return; cancelled = true; source?.cancel(); void this.tools.cancel().catch((): void => { this.stopped = true; });
+      void this.extra?.cancel().catch((): void => { this.stopped = true; });
     });
     this.active = operation; return operation;
   }
   private remember(turn: ToolChatMessage[]): void {
+    if (this.knowledgeLineage) {
+      this.knowledgeHistory.push(turn);
+      while (this.knowledgeHistory.length > 0 && historyLength(this.knowledgeHistory) > this.limits.historyChars) this.knowledgeHistory.shift();
+      return;
+    }
     if (this.turn !== undefined) { this.turn.rememberTurn(turn); return; }
     this.turns.push(turn); if (this.turns.length > 8) this.turns.shift();
   }
@@ -332,16 +349,28 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
     await Promise.resolve();
     const turnPort: ModelTurnPort | undefined = this.turn;
     const proposals: string[] = turnPort === undefined ? [] : turnPort.proposalNames();
-    const allowed: string[] = DOCUMENT_MODEL_TOOL_NAMES.concat(proposals);
-    const deadline: number = Date.now() + request.context.timeoutMs;
+    const extra: ModelLoopToolsPort | undefined = this.extra;
+    const extraRevision: number = extra?.revision() ?? 0;
+    if (this.extraRevision !== extraRevision) {
+      this.knowledgeHistory = []; this.knowledgeLineage = false; this.extraRevision = extraRevision;
+    }
+    const extraNames: string[] = extra?.names() ?? [];
+    const knowledgeEnabled: boolean = extra !== undefined && (extraNames.length > 0 || this.knowledgeLineage);
+    const allowed: string[] = DOCUMENT_MODEL_TOOL_NAMES.concat(proposals, extraNames);
+    const deadline: number = Date.now() + Math.min(request.context.timeoutMs, knowledgeEnabled ? 90000 : request.context.timeoutMs);
+    const maxInput: number = knowledgeEnabled ? Math.min(this.limits.maxInputTokens, 32768) : this.limits.maxInputTokens;
+    const maxOutput: number = knowledgeEnabled ? Math.min(request.maxOutputTokens, 2048) : request.maxOutputTokens;
+    extra?.begin(request.messages[1].content, request.context.requestId, deadline);
     // The conversation (not this session) owns the history: it survives page switches, backgrounding and restarts.
     const usage: ToolRound = new ToolRound();
-    if (turnPort !== undefined) await this.compact(turnPort, authorization, cancelled, current, deadline, usage);
+    if (turnPort !== undefined && !knowledgeEnabled) await this.compact(turnPort, authorization, cancelled, current, deadline, usage);
     let history: ToolChatMessage[][] = turnPort === undefined ? this.turns.slice() : turnPort.historyTurns();
+    history = history.concat(this.knowledgeHistory);
     while (history.length > 0 && historyLength(history) > this.limits.historyChars) history = history.slice(1);
     const summary: string = turnPort === undefined ? '' : turnPort.historySummary();
     const system: ToolChatMessage = new ToolChatMessage(); system.role = 'system';
     system.content = request.messages[0].content + (summary ? TOOL_TURN_SUMMARY_HEADING + summary : '');
+    if (extra !== undefined) system.content += '\n' + extra.policy();
     const turn: ToolChatMessage[] = []; const user: ToolChatMessage = new ToolChatMessage();
     user.role = 'user'; user.content = request.messages[1].content; turn.push(user);
     // An image turn sends [text, image_url] for its own requests only; the stored copy stays text with a note.
@@ -362,14 +391,15 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
     const errors: string[] = [];
     let readbacks: string[] = [];
     try {
-      for (let roundIndex: number = 0; roundIndex < TOOL_TURN_MAX_ROUNDS; roundIndex++) {
-        if (cancelled() || this.stopped) throw failure(ProviderErrorCode.CANCELLED);
-        if (this.attemptsExhausted() || Date.now() >= deadline || output >= request.maxOutputTokens ||
-          input > this.limits.maxInputTokens) throw failure();
+      for (let roundIndex: number = 0; roundIndex < (knowledgeEnabled ? 3 : TOOL_TURN_MAX_ROUNDS); roundIndex++) {
+        if (cancelled() || this.stopped || extra !== undefined && extra.revision() !== extraRevision) throw failure(ProviderErrorCode.CANCELLED);
+        if (this.attemptsExhausted() || knowledgeEnabled && this.knowledgeAttempts >= 10 || Date.now() >= deadline || output >= maxOutput ||
+          input > maxInput) throw failure();
         const payload: ToolPayload = new ToolPayload(); payload.model = this.profile.modelId;
-        payload.max_tokens = request.maxOutputTokens - output; payload.temperature = request.temperature;
+        payload.max_tokens = maxOutput - output; payload.temperature = request.temperature;
         payload.tool_choice = blockTools ? 'none' : 'auto';
-        payload.tools = documentModelToolDefinitions(blockWrites).concat(turnPort === undefined ? [] : turnPort.proposalDefinitions());
+        payload.tools = documentModelToolDefinitions(blockWrites).concat(turnPort === undefined ? [] : turnPort.proposalDefinitions(), extra?.definitions() ?? []);
+        if (knowledgeEnabled && roundIndex === 2) { payload.tool_choice = 'none'; blockTools = true; }
         const wire: Object[] = imageUser === undefined ? turn : ([imageUser] as Object[]).concat(turn.slice(1));
         payload.messages = [system, ...history.flat(), ...wire];
         const body: string = JSON.stringify(payload);
@@ -378,21 +408,23 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
         // Uploading an image body takes longer than a text turn; the whole turn still ends at the shared deadline.
         outgoing.timeoutMs = Math.min(imageUser === undefined ? 30000 : 60000, deadline - Date.now()); outgoing.connectTimeoutMs = Math.min(this.profile.connectTimeoutMs, outgoing.timeoutMs);
         outgoing.maxResponseBytes = this.profile.maxResponseBytes;
-        this.attempts++; const operation = this.client.start(outgoing); current(operation);
+        this.attempts++; if (knowledgeEnabled) this.knowledgeAttempts++; const operation = this.client.start(outgoing); current(operation);
         const response = await operation.result;
-        if (cancelled() || this.stopped) throw failure(ProviderErrorCode.CANCELLED);
+        if (cancelled() || this.stopped || extra !== undefined && extra.revision() !== extraRevision) throw failure(ProviderErrorCode.CANCELLED);
         const result: ToolRound = parseModelToolRound(response, this.profile.modelId, this.profile.maxResponseBytes, allowed);
         input += result.input; output += result.output;
-        if (input > this.limits.maxInputTokens || output > request.maxOutputTokens) throw failure();
+        if (input > maxInput || output > maxOutput) throw failure();
         turn.push(result.message);
         if (result.final) {
           if (/<[｜|]*DSML[｜|]*\s+(?:calls|invoke|parameter)\b|<tool_call(?:>|\s)/i.test(result.message.content ?? '')) {
             result.message.content = '模型返回了未执行的工具调用文本；没有根据这些文本执行操作，本轮未完成这一步核查。';
           }
+          const answerText: string = extra === undefined ? (result.message.content ?? '') : await extra.finish(result.message.content ?? '');
+          if (extra !== undefined && extra.revision() !== extraRevision) throw failure(ProviderErrorCode.CANCELLED);
           this.remember(turn);
           const notes: string = turnNotes([], receipts, readbacks);
           const text: string = (errors.length > 0 ? '本轮有工具未完成：' + errors.join('；') + '\n\n' : '') +
-            (result.message.content ?? '') + (notes ? '\n\n' + notes : '');
+            answerText + (notes ? '\n\n' + notes : '');
           return this.result(turnPort === undefined ? text : turnPort.answer(text), input, output);
         }
         if (blockTools) throw failure();
@@ -410,6 +442,14 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
                 turnNotes(errors, receipts, readbacks));
               if (value.error) reply.content = JSON.stringify({ ok: false, error: 'PROPOSAL_REJECTED', reason: value.error });
               else { proposed = value; reply.content = value.toolReply; }
+            }
+          } else if (extraNames.includes(call.function.name) && extra !== undefined) {
+            if (blockTools || cancelled() || this.stopped || extra.revision() !== extraRevision || toolCount >= TOOL_TURN_MAX_TOOL_CALLS) {
+              reply.content = '{"status":"denied","hits":[]}';
+            } else {
+              toolCount++; this.knowledgeLineage = true;
+              try { reply.content = await extra.invoke(call.function.name, call.function.arguments, call.id); }
+              catch { reply.content = '{"status":"failed","hits":[]}'; }
             }
           } else if (blockWrites && call.function.name !== 'document_read') {
             reply.content = '{"ok":false,"error":"WRITE_BLOCKED_PENDING_VERIFICATION","allowedTools":["document_read"]}';

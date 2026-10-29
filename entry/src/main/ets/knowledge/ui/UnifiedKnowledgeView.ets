@@ -123,10 +123,10 @@ export struct UnifiedKnowledgeView {
           }.width('100%')
           if (this.errorDetails) { Text(this.directError || this.relatedError).fontColor(Theme.ink).id('upd-query-error-reason').fontSize(12).fontColor(Theme.muted).width('100%') }
         }
-        Text('内容匹配').fontColor(Theme.ink).fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.ink).width('100%').margin({ top: 8 })
+        Text('关键词命中').fontColor(Theme.ink).fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.ink).width('100%').margin({ top: 8 })
         ForEach(this.direct, (c: UnifiedSearchCard): void => { UnifiedKnowledgeResultCard({ card: c, onOpen: this.onOpen, id: 'upd-card-' + c.key }) }, (c: UnifiedSearchCard): string => c.key)
         if (this.direct.length === 0 && !this.directBusy && this.directError.length === 0) {
-          Text('没有找到包含这些文字的内容').fontColor(Theme.ink).fontSize(14).fontColor(Theme.muted).width('100%')
+          Text(this.session?.state.lexicalPartial ? '当前已检索范围无命中，可继续检索' : '没有找到相关关键词内容').fontColor(Theme.ink).fontSize(14).fontColor(Theme.muted).width('100%')
         }
         if (this.directMore && !this.directBusy && this.directError.length === 0) { Button('查看更多').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).id('upd-direct-more').width('100%').onClick((): void => { this.page('Direct'); }) }
         Text('相关资料').fontColor(Theme.ink).fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.ink).width('100%').margin({ top: 8 })

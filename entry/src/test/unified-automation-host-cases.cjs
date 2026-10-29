@@ -28,10 +28,93 @@ exports.cases=h=>{
     const credentials={status:async()=>({present:true,failure:''}),save:async()=>{},remove:async()=>{}};const settings=new UnifiedSettingsService(repo,credentials,configPort,queue);
     ingestion.attachPublished(async d=>queue.enqueue(d));
     async function importDoc(id='doc',body='正文\n\n![图](images/a.png)') {const r=new ParsedImportRequest();Object.assign(r,{namespace:'Import',sourceId:id,sourceHash:hash('src'+id),title:id,format:M.ParsedFormat.Pdf,parserSignature:'fixture',engine:'synthetic',outputIdentity:'result-'+id});const a=new ParsedDocumentAdapters(h.identity);a.setOutput(body,undefined,'fixture-output');a.addImage('images/a.png',new Uint8Array(fixture.png()),M.ParsedProvenance.Derived);await ingestion.ingest(r,a);return ingestion.state.document;}
-    return {repo,assets,ingestion,queue,settings,imageService,vectors,embedding,config,importDoc,counts:()=>({visual,corpus}),vectorRows,spaces,numeric};
+    return {repo,assets,ingestion,queue,settings,imageService,vectors,embedding,config,configPort,importDoc,counts:()=>({visual,corpus}),vectorRows,spaces,numeric};
+  }
+  function configService(s) {
+    const {EmbeddingService,copyEmbeddingConfig}=h.load('application/EmbeddingService');
+    let persisted=copyEmbeddingConfig(s.config);let saves=0,revocations=0;
+    const metadata={configs:async()=>[copyEmbeddingConfig(persisted)],saveConfig:async c=>{saves++;persisted=copyEmbeddingConfig(c);},revokeGrants:async()=>{revocations++;}};
+    const credential={status:async()=>E.EmbeddingCredentialStatus.Configured,clearTransient:()=>{},save:async()=>E.EmbeddingCredentialStatus.Configured,remove:async()=>E.EmbeddingCredentialStatus.Missing};
+    const service=new EmbeddingService(metadata,credential,{cancel:()=>{}},h.identity);service.state.config=copyEmbeddingConfig(persisted);
+    s.configPort.currentConfig=()=>service.state.config;service.attachConfigInvalidation(()=>s.settings.invalidateEmbedding());
+    return {service,counts:()=>({saves,revocations}),copyEmbeddingConfig};
   }
   const vision=(content,finish='stop',usage)=>JSON.stringify({id:'synthetic-response',object:'chat.completion',model:'deepseek-flash',choices:[{index:0,finish_reason:finish,message:{role:'assistant',content}}],...(usage?{usage}:{})});
   return [
+    ['l1_restart_restores_other_owners_when_one_readback_is_broken_without_network',async()=>{
+      const s=await session();await s.settings.enableEmbedding(true,true,true);
+      await s.importDoc('restore-a','第一份已入库正文');await s.queue.drain();await s.importDoc('restore-b','第二份已入库正文');await s.queue.drain();
+      const jobs=(await s.repo.jobs()).filter(j=>j.stage==='BodyEmbedding'&&j.state==='Complete');assert.equal(jobs.length,2);
+      const before=s.counts();
+      for(const j of jobs){const b=await s.repo.binding('upd-body',j.ownerId);b.state=U.UnifiedBindingState.Pending;await s.repo.saveBinding(b);}
+      const broken=jobs[0];await s.repo.putMeta('vector-input:'+broken.id+':'+broken.inputs[0].id,'');
+      await assert.rejects(s.vectors.reconcileCurrentOwners(),e=>e.category==='VectorOwnerRecoveryIncomplete');
+      assert.equal((await s.repo.binding('upd-body',jobs[1].ownerId)).state,U.UnifiedBindingState.Synced);
+      assert.equal((await s.repo.binding('upd-body',broken.ownerId)).state,U.UnifiedBindingState.Pending);
+      assert.deepEqual(s.counts(),before);
+    }],
+    ['embedding_entry_async_load_keeps_loading_until_service_ready',async()=>{
+      const source=fs.readFileSync(path.resolve(__dirname,'../main/ets/pages/Index.ets'),'utf8');const start=source.indexOf('  private async openEmbedding()'),end=source.indexOf('  private async preparePdf',start);assert(start>0&&end>start);
+      const ts=require(path.join(process.env.DEVECO_SDK_HOME,'default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));const Module=require('node:module');const loaded=new Module(__filename,module);let release;const gate=new Promise(r=>release=r);const service={};loaded.assembly={forContext:()=>({acquire:()=>gate,repository:{ready:()=>true},embedding:service})};
+      loaded._compile('const KnowledgeAssembly=module.assembly;const Edge={Top:0};'+ts.transpileModule('class EmbeddingEntryProbe {\n'+source.slice(start,end)+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}}).outputText+'\nmodule.exports=EmbeddingEntryProbe;',__filename+'.entry-probe');
+      const view=new loaded.exports();view.scroller={scrollEdge(){}};view.getUIContext=()=>({getHostContext:()=>({})});const pending=view.openEmbedding();assert.equal(view.embeddingOpening,true);assert.equal(view.embeddingService,undefined);await view.openEmbedding();release();await pending;assert.equal(view.embeddingOpening,false);assert.equal(view.embeddingService,service);assert(source.includes('if (this.embeddingOpening) {'));
+    }],
+    ['embedding_entry_failed_load_releases_loading_and_can_retry',async()=>{
+      const source=fs.readFileSync(path.resolve(__dirname,'../main/ets/pages/Index.ets'),'utf8'),start=source.indexOf('  private async openEmbedding()'),end=source.indexOf('  private async preparePdf',start);const ts=require(path.join(process.env.DEVECO_SDK_HOME,'default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));const Module=require('node:module'),loaded=new Module(__filename,module);let fail=true;const service={};loaded.assembly={forContext:()=>({acquire:async()=>{if(fail)throw Error('SyntheticLoadFailure');},repository:{ready:()=>true},embedding:service})};
+      loaded._compile('const KnowledgeAssembly=module.assembly;const Edge={Top:0};'+ts.transpileModule('class EmbeddingEntryProbe {\n'+source.slice(start,end)+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}}).outputText+'\nmodule.exports=EmbeddingEntryProbe;',__filename+'.entry-failure-probe');const view=new loaded.exports();view.scroller={scrollEdge(){}};view.getUIContext=()=>({getHostContext:()=>({})});await view.openEmbedding();assert.equal(view.embeddingOpening,false);assert.equal(view.sharedKnowledge,undefined);assert.equal(view.embeddingService,undefined);fail=false;await view.openEmbedding();assert.equal(view.embeddingService,service);assert.equal(view.embeddingOpening,false);
+    }],
+    ['mid_job_config_change_preserves_received_vectors_and_uses_new_generation',async()=>{
+      let changed=false;const s=await session({beforeEmbedding:async()=>{if(!changed&&s.counts().corpus===1){changed=true;s.config.revision++;}}});await s.settings.enableEmbedding(true,true,true);await s.importDoc('mid-job-config','第一段\n\n第二段');await s.queue.drain();
+      const original=(await s.repo.jobs()).find(j=>j.stage==='BodyEmbedding');assert.equal(original.completed,1);assert.equal(original.state,'AwaitingConfig');assert.equal(s.counts().corpus,1);const retained=[...s.vectorRows.values()].filter(r=>r.vectorGeneration===original.id);assert.equal(retained.length,1);
+      await s.settings.enableEmbedding(true,true,true);await s.queue.drain();const jobs=await s.repo.jobs();assert.equal(jobs.find(j=>j.id===original.id).state,'Canceled');assert(jobs.some(j=>j.id!==original.id&&j.stage==='BodyEmbedding'&&j.state==='Complete'&&j.completed===2));assert.equal(s.counts().corpus,3);assert.equal([...s.vectorRows.values()].filter(r=>r.vectorGeneration===original.id).length,1);
+    }],
+    ['failed_consent_invalidation_prevents_configuration_and_credential_write',async()=>{
+      const s=await session(),c=configService(s);c.service.attachConfigInvalidation(async()=>{throw Error('SyntheticConsentStoreFailure');});const before=c.copyEmbeddingConfig(c.service.state.config);const next=c.copyEmbeddingConfig(before);next.modelSource=E.EmbeddingModelSource.Remote;
+      await c.service.saveConfiguration(next);await c.service.changeCredential('synthetic-not-a-key',true);assert.deepEqual(c.service.state.config,before);assert.deepEqual(c.counts(),{saves:0,revocations:0});assert.equal(s.counts().corpus,0);
+    }],
+    ['embedding_settings_ui_exposes_stale_binding_and_clears_old_checks',async()=>{
+      const s=await session(),c=configService(s);await s.settings.enableEmbedding(true,true,true);
+      const {EmbeddingSettingsView}=h.load('ui/EmbeddingSettingsView');const view=new EmbeddingSettingsView();view.service=c.service;view.unifiedSettings=s.settings;view.changed();await view.refreshUnified();assert.equal(view.unifiedOn,true);
+      view.unifiedCost=true;view.unifiedBaseline=true;await c.service.changeCredential('synthetic-not-a-key',true);view.changed();await view.refreshUnified();assert.equal(view.unifiedOn,false);assert.equal(view.unifiedNeedsConfirmation,true);assert.equal(view.unifiedCost,false);assert.equal(view.unifiedBaseline,false);assert.equal(s.counts().corpus,0);
+      view.unifiedCost=true;view.unifiedBaseline=true;await view.saveUnified();assert.equal(view.unifiedOn,true);assert.equal(view.unifiedNeedsConfirmation,false);
+    }],
+    ['identical_config_save_preserves_binding_revision_and_consent',async()=>{
+      const s=await session(),c=configService(s);await s.settings.enableEmbedding(true,true,true);const before=await s.settings.setting('Embedding');
+      await c.service.saveConfiguration(c.copyEmbeddingConfig(c.service.state.config));
+      assert.equal(c.service.state.config.revision,1);assert.deepEqual(c.counts(),{saves:0,revocations:0});assert.deepEqual(await s.settings.setting('Embedding'),before);assert.equal(s.counts().corpus,0);
+    }],
+    ['config_change_invalidates_before_save_and_reconfirmation_resumes_no_send_job',async()=>{
+      const s=await session(),c=configService(s);s.queue.background();await s.settings.enableEmbedding(true,true,true);await s.importDoc('config-change','正文一\n\n正文二');
+      const input=c.copyEmbeddingConfig(c.service.state.config);input.modelSource=E.EmbeddingModelSource.Remote;await c.service.saveConfiguration(input);
+      const setting=await s.settings.setting('Embedding');assert.equal(setting.enabled,false);assert.equal(setting.baselineAccepted,false);assert.equal(setting.costAcknowledged,false);assert.equal(c.service.state.config.revision,2);
+      let job=(await s.repo.jobs()).find(j=>j.stage==='BodyEmbedding');assert.equal(job.state,'AwaitingConfig');assert.equal(job.failure,'UnifiedConfigChanged');assert.equal(job.inputs.length,2);assert.equal(s.counts().corpus,0);
+      await assert.rejects(s.settings.enableEmbedding(true,false,true));assert.equal((await s.settings.setting('Embedding')).configBinding,setting.configBinding);
+      await s.settings.enableEmbedding(true,true,true);s.queue.resumeForeground();await s.queue.drain();job=(await s.repo.jobs()).find(j=>j.id===job.id);assert.equal(job.state,'Complete');assert.equal(job.completed,2);assert.equal(s.counts().corpus,2);
+      assert.equal((await s.settings.setting('Embedding')).configBinding,h.load('pipeline/EmbeddingBasisPolicy').embeddingConfigBinding(c.service.state.config));
+    }],
+    ['credential_update_invalidates_consent_and_binds_only_after_confirmation',async()=>{
+      const s=await session(),c=configService(s);await s.settings.enableEmbedding(true,true,true);const old=await s.settings.setting('Embedding');
+      await c.service.changeCredential('synthetic-not-a-key',true);assert.equal(c.service.state.config.credentialRevision,2);assert.equal(c.service.state.config.mutationPending,false);
+      const invalid=await s.settings.setting('Embedding');assert.equal(invalid.enabled,false);assert.equal(invalid.configBinding,old.configBinding);assert.equal(invalid.credentialRevision,1);assert.equal(s.counts().corpus,0);
+      await s.settings.enableEmbedding(true,true,true);assert.equal((await s.settings.setting('Embedding')).credentialRevision,2);
+    }],
+    ['restart_reconciles_legacy_failed_config_without_cloud_or_input_rewrite',async()=>{
+      const s=await session();s.queue.background();await s.settings.enableEmbedding(true,true,true);await s.importDoc('old-config','正文');let job=(await s.repo.jobs()).find(j=>j.stage==='BodyEmbedding');
+      job.state='Failed';job.failure='UnifiedConfigOrExpectedSet';await s.repo.saveJob(job);const frozen=JSON.stringify(job.inputs);s.config.revision=6;s.config.credentialRevision=2;
+      await s.settings.reconcileEmbeddingConfig();await s.queue.initialize();await s.queue.drain();job=(await s.repo.jobs()).find(j=>j.id===job.id);assert.equal(job.state,'AwaitingConfig');assert.equal(JSON.stringify(job.inputs),frozen);assert.equal((await s.repo.attempts(job.id)).length,0);assert.equal(s.counts().corpus,0);
+      await s.settings.enableEmbedding(true,true,true);await s.queue.drain();assert.equal((await s.repo.jobs()).find(j=>j.id===job.id).state,'Complete');assert.equal(s.counts().corpus,1);
+    }],
+    ['reconfirmation_preserves_unknown_and_other_failures_without_resending',async()=>{
+      const s=await session({embeddingFailAt:1});await s.settings.enableEmbedding(true,true,true);await s.importDoc('unknown-config','正文');await s.queue.drain();const job=(await s.repo.jobs()).find(j=>j.stage==='BodyEmbedding');assert.equal(job.state,'Unknown');
+      s.config.revision++;await s.settings.reconcileEmbeddingConfig();await s.settings.enableEmbedding(true,true,true);await s.queue.drain();assert.equal((await s.repo.jobs()).find(j=>j.id===job.id).state,'Unknown');assert.equal(s.counts().corpus,1);
+      job.state='Failed';job.failure='ActualInputHash';await s.repo.saveJob(job);await s.settings.enableEmbedding(true,true,true);await s.queue.drain();assert.equal((await s.repo.jobs()).find(j=>j.id===job.id).state,'Failed');assert.equal(s.counts().corpus,1);
+    }],
+    ['config_and_expected_set_failures_are_distinct_and_zero_send',async()=>{
+      const s=await session();s.queue.background();await s.settings.enableEmbedding(true,true,true);await s.importDoc('invalid-set','正文');const job=(await s.repo.jobs()).find(j=>j.stage==='BodyEmbedding');
+      job.expected=2;await assert.rejects(s.embedding.process(job,new M.ParsedCancellation(),async()=>{}),e=>e.category==='UnifiedExpectedSetInvalid');
+      s.config.revision++;await assert.rejects(s.embedding.process(job,new M.ParsedCancellation(),async()=>{}),e=>e.category==='UnifiedConfigChanged');assert.equal(s.counts().corpus,0);
+      const presentation=h.load('pipeline/UnifiedProcessingPresentation');job.state='AwaitingConfig';job.failure='UnifiedConfigChanged';assert(presentation.processingFailureText(job).includes('重新确认'));assert.equal(presentation.processingJobStateName(job),'等待重新确认配置');job.state='Unknown';assert(presentation.processingFailureText(job).includes('重复计费'));job.state='Failed';job.failure='UnifiedExpectedSetInvalid';assert(presentation.processingFailureText(job).includes('输入数量'));
+    }],
     ['background_between_admission_write_and_launch_is_not_sent_and_resumable',async()=>{
       const s=await session();const original=s.repo.admitAttempt.bind(s.repo);let blocked=false;
       s.repo.admitAttempt=async(job,attempt,launch)=>original(job,attempt,()=>{blocked=true;s.queue.background();launch();});

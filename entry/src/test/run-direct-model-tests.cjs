@@ -1410,7 +1410,7 @@ function chatHarness(options = {}) {
   const assistantTools = load(path.join(services, '../calendar/AssistantTools.ets'));
   return {ui, controller, journalBackend, requests, proposals,
     factory: options.tools ? new assembly.ChatRuntimeFactory({}, true, new assistantTools.AssistantToolPrompt(ui.context),
-      assembly.ChatPurpose.ASSISTANT, new assembly.ChatToolKit(() => options.tools, new assistantTools.AssistantToolTurn(ui.context))) :
+      assembly.ChatPurpose.ASSISTANT, new assembly.ChatToolKit(() => options.tools, new assistantTools.AssistantToolTurn(ui.context), options.extraTools)) :
       new assembly.ChatRuntimeFactory({}, true, options.calendar || options.assistant ? ui.context : undefined,
       options.assistant ? assembly.ChatPurpose.ASSISTANT : options.calendar ? assembly.ChatPurpose.CALENDAR_DRAFT : assembly.ChatPurpose.PUBLIC_CHAT),
     calls: () => calls, closed: () => closed, cancelled: () => modelCancelled, store: () => journal};
@@ -2747,7 +2747,7 @@ function coordinatorAssistantStubs(trace = {}) {
   return {
     './ChatRuntimeAssembly': { ChatPurpose, ChatRuntimeFactory:class {
       constructor(opener, debug, context, purpose, tools) { Object.assign(this, {opener, debug, context, purpose, tools}); } },
-      ChatToolKit:class { constructor(documents, turn) { Object.assign(this, {documents, turn}); } } },
+      ChatToolKit:class { constructor(documents, turn, extra) { Object.assign(this, {documents, turn, extra}); } } },
     '../documents/ModelDocumentTools': { modelDocumentTools(context) { trace.documentContexts = [...(trace.documentContexts ?? []), context];
       return {kind:'documents'}; } },
     '../calendar/CalendarRuntimeAssembly': { CalendarRuntimeFactory:class {
@@ -2757,11 +2757,11 @@ function coordinatorAssistantStubs(trace = {}) {
     ChatPurpose
   };
 }
-test('assistant coordinator consumes one caller key and gives isolated copies to the calendar assistant and PERSONAL RAG', async () => {
+test('assistant coordinator consumes one key for a single model and composes an ungranted knowledge tool', async () => {
   const trace = { chatKey:undefined, ragKey:undefined, chatStopped:0, ragStopped:0 }; let chatState = ShuviRuntimeState.IDLE;
   const assistantContext = {};
   const fakeKnowledgeSession = { answerContext:{},
-    async prepareRag(_search, _factory, key) { trace.ragKey = key.slice(); key.fill(0); },
+    prepare(search, executor) { trace.knowledgeSearch = search; trace.knowledgeExecutor = executor; },
     answerOutcomeRejected() {}, async activateRag() { return {ready:true}; }, async deactivateRag() {},
     snapshot() { return {lifecycle:ShuviRuntimeState.IDLE}; }, async stop() { trace.ragStopped++; } };
   const { ChatPurpose, ...stubs } = coordinatorAssistantStubs(trace);
@@ -2775,14 +2775,16 @@ test('assistant coordinator consumes one caller key and gives isolated copies to
       snapshot() { return {lifecycle:chatState}; }, async stop() { trace.chatStopped++; }
     }}},
     './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:fakeKnowledgeSession} },
-    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return { createAgentSearch() { return { kind: 'knowledge-search' }; } }; }} },
+    './KnowledgeAgentRuntime': { KnowledgeAgentRuntime: class { constructor(opener, search, permitted) { Object.assign(this, { opener, search, permitted }); } } },
     '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class { constructor(assembly) { this.assembly=assembly; } } }
   });
   const key = new TextEncoder().encode('one-session-key');
   const hostContext = {};
   await coordinator.RuntimeAssistantCoordinator.start(hostContext, true, key);
-  assert(key.every(value => value === 0)); assert.deepEqual(trace.chatKey, trace.ragKey);
-  assert.notEqual(trace.chatKey, trace.ragKey); assert.equal(new TextDecoder().decode(trace.chatKey), 'one-session-key');
+  assert(key.every(value => value === 0)); assert.equal(trace.ragKey, undefined);
+  assert.equal(trace.knowledgeSearch.kind, 'knowledge-search'); assert.equal(trace.chatFactory.tools.extra, fakeKnowledgeSession);
+  assert.equal(new TextDecoder().decode(trace.chatKey), 'one-session-key');
   assert.equal(trace.chatFactory.purpose, ChatPurpose.ASSISTANT);
   // Tool mode: the prompt port and the turn policy both wrap the session's one AssistantContext.
   assert.equal(trace.chatFactory.context.context, assistantContext); assert.equal(trace.chatFactory.tools.turn.context, assistantContext);
@@ -2795,7 +2797,7 @@ test('assistant coordinator consumes one caller key and gives isolated copies to
 });
 test('assistant coordinator does not retain or prepare a RAG key when assistant startup fails', async () => {
   let prepared = 0; const fakeKnowledgeSession = { answerContext:{}, snapshot() { return {lifecycle:ShuviRuntimeState.IDLE}; },
-    async prepareRag() { prepared++; }, answerOutcomeRejected() {}, async stop() {} };
+    prepare() { prepared++; }, answerOutcomeRejected() {}, async stop() { prepared--; } };
   const { ChatPurpose: _purpose, ...stubs } = coordinatorAssistantStubs();
   const coordinator = load(path.join(services, 'RuntimeAssistantCoordinator.ets'), {
     ...stubs,
@@ -2803,7 +2805,8 @@ test('assistant coordinator does not retain or prepare a RAG key when assistant 
     './RuntimeChatService': { RuntimeChatService:{session:{ context:{}, async start(_factory,_calendar,key) { key.fill(0); },
       snapshot() { return {lifecycle:ShuviRuntimeState.FAILED}; }, async stop() {} }}},
     './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:fakeKnowledgeSession} },
-    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return { createAgentSearch() { return { kind: 'knowledge-search' }; } }; }} },
+    './KnowledgeAgentRuntime': { KnowledgeAgentRuntime: class { constructor(opener, search, permitted) { Object.assign(this, { opener, search, permitted }); } } },
     '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class {} }
   });
   const key = new TextEncoder().encode('rejected-session-key');
@@ -2821,7 +2824,8 @@ test('assistant coordinator rejects duplicate start without rotating the prepare
       snapshot() { return {lifecycle:ShuviRuntimeState.READY}; }, async prepareRag() { ragPrepares++; },
       answerOutcomeRejected() {}, async stop() { ragStops++; } }}},
     './KnowledgeAnswerRuntimeAssembly': { knowledgeAnswerRuntimeFactory() { return {}; } },
-    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return {}; }} },
+    '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return { createAgentSearch() { return { kind: 'knowledge-search' }; } }; }} },
+    './KnowledgeAgentRuntime': { KnowledgeAgentRuntime: class { constructor(opener, search, permitted) { Object.assign(this, { opener, search, permitted }); } } },
     '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class {} }
   });
   const key = new TextEncoder().encode('duplicate-key');
@@ -3971,6 +3975,17 @@ test('tool-mode cancellation stops the loop, cancels document tools and reports 
   } finally { await h.ui.stop(); }
 });
 
+test('PR26 tool-mode watchdog uses the shared wall limit instead of ending the longer turn at 90 seconds', async () => {
+  const gate=deferred();const h=toolHarness([{content:'late'}],{gate});await h.start();
+  const original=global.setTimeout,delays=[];
+  try {
+    global.setTimeout=(fn,delay,...args)=>{delays.push(delay);return original(fn,delay,...args);};
+    try {await h.ui.send('等待中的普通对话');} finally {global.setTimeout=original;}
+    assert(delays.includes(120000));assert(!delays.includes(90000));
+    await h.ui.cancel();gate.resolve(response());await waitChat(h.ui);
+  } finally {global.setTimeout=original;await h.ui.stop();}
+});
+
 test('tool-mode wire format: answers and proposals parse as AssistantIntent; notes are stripped before draft validation', () => {
   const { AssistantContext, parseAssistantIntent } = load(path.join(services, '../calendar/AssistantIntent.ets'));
   const { AssistantToolTurn, calendarProposeDefinitions } = load(path.join(services, '../calendar/AssistantTools.ets'));
@@ -4240,3 +4255,5 @@ test('chat journal keeps accepting turns past 128 records by retiring the oldest
     assert.equal(h.calls(), turns);
   } finally { await h.ui.stop(); }
 });
+
+require('./l2-tool-tests.cjs')({ load, root, services, writableRdb, assistantHarness, fakeDocuments, toolCall, waitChat, assertValidToolHistory });

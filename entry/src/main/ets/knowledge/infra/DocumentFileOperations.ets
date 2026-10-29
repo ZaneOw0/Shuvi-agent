@@ -50,12 +50,6 @@ export async function documentContainerPreflight(path: string, original: Documen
   const file: fileIo.File = await fileIo.open(path, fileIo.OpenMode.READ_ONLY | fileIo.OpenMode.NOFOLLOW);
   try {
     const head: Uint8Array = await documentReadRange(file.fd, 0, Math.min(original.bytes, 8));
-    if (original.format === DocumentParseFormat.Pdf) {
-      if (head.length < 8 || head[0] !== 37 || head[1] !== 80 || head[2] !== 68 || head[3] !== 70 || head[4] !== 45 || (head[5] !== 49 && head[5] !== 50) || head[6] !== 46 || head[7] < 48 || head[7] > 57) {
-        throw new DocumentParseFailure('PDF签名与扩展名不符', '身份预检');
-      }
-      return;
-    }
     if (documentIsImage(original.format)) { original.preflightReason = '图片原件已保存，待基本编码/尺寸核验；预览可选'; return; }
     if ([DocumentParseFormat.Docx,DocumentParseFormat.Pptx,DocumentParseFormat.Xlsx].indexOf(original.format) < 0) { throw new DocumentParseFailure('原件格式未知','身份预检'); }
     const size: number = Math.min(65557, original.bytes);

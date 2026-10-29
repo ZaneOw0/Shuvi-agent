@@ -8,6 +8,7 @@ export function processingStateName(state: UnifiedJobState): string {
   return state===UnifiedJobState.Complete?'已完成':state===UnifiedJobState.Running?'处理中':state===UnifiedJobState.Unknown?'结果待核对':state===UnifiedJobState.Failed?'失败':state===UnifiedJobState.Paused?'已暂停':state===UnifiedJobState.Canceled?'已停止':state===UnifiedJobState.Pending?'已排队':'等待设置或处理';
 }
 export function processingJobStateName(job: UnifiedProcessingJob): string {
+  if (job.state===UnifiedJobState.AwaitingConfig && job.failure==='UnifiedConfigChanged') { return '等待重新确认配置'; }
   if ((job.state===UnifiedJobState.Unknown || job.state===UnifiedJobState.Failed) && job.failure==='Http:401') { return '鉴权失败'; }
   if ((job.state===UnifiedJobState.Unknown || job.state===UnifiedJobState.Failed) && job.failure==='Http:403') { return '服务拒绝访问'; }
   return processingStateName(job.state);
@@ -28,9 +29,11 @@ export function processingDocumentStatus(jobs: UnifiedProcessingJob[], document:
 }
 export function processingFailureText(job: UnifiedProcessingJob): string {
   if (job.state===UnifiedJobState.Pending || job.state===UnifiedJobState.Running || job.state===UnifiedJobState.Complete || job.failure==='ExplicitRetryAcceptsPossibleDuplicateCost') { return ''; }
-  if (job.failure==='DispatchPaused' || job.failure==='Canceled' || job.failure==='PreviousProcessCheckpoint') { return '处理被暂停或应用中断，已完成内容保留。'; }
   if (job.failure==='Http:401') { return '图片理解服务鉴权失败，请到图片理解设置更新 Key。'; }
   if (job.failure==='Http:403') { return '图片理解服务拒绝访问，请核对账号与模型权限。'; }
   if (job.state===UnifiedJobState.Unknown) { return '服务结果尚未确认，已保留成功进度；重试可能重复计费。'; }
+  if (job.failure==='UnifiedExpectedSetInvalid' || job.failure==='UnifiedConfigOrExpectedSet' && (job.expected<1 || job.expected!==job.inputs.length)) { return '正文任务的输入数量不完整，未发送请求；请检查资料处理结果。'; }
+  if (job.failure==='UnifiedConfigChanged' || job.failure==='UnifiedConfigOrExpectedSet') { return '嵌入配置或 Key 已变化，请到嵌入模型设置重新确认自动入库范围与可能费用；已完成内容保留。'; }
+  if (job.failure==='DispatchPaused' || job.failure==='Canceled' || job.failure==='PreviousProcessCheckpoint') { return '处理被暂停或应用中断，已完成内容保留。'; }
   return job.failure.length>0?'此环节未完成，已保留此前成功内容。原因：'+job.failure:'';
 }

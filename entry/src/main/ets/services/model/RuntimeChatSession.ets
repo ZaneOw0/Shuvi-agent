@@ -3,7 +3,7 @@ import { AgentFrontendAuthorizationPrompt, AgentFrontendClarificationPrompt, Age
   AgentFrontendEventListener, AgentFrontendSubscription, AgentFrontendTaskRequest } from '@harmony_agent/agent-runtime';
 import { ShuviRuntimeController, ShuviRuntimeState } from './ShuviRuntimeController';
 import { ShuviRuntimeSessionFactory } from './ShuviRuntimeSession';
-import { parseChatAnswer } from './ChatRuntimeAssembly';
+import { parseChatAnswer, TOOL_TURN_WALL_MS } from './ChatRuntimeAssembly';
 
 export class RuntimeChatView {
   lifecycle: ShuviRuntimeState = ShuviRuntimeState.IDLE;
@@ -79,7 +79,7 @@ export class RuntimeChatSession {
         this.finish('等待超时，助手已断开。请点「重新连接」后手动重试；无法确认供应商是否已计费。');
         void this.controller.stop().catch((): void => {});
       }
-    }, this.documentTools ? 120000 : 45000);
+    }, this.documentTools ? TOOL_TURN_WALL_MS : 45000);
     const request = new AgentFrontendTaskRequest(); request.intent = text;
     try {
       const handle = await this.controller.submit(request);

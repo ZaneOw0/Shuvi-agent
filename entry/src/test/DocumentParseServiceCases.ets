@@ -6,7 +6,7 @@ import {
   DocumentParseStateListener, DocumentParseViewState, DocumentParseTask, DocumentParseGrant
 } from '../main/ets/knowledge/domain/DocumentParseModels';
 import {
-  MineruCredentialPort, DocumentParseRepositoryPort, DocumentAssetPort, DocumentSelectionPort, DocumentPreflightPort,
+  MineruCredentialPort, DocumentParseRepositoryPort, DocumentAssetPort, DocumentSelectionPort,
   MineruTaskPort, DocumentParseClockPort
 } from '../main/ets/knowledge/domain/DocumentParsePorts';
 import { documentUnitOriginal, documentUnitGrant } from './DocumentParseCases';
@@ -15,6 +15,11 @@ import { KnowledgeSourceProtectionPort } from '../main/ets/knowledge/domain/Know
 
 export interface DocumentServiceTestCase { name: string; run: () => Promise<void>; }
 export function documentServiceCheck(ok: boolean): void { if (!ok) { throw new Error('M2 frozen business expectation failed'); } }
+async function documentExpectSubmitRejected(service: DocumentParseService): Promise<void> {
+  let rejected: boolean=false;
+  try { await service.submit('unit-original'); } catch (error) { if (error instanceof DocumentParseFailure) { rejected=true; } else { throw new Error('提交异常类型不符'); } }
+  documentServiceCheck(rejected);
+}
 export class DocumentTestCredential implements MineruCredentialPort {
   configured: boolean = false; unavailable: boolean = false; saves: number = 0; clears: number = 0;
   statusThrows: boolean = false; writeFailure: boolean = false; returnedStatus: DocumentCredentialStatus = DocumentCredentialStatus.Configured;
@@ -62,9 +67,9 @@ class DocumentTestStateObserver implements DocumentParseStateListener {
   constructor(service: DocumentParseService) { this.service = service; }
   changed(): void { this.views.push(this.service.viewState()); }
 }
-export class DocumentTestAssets implements DocumentAssetPort, DocumentSelectionPort, DocumentPreflightPort {
+export class DocumentTestAssets implements DocumentAssetPort, DocumentSelectionPort {
   removed: string[] = []; saves: number = 0; failCleanup: boolean = false;
-  selected: DocumentFileSelection = new DocumentFileSelection(); blocked: boolean = false; expirePreflight: boolean = false;
+  selected: DocumentFileSelection = new DocumentFileSelection();
   async select(): Promise<DocumentFileSelection> { return this.selected; }
   async save(file: DocumentSelectedFile, id: string, cancel: DocumentParseCancellation): Promise<DocumentOriginal> {
     this.saves++; const original: DocumentOriginal = documentUnitOriginal(); original.id = id; original.assetId = `original-${id}`;
@@ -73,10 +78,6 @@ export class DocumentTestAssets implements DocumentAssetPort, DocumentSelectionP
     return original;
   }
   async verify(original: DocumentOriginal, cancel: DocumentParseCancellation): Promise<void> { cancel.check(); }
-  async inspect(original: DocumentOriginal, cancel: DocumentParseCancellation): Promise<DocumentOriginal> {
-    if (this.expirePreflight) { cancel.invalid = true; throw new DocumentParseFailure('预检取消', '单元端口'); }
-    if (this.blocked) { original.preflight = DocumentPreflightStatus.Blocked; original.preflightReason = '单元端口预检不可用'; } return original;
-  }
   async remove(ids: string[]): Promise<void> { if (this.failCleanup) { throw new DocumentParseFailure('磁盘清理失败', '测试'); } this.removed = this.removed.concat(ids); }
   cancelLocal(): void {}
 }
@@ -135,7 +136,7 @@ export class DocumentTestPipelineSession extends DocumentTestSettingsSession {
   assets: DocumentTestAssets = new DocumentTestAssets(); clock: DocumentTestClock = new DocumentTestClock();
   network: DocumentTestNetwork = new DocumentTestNetwork(this.repository);
   async ready(): Promise<void> {
-    this.service.attachLocal(this.assets, this.assets, this.assets); this.service.attachRemote(this.network, this.clock);
+    this.service.attachLocal(this.assets, this.assets); this.service.attachRemote(this.network, this.clock);
     this.credential.configured = true; await this.service.initialize();
     this.repository.data.config.enabled = true; this.repository.data.config.credentialRevision = 1;
     const original: DocumentOriginal = documentUnitOriginal(); this.repository.data.originals.push(original); this.repository.data.grants.push(documentUnitGrant(original));
@@ -177,7 +178,7 @@ export function documentParseServiceCases(): DocumentServiceTestCase[] {
       }
     } }
     , { name: '无同意每个门禁均零真实端口调用', run: async (): Promise<void> => {
-      for (const mode of ['CLOSED', 'MISSING', 'GRANT', 'FREE', 'PRIVACY', 'PERSONAL', 'PREFLIGHT']) {
+      for (const mode of ['CLOSED', 'MISSING', 'GRANT', 'FREE', 'PRIVACY', 'PERSONAL']) {
         const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready();
         if (mode === 'CLOSED') { s.repository.data.config.enabled = false; }
         if (mode === 'MISSING') { s.service.state.credential = DocumentCredentialStatus.Missing; }
@@ -185,8 +186,7 @@ export function documentParseServiceCases(): DocumentServiceTestCase[] {
         if (mode === 'FREE') { s.repository.data.grants[0].acknowledgement.freeEligible = false; }
         if (mode === 'PRIVACY') { s.repository.data.grants[0].acknowledgement.privacyUnknown = false; }
         if (mode === 'PERSONAL') { s.repository.data.grants[0].acknowledgement.nonSensitive = false; }
-        if (mode === 'PREFLIGHT') { s.repository.data.originals[0].pages = 51; }
-        await s.service.submit('unit-original');
+        await documentExpectSubmitRejected(s.service);
         documentServiceCheck(s.network.allocations === 0 && s.network.uploads === 0 && s.network.queries === 0 && s.network.receives === 0);
       }
     } },
@@ -198,22 +198,21 @@ export function documentParseServiceCases(): DocumentServiceTestCase[] {
       await s.service.submit('unit-original'); documentServiceCheck(s.network.allocations === 1);
     } }
   ]; return tests.concat(documentTransferFixCases(), documentCredentialFeedbackCases(), documentRecoveryCases(), [
-    { name: '仅本地准备四格式不外发且取消与PDF阻塞保留', run: async (): Promise<void> => {
+    { name: '仅本地准备四格式不外发且取消保留', run: async (): Promise<void> => {
       for (const suffix of ['pdf', 'docx', 'pptx', 'xlsx']) {
         const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.repository.data.originals = []; s.repository.data.grants = [];
         s.repository.data.config.enabled = false; s.assets.selected.canceled = false;
         const file: DocumentSelectedFile = new DocumentSelectedFile(); file.uri = 'unit-local-opaque'; file.title = 'unit-file.' + suffix; file.bytes = 100;
-        s.assets.selected.files.push(file); s.assets.blocked = suffix === 'pdf'; await s.service.prepare();
+        s.assets.selected.files.push(file); await s.service.prepare();
         documentServiceCheck(s.repository.data.originals.length === 1 && s.network.allocations === 0 && s.repository.data.grants.length === 0);
-        if (suffix === 'pdf') { documentServiceCheck(s.repository.data.originals[0].preflight === DocumentPreflightStatus.Blocked); }
         s.assets.selected.canceled = true; await s.service.prepare(); documentServiceCheck(s.assets.saves === 1);
       }
     } },
-    { name: 'PDF页数预检取消已保存保真原件必须保留', run: async (): Promise<void> => {
+    { name: 'PDF导入不调用页数预检且保留原件', run: async (): Promise<void> => {
       const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.repository.data.originals = []; s.repository.data.grants = [];
-      s.assets.selected.canceled = false; s.assets.expirePreflight = true;
+      s.assets.selected.canceled = false;
       const file: DocumentSelectedFile = new DocumentSelectedFile(); file.title = 'unit-file.pdf'; file.bytes = 100; s.assets.selected.files.push(file);
-      await s.service.prepare(); documentServiceCheck(s.repository.data.originals.length === 1 && s.repository.data.originals[0].preflight === DocumentPreflightStatus.Blocked && s.assets.removed.length === 0 && s.network.allocations === 0);
+      await s.service.prepare(); documentServiceCheck(s.repository.data.originals.length === 1 && s.assets.removed.length === 0 && s.network.allocations === 0);
     } },
     { name: '原件摘要判重与超预算不删除原资料', run: async (): Promise<void> => {
       const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.assets.selected.canceled = false;
@@ -388,7 +387,7 @@ function documentRecoveryCases(): DocumentServiceTestCase[] {
       const s: DocumentTestPipelineSession = new DocumentTestPipelineSession(); await s.ready(); s.network.mode = 'UNCERTAIN';
       await s.service.submit('unit-original'); const id: string = s.repository.data.tasks[0].id;
       documentServiceCheck(s.repository.data.tasks[0].stage === DocumentParseStage.Uncertain && !s.repository.data.occupancy.terminalObserved);
-      await s.service.resume(id, true); await s.service.submit('unit-original');
+      await s.service.resume(id, true); await documentExpectSubmitRejected(s.service);
       documentServiceCheck(s.network.allocations === 1 && s.network.queries === 0);
       await s.service.deleteOriginal('unit-original');
       documentServiceCheck(s.repository.data.tasks.length === 0 && s.repository.data.originals.length === 0 && s.repository.data.occupancy.taskId === id);
