@@ -1,7 +1,7 @@
 # AGENTS.md — Shuvi（休比）鸿蒙工程
 
 > 面向在本仓库工作的 AI Agent。人类协作规则以 [docs/01-协作与工程约定](docs/01-协作与工程约定.md) 为唯一权威，本文件是它的可执行摘要。
-> 状态：已有可构建、可安装的 `entry`；前端为四页导航与日程 Mock 初稿，未接真实能力（见 [specs/01-创建日程并提醒](specs/01-创建日程并提醒.md)）。
+> 状态：已有可构建、可安装的 `entry`；功能与验收进度以 [docs/08-项目进度与验收](docs/08-项目进度与验收.md) 为准，平板/手机同一 HAP 的响应式适配见 [specs/17-平板端适配与手机功能一致性验收](specs/17-平板端适配与手机功能一致性验收.md)。
 
 ## 1. 项目定位
 
@@ -27,11 +27,11 @@
 ```
 HarmonyPA/
 ├── AppScope/          # 应用级配置：app.json5（bundleName=com.example.shuvi、版本、图标、名称）
-├── entry/             # 唯一 HAP 模块（Stage 模型，deviceTypes: phone，零权限）
+├── entry/             # 唯一 HAP 模块（Stage 模型，deviceTypes: phone / tablet，零权限）
 │   ├── src/main/ets/
 │   │   ├── entryability/EntryAbility.ets        # UIAbility 入口，onWindowStageCreate 加载 pages/Index
 │   │   ├── entrybackupability/EntryBackupAbility.ets
-│   │   ├── pages/Index.ets                      # 入口页面：四页导航 + 日程 Mock 交互
+│   │   ├── pages/Index.ets                      # 入口页面：四页导航、响应式 Overlay/Embed 布局
 │   │   ├── components/                          # FeaturePages.ets、Theme.ets
 │   │   ├── mock/MockAssistantService.ets        # 前端 Mock 数据，未接真实能力
 │   │   └── model/AssistantModels.ets            # 前端领域模型

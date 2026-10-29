@@ -39,6 +39,7 @@
         "startWindowIcon": "$media:shuvi_start_icon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
+        "orientation": "auto_rotation",
         "skills": [
           {
             "entities": [
