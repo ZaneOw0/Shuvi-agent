@@ -234,7 +234,7 @@ export struct ApiKeysView {
       ApiKeyCard({ name: 'DeepSeek', idPrefix: 'api-keys-deepseek', busy: this.busy, clearEpoch: this.clearEpoch,
         saved: this.deepSeekStatus === DeepSeekKeyStatus.Saved, unavailable: this.deepSeekStatus === DeepSeekKeyStatus.Unavailable,
         note: this.deepSeekNote,
-        usage: '用于助手对话、日程、文档、知识库回答和图片理解。保存即表示同意：发送消息时，对话内容和模型选用的文档正文会发送到 DeepSeek（api.deepseek.com），可能产生费用，以供应商账单为准。',
+        usage: '用于助手对话、日程、文档、知识库回答和图片理解。保存即表示同意：发送消息时，对话内容、你附带的图片（压缩后发送，不含文件名和位置信息）和模型选用的文档正文会发送到 DeepSeek（api.deepseek.com），可能产生费用，以供应商账单为准。',
         onSave: (value: string): void => { void this.saveDeepSeek(value); },
         onRemove: (): void => {
           this.confirm('删除 DeepSeek Key？', '删除后助手、知识库回答和图片理解都需要重新保存 Key 才能使用。',

@@ -17,7 +17,7 @@ export struct CalendarCreatedCard {
       Text(this.summary.when).fontSize(Theme.bodySize).fontColor(Theme.ink).width('100%')
       Text(this.summary.reminder + (this.summary.reminderConfigured ? '' : ' · 提醒配置待核实'))
         .fontSize(13).fontColor(this.summary.reminderConfigured ? Theme.muted : Theme.amber).width('100%')
-      Button('在工作台查看').constraintSize({ minHeight: Theme.controlHeight }).backgroundColor(Theme.soft).fontColor(Theme.accent)
+      Button('在日程页查看').constraintSize({ minHeight: Theme.controlHeight }).backgroundColor(Theme.soft).fontColor(Theme.accent)
         .borderRadius(Theme.radius).id('runtime-calendar-open-workbench').onClick((): void => this.onOpen())
       Text(`系统日程 ID ${this.summary.eventId} · 已读回核对；实际通知以系统送达为准。离开助手页会结束当前会话。`)
         .fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')

@@ -4,7 +4,8 @@ import { AgentFrontendAuthorizationPrompt, AgentFrontendClarificationPrompt, Age
 import { RuntimeChatSession, RuntimeChatView } from '../model/RuntimeChatSession';
 import { ShuviRuntimeController, ShuviRuntimeState } from '../model/ShuviRuntimeController';
 import { ShuviRuntimeSessionFactory } from '../model/ShuviRuntimeSession';
-import { AssistantContext, parseAssistantIntent } from './AssistantIntent';
+import { ASSISTANT_IMAGE_MAX_BYTES, AssistantContext, parseAssistantIntent } from './AssistantIntent';
+import { VisionChatImage } from '../model/VisionChatProtocol';
 import { CalendarRuntimeFactory } from './CalendarRuntimeAssembly';
 import { CalendarToolPreview, parseCalendarToolResult } from './CalendarToolContract';
 import { CalendarProbeDraft, calendarProbeDraftError } from './CalendarProbeSession';
@@ -18,6 +19,7 @@ export class AssistantView extends RuntimeChatView {
   created?: CalendarCreatedSummary;
   /** Model requests sent in this enable; the chat adapter enforces the same limit. */
   requestCount: number = 0;
+  /** Turn limit of this enable; the tool-mode assistant has none (older turns are compacted into a summary). */
   maxRequests: number = CHAT_MAX_REQUESTS;
 }
 class CalendarListener implements AgentFrontendEventListener {
@@ -61,7 +63,7 @@ export class AssistantRuntimeSession {
   attach(listener: (view: AssistantView) => void): void { this.listener = listener; this.publish(); }
   detach(): void { this.listener = undefined; void this.stop().catch((): void => {}); }
   snapshot(): AssistantView { const copy: AssistantView = JSON.parse(JSON.stringify(this.view)); return copy; }
-  /** Also drops the model conversation kept by the tool transport (it checks the context epoch before each turn). */
+  /** Forgets the model memory of the current conversation (the conversation store decides which one that is). */
   clearConversation(): void { if (!this.view.busy) this.context.resetConversation(); }
   private publish(): void { this.listener?.(this.snapshot()); }
   private modelChanged(value: RuntimeChatView): void {
@@ -87,10 +89,10 @@ export class AssistantRuntimeSession {
     if (this.view.lifecycle === ShuviRuntimeState.READY || this.view.lifecycle === ShuviRuntimeState.STARTING || this.stopping) { key.fill(0); return; }
     this.factory = calendarFactory; this.tools = factory.documentToolsEnabled === true;
     calendarFactory.onOutcomeRejected = (id: string): void => {
-      if (this.taskId === id && this.view.busy) { this.finish('日历执行结果未能可靠保存，请到工作台核查日程；不要重复创建。'); void this.calendar.stop().catch((): void => {}); }
+      if (this.taskId === id && this.view.busy) { this.finish('日历执行结果未能可靠保存，请到「日程」页核查日程；不要重复创建。'); void this.calendar.stop().catch((): void => {}); }
     };
     const generation = ++this.generation;
-    this.view.requestCount = 0;
+    this.view.requestCount = 0; this.view.maxRequests = this.tools ? Number.MAX_SAFE_INTEGER : CHAT_MAX_REQUESTS;
     this.view.lifecycle = ShuviRuntimeState.STARTING; this.view.message = '正在启用助手与日历工具…'; this.publish();
     try {
       await this.calendar.start(calendarFactory, new Uint8Array());
@@ -102,13 +104,22 @@ export class AssistantRuntimeSession {
       this.view.message = '助手启动失败，请检查本机存储；未调用模型或写入日历。'; this.publish();
     } finally { key.fill(0); }
   }
-  async send(input: string): Promise<void> {
-    if (this.view.busy || this.stopping || this.view.lifecycle !== ShuviRuntimeState.READY || !input.trim() || input.length > 500) return;
+  /** Images are accepted in tool mode only; the session owns `image` and zeroes it whenever this call does not send it. */
+  async send(input: string, image?: VisionChatImage): Promise<void> {
+    if (this.view.busy || this.stopping || this.view.lifecycle !== ShuviRuntimeState.READY || !input.trim() || input.length > 500) {
+      image?.bytes.fill(0); return;
+    }
     if (this.view.requestCount >= this.view.maxRequests) {
+      image?.bytes.fill(0);
       this.view.message = `本次启用的 ${this.view.maxRequests} 轮对话已用完；请停止后重新启用。未发送本次输入。`; this.publish(); return;
     }
+    if (image !== undefined && (!this.tools || image.bytes.length < 1 || image.bytes.length > ASSISTANT_IMAGE_MAX_BYTES)) {
+      image.bytes.fill(0);
+      this.view.message = this.tools ? '图片处理后仍然过大，未发送本次消息。' : '当前助手模式不能识别图片，未发送本次消息。';
+      this.publish(); return;
+    }
     this.view.requestCount++;
-    this.context.bind(input, Date.now()); this.awaiting = true; await this.model.send(input);
+    this.context.bind(input, Date.now(), image); this.awaiting = true; await this.model.send(input);
   }
   private async submitCalendar(draft: CalendarProbeDraft): Promise<void> {
     this.view.busy = true; this.view.calendarStage = 'preparing'; this.view.message = '正在准备日程确认…';
@@ -149,15 +160,15 @@ export class AssistantRuntimeSession {
       const result = parseCalendarToolResult(raw);
       const preview = this.view.preview;
       if (result === undefined || !result.verified || preview === undefined || result.operationId !== preview.operationId) {
-        this.finish('日程结果未通过核验，请到工作台核查；不要重复创建。'); return;
+        this.finish('日程结果未通过核验，请到「日程」页核查；不要重复创建。'); return;
       }
       this.finish(`已创建日程并读回核对，系统日程 ID：${result.eventId}。` +
-        (result.reminderConfigured ? '提醒配置已核对；实际通知以系统送达为准。' : '提醒配置未核实，请到工作台核查。'), true,
+        (result.reminderConfigured ? '提醒配置已核对；实际通知以系统送达为准。' : '提醒配置未核实，请到「日程」页核查。'), true,
         calendarCreatedSummary(preview.draft, result.eventId, result.reminderConfigured));
     } else if (status === AgentTaskStatus.FAILED || status === AgentTaskStatus.CANCELLED || status === AgentTaskStatus.WAITING_RECONCILIATION) {
       const result = this.factory?.resultFor(this.taskId);
       const detail = result !== undefined && result.operationId === this.view.preview?.operationId && !result.verified ? result.message : '';
-      this.finish(detail || (this.writing ? '日程执行未能确认，请到工作台查看记录并核查；不会自动重试。' : this.declinedMessage()));
+      this.finish(detail || (this.writing ? '日程执行未能确认，请到「日程」页查看记录并核查；不会自动重试。' : this.declinedMessage()));
     }
   }
   private declinedMessage(): string {
@@ -263,7 +274,7 @@ export class AssistantRuntimeSession {
         }
       }
     } catch { await this.calendar.stop().catch((): void => {}); }
-    if (this.active(generation)) this.finish(this.writing ? '已停止等待；日历可能已写入，请到工作台核查，勿重复创建。' : '已取消日程，未写入日历。');
+    if (this.active(generation)) this.finish(this.writing ? '已停止等待；日历可能已写入，请到「日程」页核查，勿重复创建。' : '已取消日程，未写入日历。');
   }
   stop(): Promise<void> {
     if (this.closing !== undefined) return this.closing;
@@ -278,7 +289,7 @@ export class AssistantRuntimeSession {
     try { await this.calendar.stop(); } catch { failed = true; }
     try { await this.model.stop(); } catch { failed = true; }
     this.stopping = false; this.view.lifecycle = failed ? ShuviRuntimeState.BLOCKED : ShuviRuntimeState.STOPPED;
-    if (pending) this.finish(writing ? '会话已停止；日历可能已写入，请到工作台核查。' : '会话已停止，本次未写入日历；模型请求可能计费。');
+    if (pending) this.finish(writing ? '会话已停止；日历可能已写入，请到「日程」页核查。' : '会话已停止，本次未写入日历；模型请求可能计费。');
     this.view.busy = false; this.view.preview = undefined; this.view.calendarStage = 'idle';
     this.view.message = failed ? '资源关闭未确认，请重启排查。' : '会话已停止。'; this.publish();
     this.closing = undefined;

@@ -26,6 +26,8 @@ function copyRecord(value: ChatRecord): ChatRecord {
   return copy;
 }
 class ChatJournal { records: ChatRecord[] = []; }
+const CHAT_JOURNAL_MAX_RECORDS: number = 128;
+const CHAT_JOURNAL_MAX_CHARS: number = 800000;
 
 function response(accepted: boolean, duplicate: boolean = false): RuntimePersistenceResult {
   const value = new RuntimePersistenceResult(); value.accepted = accepted; value.duplicate = duplicate;
@@ -47,10 +49,10 @@ export class ChatExecutionStore implements ProductionRuntimePersistencePort {
     const envelope = await this.backend.load();
     if (envelope === undefined) return;
     if (envelope.schemaVersion !== 'shuvi-chat-1.0' || !Number.isSafeInteger(envelope.revision) || envelope.revision < 1 ||
-      typeof envelope.payloadJson !== 'string' || envelope.payloadJson.length > 800000 ||
+      typeof envelope.payloadJson !== 'string' || envelope.payloadJson.length > CHAT_JOURNAL_MAX_CHARS ||
       this.digest.digest(envelope.payloadJson) !== envelope.payloadDigest) throw new Error('CHAT_JOURNAL_INVALID');
     const parsed: ChatJournal = JSON.parse(envelope.payloadJson);
-    if (!recordObject(parsed) || !Array.isArray(parsed.records) || parsed.records.length > 128) throw new Error('CHAT_JOURNAL_INVALID');
+    if (!recordObject(parsed) || !Array.isArray(parsed.records) || parsed.records.length > CHAT_JOURNAL_MAX_RECORDS) throw new Error('CHAT_JOURNAL_INVALID');
     const ids: string[] = [];
     for (const item of parsed.records) {
       if (!recordObject(item) || !RuntimeCheckpointValidator.validate(item.checkpoint).valid ||
@@ -69,12 +71,21 @@ export class ChatExecutionStore implements ProductionRuntimePersistencePort {
     const next = new ChatJournal();
     // Stored records are immutable; only the array and the replaced record change.
     next.records = this.journal.records.slice();
-    const index = next.records.findIndex((item: ChatRecord): boolean => item.checkpoint.snapshot.taskId === record.checkpoint.snapshot.taskId);
-    if (index < 0) { if (next.records.length >= 128) return response(false); next.records.push(record); }
-    else next.records[index] = record;
+    const taskId: string = record.checkpoint.snapshot.taskId;
+    const index = next.records.findIndex((item: ChatRecord): boolean => item.checkpoint.snapshot.taskId === taskId);
+    if (index < 0) next.records.push(record); else next.records[index] = record;
+    // Retention: this journal is evidence only (no resume or reconciliation is exposed), so once it is full the oldest
+    // records make room — finished ones first — instead of blocking every later turn of an unlimited conversation.
+    let payload: string = JSON.stringify(next);
+    while (next.records.length > CHAT_JOURNAL_MAX_RECORDS || payload.length > CHAT_JOURNAL_MAX_CHARS) {
+      let victim: number = next.records.findIndex((item: ChatRecord): boolean => item.checkpoint.snapshot.taskId !== taskId &&
+        (item.outcome !== undefined || item.rejectionCode.length > 0));
+      if (victim < 0) victim = next.records.findIndex((item: ChatRecord): boolean => item.checkpoint.snapshot.taskId !== taskId);
+      if (victim < 0) return response(false);
+      next.records.splice(victim, 1); payload = JSON.stringify(next);
+    }
     const envelope = new StorageSnapshotEnvelope(); envelope.schemaVersion = 'shuvi-chat-1.0';
-    envelope.revision = this.revision + 1; envelope.payloadJson = JSON.stringify(next);
-    if (envelope.payloadJson.length > 800000) return response(false);
+    envelope.revision = this.revision + 1; envelope.payloadJson = payload;
     envelope.payloadDigest = this.digest.digest(envelope.payloadJson);
     if (!await this.backend.compareAndSet(this.revision, envelope)) return response(false);
     this.revision = envelope.revision; this.journal = next; return response(true);

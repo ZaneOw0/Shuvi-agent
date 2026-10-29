@@ -1,5 +1,6 @@
 import { ChatContextPort } from '../model/ChatRuntimeAssembly';
-import { ModelProposalResult, ModelTurnPort } from '../model/DeepSeekToolTransport';
+import { ModelProposalResult, ModelTurnPort, ToolChatMessage } from '../model/DeepSeekToolTransport';
+import { VisionChatImage } from '../model/VisionChatProtocol';
 import { ASSISTANT_MAX_MESSAGE, AssistantContext } from './AssistantIntent';
 import { CalendarProbeDraft, calendarProbeDraftError } from './CalendarProbeSession';
 
@@ -53,7 +54,11 @@ export class AssistantToolTurn implements ModelTurnPort {
       trimmed.length > ASSISTANT_MAX_MESSAGE ? trimmed.slice(0, ASSISTANT_MAX_MESSAGE - 12) + '\n…（回答过长已截断）' : trimmed;
     return JSON.stringify(wire);
   }
-  conversationEpoch(): number { return this.context.conversationEpoch(); }
+  historyTurns(): ToolChatMessage[][] { return this.context.memory.turns(); }
+  historySummary(): string { return this.context.memory.summary(); }
+  rememberTurn(turn: ToolChatMessage[]): void { this.context.memory.remember(turn); }
+  compactHistory(summary: string, count: number): void { this.context.memory.compact(summary, count); }
+  imageFor(prompt: string): VisionChatImage | undefined { return this.context.imageFor(prompt); }
 }
 
 /** Tool-mode prompts over the same per-turn AssistantContext that the session binds before each send. */

@@ -37,8 +37,8 @@ export function FeatureRow($$: FeatureRowOptions) {
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       AppIcon({ source: $r('app.media.ui_chevron_right'), size: 18 })
     }.width('100%').padding(16)
-  }.width('100%').backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
-  .enabled($$.available ?? true).id($$.id ?? 'feature-' + $$.title).onClick($$.onOpen).accessibilityText(`${$$.title}，${$$.description}`)
+  }.width('100%').backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line, radius: 16 })
+  .clip(true).enabled($$.available ?? true).id($$.id ?? 'feature-' + $$.title).onClick($$.onOpen).accessibilityText(`${$$.title}，${$$.description}`)
 }
 
 @Builder
@@ -49,8 +49,6 @@ export function ProfilePage($$: ProfilePageOptions) {
       Text('属于你的休比').fontSize(24).fontWeight(FontWeight.Bold).fontColor(Theme.ink)
       Text('资料和 API Key 只保存在本机').fontSize(13).fontColor(Theme.muted)
     }.width('100%').padding({ top: 20, bottom: 24 })
-    FeatureRow({ title: 'API Key 管理', description: 'DeepSeek、硅基流动、MinerU', icon: $r('app.media.ui_key'),
-      id: 'profile-api-keys', onOpen: $$.onApiKeys })
     Row({ space: 16 }) {
       Text('悬浮助手入口').fontSize(16).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
         .layoutWeight(1).accessibilityLevel('no')
@@ -64,6 +62,8 @@ export function ProfilePage($$: ProfilePageOptions) {
       }.width(60).height(48)
     }.width('100%').padding({ left: 16, right: 16, top: 6, bottom: 6 })
       .backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
+    FeatureRow({ title: 'API Key 管理', description: 'DeepSeek、硅基流动、MinerU', icon: $r('app.media.ui_key'),
+      id: 'profile-api-keys', onOpen: $$.onApiKeys })
     FeatureRow({ title: '解析引擎', description: 'PDF、Word 与图片的文字识别', icon: $r('app.media.ui_document'), onOpen: $$.onParseSettings })
     FeatureRow({ title: '图片理解', description: '图片描述、标签与自动处理', icon: $r('app.media.chat_book'), id: 'upd-profile-vision', onOpen: $$.onVisionSettings })
     FeatureRow({ title: '嵌入模型', description: '让资料支持按意思搜索', icon: $r('app.media.ui_search'), onOpen: $$.onEmbeddingSettings })

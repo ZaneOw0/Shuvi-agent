@@ -24,7 +24,7 @@ export function AssistantWelcome($$: WelcomeOptions) {
       .fontColor(Theme.ink).textAlign(TextAlign.Center).width('100%')
     Text('我是休比，让想法成为行动。').fontSize(13).fontColor(Theme.muted)
       .textAlign(TextAlign.Center).width('100%')
-    Text($$.realChat ? ($$.searchEnabled ? '输入公开关键词，发送后确认本次搜索' : '直接提问、安排日程或让我写文档，或点下方「试试」') : '点下方「试试」开始体验').fontSize(Theme.noteSize).fontColor(Theme.muted)
+    Text($$.realChat ? ($$.searchEnabled ? '输入公开关键词，发送后确认本次搜索' : '提问、发图片、安排日程或写文档，或点下方「试试」') : '点下方「试试」开始体验').fontSize(Theme.noteSize).fontColor(Theme.muted)
       .textAlign(TextAlign.Center).margin({ top: 8 }).width('100%')
   }.width('100%').padding({ top: 24, bottom: 24, left: 12, right: 12 })
 }

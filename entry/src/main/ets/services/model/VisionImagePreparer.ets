@@ -65,6 +65,11 @@ function suffixOf(name: string): string {
 
 /** Reads a user-selected image, re-encodes it to strip metadata and bounds the transmitted pixel size. */
 export class VisionImagePreparer implements VisionImagePreparerPort {
+  private readonly maxSide: number;
+  /** maxSide bounds the longest edge of the re-encoded image (default 2048; never larger). */
+  constructor(maxSide: number = VISION_IMAGE_MAX_SIDE) {
+    this.maxSide = Number.isSafeInteger(maxSide) && maxSide >= 64 && maxSide <= VISION_IMAGE_MAX_SIDE ? maxSide : VISION_IMAGE_MAX_SIDE;
+  }
   async prepare(uri: string, displayName: string): Promise<VisionPreparedImage> {
     const name: string = displayName.trim();
     if (typeof uri !== 'string' || uri.length === 0 || name.length < 1 || name.length > 200 ||
@@ -90,7 +95,9 @@ export class VisionImagePreparer implements VisionImagePreparerPort {
     let file: fileIo.File | undefined = undefined;
     let bytes: Uint8Array = new Uint8Array(0);
     try {
-      file = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY | fileIo.OpenMode.NOFOLLOW);
+      // Gallery picker URIs are media-library handles, not sandbox paths; NOFOLLOW only applies to file paths.
+      file = await fileIo.open(uri, uri.startsWith('file://media/') ? fileIo.OpenMode.READ_ONLY :
+        fileIo.OpenMode.READ_ONLY | fileIo.OpenMode.NOFOLLOW);
       const before: fileIo.Stat = await fileIo.stat(file.fd);
       if (!before.isFile() || before.size < 1 || before.size > ImageLimits.bytes) {
         throw new VisionImageFailure('IMAGE_SIZE_OR_TYPE_INVALID');
@@ -151,7 +158,7 @@ export class VisionImagePreparer implements VisionImagePreparerPort {
         orientation = exifOrientation(await source.getImageProperty(image.PropertyKey.ORIENTATION, options));
       } catch { orientation = 1; }
       cancel.check();
-      const ratio: number = Math.min(1, VISION_IMAGE_MAX_SIDE / Math.max(header.width, header.height));
+      const ratio: number = Math.min(1, this.maxSide / Math.max(header.width, header.height));
       const size: image.Size = {
         width: Math.max(1, Math.round(header.width * ratio)),
         height: Math.max(1, Math.round(header.height * ratio))
