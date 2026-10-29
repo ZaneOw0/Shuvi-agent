@@ -18,7 +18,9 @@ import { VoiceMessageBubble } from '../components/VoiceMessageBubble';
 import { VoiceClip, composeVoiceMessage } from '../services/speech/VoiceAudio';
 import { SpeechService } from '../services/speech/SpeechService';
 import { SpeechView, SpeechPhase } from '../services/speech/SpeechSession';
-import { WorkbenchPage, ProfilePage } from '../components/FeaturePages';
+import { ProfilePage } from '../components/FeaturePages';
+import { ApiKeysView } from '../components/ApiKeysView';
+import { DeepSeekKeyService, DeepSeekKeyStatus } from '../services/model/DeepSeekCredentialStore';
 import { TextKnowledgeView } from '../knowledge/ui/TextKnowledgeView';
 import { TextKnowledgeAssembly } from '../knowledge/infra/TextKnowledgeAssembly';
 import { TextKnowledgeService } from '../knowledge/application/TextKnowledgeService';
@@ -51,7 +53,6 @@ import {
   OperationResult, OperationState, RequestState
 } from '../model/AssistantModels';
 import { MockAssistantService } from '../mock/MockAssistantService';
-import { KnowledgePlatformDiagnostics } from '../knowledge/ui/KnowledgePlatformDiagnostics';
 import { ImageIngestionService } from '../knowledge/application/ImageIngestionService';
 import { ImageIngestionView } from '../knowledge/ui/ImageIngestionView';
 import { ImageSourceView } from '../knowledge/ui/ImageSourceView';
@@ -84,7 +85,6 @@ import { SEARCH_SAMPLE, SEARCH_SCENARIOS, SearchScenario, SearchSource, SearchSt
   searchIsBusy } from '../model/SearchModels';
 import { SourceLinkService } from '../services/SourceLinkService';
 import { DEBUG } from 'BuildProfile';
-import { RuntimeChatSetup } from '../components/RuntimeChatSetup';
 import { RuntimeChatService } from '../services/model/RuntimeChatService';
 import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { RuntimeSearchView } from '../services/model/RuntimeSearchSession';
@@ -103,11 +103,22 @@ import { RuntimeKnowledgeView } from '../services/model/RuntimeKnowledgeSession'
 import { ShuviRuntimeState } from '../services/model/ShuviRuntimeController';
 import { RuntimeAssistantCoordinator } from '../services/model/RuntimeAssistantCoordinator';
 import { KnowledgeRagReadiness } from '../knowledge/domain/KnowledgeRuntimePorts';
+import { EmbeddingCredentialStatus, EmbeddingDetectionStatus } from '../knowledge/domain/EmbeddingModels';
+import { ApiKeySync } from '../services/model/ApiKeySync';
+import { ASSISTANT_IMAGE_DEFAULT_PROMPT, AssistantImageInput } from '../services/model/AssistantImageInput';
+import { VisionChatImage } from '../services/model/VisionChatProtocol';
+import { ConversationSummary, ConversationView } from '../services/conversation/AssistantConversations';
+import { AssistantConversationRdb } from '../services/conversation/AssistantConversationRdb';
 
 @Entry
 @Component
 struct Index {
-  @State realChatMode: boolean = false;
+  // The demo mode has no entry in the product UI any more; its code stays for the host tests and later removal.
+  @State realChatMode: boolean = true;
+  @State deepSeekStatus: DeepSeekKeyStatus = DeepSeekKeyStatus.Checking;
+  @State connecting: boolean = false;
+  @State apiKeysOpen: boolean = false;
+  @State apiKeysReady: boolean = false;
   @State runtimeChat: AssistantView = new AssistantView();
   @State runtimeSearch: RuntimeSearchView = new RuntimeSearchView();
   @State runtimeKnowledge: RuntimeKnowledgeView = new RuntimeKnowledgeView();
@@ -118,7 +129,6 @@ struct Index {
   @State imageKnowledgeOpen: boolean=false;
   @State imageKnowledgeOccurrence: string='';
   @State parsedImportOpen: boolean = false;
-  @State developerToolsOpen: boolean = false;
   @State parsedOpen: boolean = false;
   @State knowledgeOpening: boolean = false;
   @State knowledgeMessage: string = '';
@@ -144,7 +154,14 @@ struct Index {
   private hiddenVoiceQueries: Set<string> = new Set<string>();
   @State searchVoiceQuery: boolean = false;
   @State knowledgeVoiceQuery: boolean = false;
-  @State messages: ChatMessage[] = [];
+  /** Picker URI shown as the composer thumbnail; the sanitized bytes live in imageDraft (memory only, not state). */
+  @State imageDraftUri: string = '';
+  @State imagePreparing: boolean = false;
+  private imageDraft: VisionChatImage | undefined = undefined;
+  // Real-chat messages are saved with the current conversation on every change (see messagesChanged).
+  @State @Watch('messagesChanged') messages: ChatMessage[] = [];
+  @State conversations: ConversationView = new ConversationView();
+  private restoringMessages: boolean = false;
   @State draft: CalendarDraft | undefined = undefined;
   @State result: OperationResult | undefined = undefined;
   @State records: OperationResult[] = [];
@@ -169,7 +186,6 @@ struct Index {
   private pdfDocumentsPort: KnowledgeDocumentListPort | undefined = undefined;
   private embeddingService: EmbeddingService | undefined = undefined;
   @State embeddingClearEpoch: number = 0;
-  @State platformDiagnosticsOpen: boolean = false;
   @State imageIngestionOpen: boolean = false;
   @State imageSourceOpen: boolean = false;
   @State docxIngestionOpen: boolean = false;
@@ -201,9 +217,9 @@ struct Index {
   private alive: boolean = true;
   private scroller: Scroller = new Scroller();
   private inputController: TextAreaController = new TextAreaController();
-  private tabNames: string[] = ['助手', '工作台', '知识库', '我的'];
+  private tabNames: string[] = ['助手', '日程', '知识库', '我的'];
   private tabIcons: Resource[] = [
-    $r('app.media.chat_chat'), $r('app.media.chat_grid'), $r('app.media.chat_book'), $r('app.media.chat_user')
+    $r('app.media.chat_chat'), $r('app.media.chat_calendar'), $r('app.media.chat_book'), $r('app.media.chat_user')
   ];
 
   aboutToAppear(): void {
@@ -249,11 +265,41 @@ struct Index {
       if (this.alive && newCalendarCard) this.scroller.scrollEdge(Edge.Bottom);
     });
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+    RuntimeChatService.conversations.attach((view: ConversationView): void => { if (this.alive) this.conversations = view; });
+    void this.openConversations();
+    void this.ensureAssistant();
+  }
+
+  /** Restores the most recent saved conversation (what was shown and what the model remembers). */
+  private async openConversations(): Promise<void> {
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) return;
+    const restored: ChatMessage[] = await RuntimeChatService.conversations.open(
+      new AssistantConversationRdb(new NativeAgentRdbOpen(context)));
+    if (this.alive && this.realChatMode && this.messages.length === 0 && restored.length > 0) {
+      this.showMessages(restored);
+    }
+  }
+  private showMessages(list: ChatMessage[]): void {
+    this.restoringMessages = true;
+    try { this.messages = list; } finally { this.restoringMessages = false; }
+    this.scroller.scrollEdge(Edge.Bottom);
+  }
+  messagesChanged(_name: string): void {
+    if (!this.restoringMessages && this.realChatMode) RuntimeChatService.conversations.saveMessages(this.messages);
+  }
+
+  // Going to the background ends every model session (EntryAbility); coming back reconnects with the stored key.
+  onPageShow(): void { void this.ensureAssistant(); }
+  onPageHide(): void {
+    this.knowledgeEnabled = false;
+    void SpeechService.session.cancel(); void SpeechService.playback.stop().catch((): void => {});
   }
 
   aboutToDisappear(): void {
     PdfJsRuntime.shared.closePreview();
     this.alive = false;
+    RuntimeChatService.conversations.detach();
     SpeechService.session.detach();
     SpeechService.playback.detach();
     RuntimeChatService.session.detach();
@@ -273,8 +319,6 @@ struct Index {
     await this.parseAssembly?.close(); await this.sharedKnowledge?.release();
   }
 
-  onPageHide(): void { void SpeechService.session.cancel(); void SpeechService.playback.stop().catch((): void => {}); }
-
   onBackPress(): boolean {
     if (this.speech.busy) { SpeechService.session.cancel(); return true; }
     if (PdfJsRuntime.shared.expanded) { PdfJsRuntime.shared.closePreview(); return true; }
@@ -282,6 +326,7 @@ struct Index {
       this.drawerOpen = false;
       return true;
     }
+    if (this.apiKeysOpen) { this.apiKeysOpen = false; return true; }
     if (this.migrationOpen) { this.migrationOpen=false; return true; }
     if (this.visionSettingsOpen) { this.visionSettingsOpen=false; return true; }
     if (this.imageKnowledgeOpen) { this.imageKnowledgeOpen=false; return true; }
@@ -290,7 +335,6 @@ struct Index {
     if (this.docxIngestionOpen) { this.docxIngestionOpen = false; this.docxIngestionService?.pause(); return true; }
     if (this.imageSourceOpen) { this.imageSourceOpen = false; this.sharedKnowledge?.imageSources.close().catch((): void => {}); return true; }
     if (this.imageIngestionOpen) { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); return true; }
-    if (this.platformDiagnosticsOpen) { this.platformDiagnosticsOpen = false; return true; }
     if (this.pdfIngestionOpen) { this.pdfIngestionOpen = false; return true; }
     if (this.embeddingOpen) { this.closeEmbedding(); return true; }
     if (this.parseOpen) { this.closeParse(); return true; }
@@ -321,12 +365,16 @@ struct Index {
 
   private changeTab(index: number): void {
     if (index !== this.tab) SpeechService.session.cancel();
+    const entering: boolean = index === 0 && this.tab !== 0;
     if (index !== this.tab && this.tab === 0) {
       void RuntimeSearchService.session.stop();
       void RuntimeAssistantCoordinator.stop().catch((): void => {});
       this.runtimeChat.clearEpoch++;
+      // Stopping the assistant also ends knowledge-base answering; the chip comes back off.
+      this.knowledgeEnabled = false;
     }
     this.floatingPlacement.cancelDrag();
+    if (index !== this.tab) { this.apiKeysOpen = false; }
     if (index!==this.tab) { this.migrationOpen=false; }
     if (index!==this.tab) { this.visionSettingsOpen=false; this.imageKnowledgeOpen=false; }
     if (index !== this.tab) { this.parsedOpen = false; }
@@ -349,6 +397,55 @@ struct Index {
     this.showScenarios = false;
     this.drawerOpen = false;
     this.scroller.scrollEdge(Edge.Top);
+    if (entering) { void this.ensureAssistant(); }
+  }
+
+  private openApiKeys(): void {
+    if (this.tab !== 3) { this.changeTab(3); }
+    void this.openApiKeysPage();
+  }
+  private async openApiKeysPage(): Promise<void> {
+    this.apiKeysReady = false; this.apiKeysOpen = true; this.scroller.scrollEdge(Edge.Top);
+    // The SiliconFlow and MinerU cards need their services; open them without showing their own pages.
+    try {
+      if (this.embeddingService === undefined) { await this.openEmbedding(); this.embeddingOpen = false; }
+      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+    } finally { this.apiKeysReady = true; }
+  }
+  private sessionState(): ShuviRuntimeState {
+    return this.searchEnabled ? this.runtimeSearch.lifecycle : this.runtimeChat.lifecycle;
+  }
+  private async refreshDeepSeekStatus(): Promise<void> {
+    try { this.deepSeekStatus = await DeepSeekKeyService.store.status(); }
+    catch { this.deepSeekStatus = DeepSeekKeyStatus.Unavailable; }
+  }
+
+  /**
+   * Connects the assistant — or the search session while 搜索 is on — with the DeepSeek key saved in 我的 → API Key 管理.
+   * Connecting sends no model request. A failed start is retried only when the user asks (retry), never in a loop.
+   */
+  private async ensureAssistant(retry: boolean = false): Promise<void> {
+    if (!DEBUG || !this.realChatMode || this.connecting || this.runtimeSwitching || !this.alive || this.tab !== 0 ||
+      this.knowledgeEnabled) { return; }
+    // Leaving and re-entering the assistant quickly can find the previous session still stopping.
+    for (let i = 0; i < 40 && this.alive && this.tab === 0 && this.sessionState() === ShuviRuntimeState.STOPPING; i++) {
+      await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 100); });
+    }
+    if (this.connecting || !this.alive || this.tab !== 0 || this.knowledgeEnabled) { return; }
+    const state: ShuviRuntimeState = this.sessionState();
+    if (state !== ShuviRuntimeState.IDLE && state !== ShuviRuntimeState.STOPPED && !(retry && state === ShuviRuntimeState.FAILED)) {
+      return;
+    }
+    this.connecting = true;
+    try {
+      await this.refreshDeepSeekStatus();
+      if (this.deepSeekStatus !== DeepSeekKeyStatus.Saved || !this.alive || this.tab !== 0) { return; }
+      const key: Uint8Array | undefined = await DeepSeekKeyService.store.load();
+      if (key === undefined) { await this.refreshDeepSeekStatus(); return; }
+      if (this.searchEnabled) { await this.startRuntimeSearch(key); } else { await this.startRuntimeChat(key); }
+    } catch {
+      // The session view carries the failure message; the key stays only in the device store.
+    } finally { this.connecting = false; }
   }
 
   private async openKnowledge(): Promise<void> {
@@ -424,7 +521,11 @@ struct Index {
     } catch (error) { this.parsedMessage = error instanceof Error ? error.message : '统一服务打开失败，资料保留'; }
     finally { this.parsedOpening = false; }
   }
-  private async openVisionSettings(): Promise<void> { await this.openParsed(); this.parsedOpen=false; this.visionSettingsOpen=true; }
+  private async openVisionSettings(): Promise<void> {
+    await this.openParsed(); this.parsedOpen=false;
+    await ApiKeySync.fillVisionKey(this.sharedKnowledge?.unifiedSettings);
+    this.visionSettingsOpen=true;
+  }
   private async openImageKnowledge(): Promise<void> { await this.openParsed(); this.parsedOpen=false; this.imageKnowledgeOpen=true; }
   private async openUnifiedCard(card: UnifiedSearchCard): Promise<void> {
     if (!card.current) { return; }
@@ -531,9 +632,8 @@ struct Index {
     this.messages = this.messages.concat([message]);
   }
   private openCalendarRecords(): void {
-    // Leaving the assistant tab ends the chat session as before; the workbench lists the verified native records.
+    // Leaving the assistant tab ends the chat session as before; the 日程 tab lists the verified native records.
     this.changeTab(1);
-    this.realCalendarOpen = true;
   }
 
   private async startRuntimeChat(key: Uint8Array): Promise<void> {
@@ -575,8 +675,10 @@ struct Index {
     try {
       await RuntimeSearchService.session.stop(); await RuntimeAssistantCoordinator.stop();
       if (this.alive && this.tab === 0) { this.searchEnabled = !this.searchEnabled; this.knowledgeEnabled = false; }
-    } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
+    } catch { this.notice('切换没有完成', '请稍后重试；如果一直这样，请重启应用。'); return; }
     finally { this.runtimeSwitching = false; }
+    // 搜索 on connects the search session, off reconnects the assistant; both use the saved DeepSeek key.
+    await this.ensureAssistant();
   }
 
   private async toggleKnowledge(): Promise<void> {
@@ -589,8 +691,10 @@ struct Index {
         if (this.alive && this.tab === 0) { this.knowledgeEnabled = false; }
         return;
       }
-      if (this.searchEnabled || this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
-        this.notice('请先启用普通对话', '请先启用真实主对话，再授权助手按需使用个人知识库。'); return;
+      if (this.searchEnabled) { this.notice('请先关闭搜索', '联网搜索和知识库问答不能同时开启。'); return; }
+      if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
+        this.notice('助手还没有连接', this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再试。' :
+          '请先在「我的 → API Key 管理」保存 DeepSeek Key。'); return;
       }
       const choice: number = await new Promise<number>((resolve: (value: number) => void): void => {
         AlertDialog.show({ title: '允许助手按需使用个人知识库',
@@ -604,60 +708,57 @@ struct Index {
       const readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge(choice === 1);
       if (!readiness.ready) { this.notice('个人知识库尚不可用', readiness.message); return; }
       if (this.alive && this.tab === 0) { this.knowledgeEnabled = true; this.searchEnabled = false; }
-    } catch { this.notice('会话尚未关闭', '请重启应用后排查资源释放。'); }
+    } catch { this.notice('切换没有完成', '请稍后重试；如果一直这样，请重启应用。'); }
     finally { this.runtimeSwitching = false; this.ragPreparing = false; }
   }
 
   @Builder
   private runtimeChatControls() {
     Column({ space: 10 }) {
-      Button(this.realChatMode ? '清空对话并切回演示' : '清空对话并打开真实功能')
-        .fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 })
-        .enabled(!this.blocked() && this.runtimeChat.lifecycle !== ShuviRuntimeState.STARTING &&
-          this.runtimeChat.lifecycle !== ShuviRuntimeState.STOPPING)
-        .id('runtime-chat-mode').onClick((): void => { void this.switchChatMode(); })
-      if (this.realChatMode && this.knowledgeEnabled) {
+      if (this.knowledgeEnabled) {
         RuntimeKnowledgePanel({ view: this.runtimeKnowledge, hideQuery: this.knowledgeVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeKnowledge.query), onDisable: (): void => { void this.toggleKnowledge(); } })
       }
-      if (this.realChatMode && this.searchEnabled) {
+      if (this.searchEnabled) {
         RuntimeSearchPanel({ view: this.runtimeSearch, hideQuery: this.searchVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeSearch.query) ||
-          this.hiddenVoiceQueries.has(this.runtimeSearch.preview?.query ?? ''), onStart: (key: Uint8Array): void => {
-          void this.startRuntimeSearch(key).catch((): void => {});
-        } })
-      } else if (this.realChatMode) {
-        if (this.runtimeChat.lifecycle === ShuviRuntimeState.READY || this.runtimeChat.lifecycle === ShuviRuntimeState.STARTING) {
-          // Enabled session collapses to one status row instead of a full card.
-          Row({ space: 8 }) {
-            Circle({ width: 8, height: 8 }).fill(this.runtimeChat.lifecycle === ShuviRuntimeState.READY ? Theme.ok : Theme.muted)
-            Text(this.runtimeChat.lifecycle === ShuviRuntimeState.READY ?
-              `已启用 · 剩 ${Math.max(0, this.runtimeChat.maxRequests - this.runtimeChat.requestCount)}/${this.runtimeChat.maxRequests} 轮` : '正在启用…')
-              .fontSize(13).fontColor(Theme.ink).layoutWeight(1).id('runtime-chat-status')
-            Button('停止').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(18)
-              .constraintSize({ minHeight: Theme.controlHeight, minWidth: 64 }).id('runtime-chat-stop')
-              .accessibilityText('停止真实对话，清除本次会话凭据')
-              .onClick((): void => { void RuntimeAssistantCoordinator.stop().catch((): void => {}); })
-          }.width('100%').padding({ left: 14, right: 6, top: 4, bottom: 4 }).backgroundColor(Theme.surface)
-            .borderRadius(22).border({ width: 1, color: Theme.line })
-          if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
-            Text('本次启用的对话轮数已用完；点“停止”后可重新启用。').fontSize(Theme.noteSize).fontColor(Theme.amber).width('100%')
+          this.hiddenVoiceQueries.has(this.runtimeSearch.preview?.query ?? ''), keySaved: this.deepSeekStatus === DeepSeekKeyStatus.Saved,
+          connecting: this.connecting, onConnect: (): void => { void this.ensureAssistant(true); },
+          onKeys: (): void => { this.openApiKeys(); } })
+      } else if (this.deepSeekStatus === DeepSeekKeyStatus.Missing || this.deepSeekStatus === DeepSeekKeyStatus.Unavailable) {
+        // No key yet: the only setup step left in the assistant. Keys are managed in 我的 → API Key 管理.
+        Column({ space: 10 }) {
+          Text('设置 DeepSeek Key 后即可开始对话').fontSize(Theme.titleSize).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
+          Text(this.deepSeekStatus === DeepSeekKeyStatus.Unavailable ? '本机安全存储暂时不可用，请稍后重试。' :
+            '休比用 DeepSeek 回答问题、安排日程和读写文档。Key 只保存在本机，可以在「我的 → API Key 管理」随时修改或删除。')
+            .fontSize(13).fontColor(Theme.muted).width('100%').lineHeight(20)
+          Button('去设置').fontSize(15).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(Theme.radius)
+            .width('100%').constraintSize({ minHeight: Theme.controlHeight }).id('runtime-chat-open-keys')
+            .onClick((): void => { this.openApiKeys(); })
+        }.width('100%').padding(16).alignItems(HorizontalAlign.Start).backgroundColor(Theme.surface)
+          .borderRadius(Theme.cardRadius).border({ width: 1, color: Theme.line })
+      } else if (this.runtimeChat.lifecycle === ShuviRuntimeState.FAILED || this.runtimeChat.lifecycle === ShuviRuntimeState.BLOCKED ||
+        (this.runtimeChat.lifecycle === ShuviRuntimeState.STOPPED && !this.connecting && !this.runtimeSwitching)) {
+        Row({ space: 8 }) {
+          Text(this.runtimeChat.lifecycle === ShuviRuntimeState.BLOCKED ? '助手没能正常关闭，请重启应用。' :
+            (this.runtimeChat.lifecycle === ShuviRuntimeState.STOPPED ? '助手已断开。' : '助手没有连接上。'))
+            .fontSize(13).fontColor(Theme.ink).layoutWeight(1).id('runtime-chat-message')
+          if (this.runtimeChat.lifecycle !== ShuviRuntimeState.BLOCKED) {
+            Button('重新连接').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(18)
+              .constraintSize({ minHeight: Theme.controlHeight }).enabled(!this.connecting).id('runtime-chat-retry')
+              .onClick((): void => { void this.ensureAssistant(true); })
           }
-        } else {
-          if (this.runtimeChat.lifecycle !== ShuviRuntimeState.IDLE && this.runtimeChat.lifecycle !== ShuviRuntimeState.STOPPED) {
-            Text(this.runtimeChat.message).fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-chat-message')
-          }
-          if (this.runtimeChat.lifecycle === ShuviRuntimeState.IDLE || this.runtimeChat.lifecycle === ShuviRuntimeState.STOPPED ||
-            this.runtimeChat.lifecycle === ShuviRuntimeState.FAILED) {
-            RuntimeChatSetup({ clearEpoch: this.runtimeChat.clearEpoch, onStart: (key: Uint8Array): void => {
-              void this.startRuntimeChat(key).catch((): void => {});
-            } })
-          }
-        }
+        }.width('100%').padding({ left: 14, right: 6, top: 4, bottom: 4 }).backgroundColor(Theme.surface)
+          .borderRadius(22).border({ width: 1, color: Theme.line })
+      } else if (this.runtimeChat.lifecycle === ShuviRuntimeState.READY && this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
+        Text('这段对话已经很长了，点右上角「开始新对话」继续。').fontSize(Theme.noteSize).fontColor(Theme.amber).width('100%')
+          .id('runtime-chat-limit')
       }
     }.width('100%').padding({ bottom: 12 })
   }
 
-  private blocked(): boolean {
-    return this.speech.busy || this.generating || this.executing || this.searchBusy || this.draft !== undefined || this.runtimeChat.busy ||
+  private blocked(): boolean { return this.speech.busy || this.busyExceptSpeech(); }
+  /** Speech can always be cancelled; cancelling it is busy for a moment (releasing the microphone). */
+  private busyExceptSpeech(): boolean {
+    return this.imagePreparing || this.generating || this.executing || this.searchBusy || this.draft !== undefined || this.runtimeChat.busy ||
       this.runtimeSearch.busy || this.runtimeSwitching || this.runtimeSearch.lifecycle === ShuviRuntimeState.STARTING ||
       this.runtimeSearch.lifecycle === ShuviRuntimeState.STOPPING || this.runtimeKnowledge.busy ||
       this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STARTING || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STOPPING;
@@ -679,13 +780,19 @@ struct Index {
     return this.realChatMode && (this.runtimeChat.lifecycle === ShuviRuntimeState.READY ||
       this.runtimeSearch.lifecycle === ShuviRuntimeState.READY || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.READY);
   }
+  private headerStatus(): string {
+    if (this.headerConnected()) { return '休比 · 已连接'; }
+    if (this.connecting || this.sessionState() === ShuviRuntimeState.STARTING) { return '休比 · 连接中'; }
+    return this.deepSeekStatus === DeepSeekKeyStatus.Missing ? '休比 · 未设置 Key' : '休比 · 未连接';
+  }
   private composerHint(): string {
-    return this.realChatMode ? (this.knowledgeEnabled ? '已授权个人知识库 · 助手按需查询，实际使用时展示来源' :
-      (this.searchEnabled ? '联网搜索 · 每次搜索前会征求你的同意' : '可提问、安排日程或让我写文档；日程创建前会让你确认')) :
+    return this.realChatMode ? (this.knowledgeEnabled ? '已授权个人知识库 · 按需查询并展示来源' :
+      (this.searchEnabled ? '联网搜索 · 每次搜索前会征求你的同意' : '可提问、安排日程、写文档，也能发图片；日程创建前会让你确认')) :
       (this.searchEnabled ? '演示模式 · 固定样例，未联网' : '演示模式 · 数据仅本次有效');
   }
 
   private async send(): Promise<void> {
+    if (this.imageDraftUri.length > 0) { await this.sendImage(); return; }
     if (this.voiceDraft !== undefined) { await this.sendVoice(); return; }
     if (this.blocked() || this.input.trim().length === 0 || this.input.length > 500) {
       return;
@@ -694,15 +801,16 @@ struct Index {
     if (this.realChatMode) {
       if (this.searchEnabled) {
         if (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance) {
-          this.notice('真实搜索尚不可用', this.runtimeSearch.message); return;
+          this.notice('联网搜索暂不可用', this.runtimeSearch.message); return;
         }
         const query = this.input.trim(); this.input = ''; void RuntimeSearchService.session.send(query); return;
       }
       if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
-        this.notice('真实对话尚未就绪', '请先启用会话。本次未发送，也不会回退为演示回答。'); return;
+        this.notice('助手还没有连接', (this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再发送。' :
+          '请先在「我的 → API Key 管理」保存 DeepSeek Key。') + '本次没有发送，内容保留在输入框。'); return;
       }
       if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
-        this.notice('本次请求次数已用完', '请停止真实对话后重新启用。本次未发送，内容保留在输入框。'); return;
+        this.notice('这段对话已经很长了', '请点右上角「开始新对话」继续。本次没有发送，内容保留在输入框。'); return;
       }
       const message = this.input; this.input = '';
       this.inputController.stopEditing(); this.addMessage(message, true);
@@ -779,31 +887,25 @@ struct Index {
   }
 
   private newConversation(): void {
-    if (this.speech.busy) SpeechService.session.cancel();
-    if (this.blocked()) {
+    if (this.busyExceptSpeech()) {
       return;
     }
     this.inputController.stopEditing();
-    if (this.messages.length === 0 && this.input.length === 0) {
-      this.resetConversation();
-      return;
-    }
-    this.getUIContext().showAlertDialog({
-      title: '开始新对话？',
-      message: '将清空当前对话和未发送文字；已创建的日程和操作记录会保留。',
-      primaryButton: { value: '继续当前对话', action: () => {} },
-      secondaryButton: { value: '开始新对话', action: () => this.resetConversation() }
-    });
+    // The current conversation stays under 历史对话 in the menu; nothing is deleted, so no confirmation is needed.
+    this.resetConversation();
   }
 
   private resetConversation(): void {
-    SpeechService.session.cancel();
-    RuntimeSearchService.session.clearConversation();
-    RuntimeKnowledgeService.session.clearConversation();
-    if (this.blocked()) {
+    // Checked before cancelling speech: the cancel itself reports busy while the microphone is released.
+    if (this.busyExceptSpeech()) {
       return;
     }
-    RuntimeChatService.session.clearConversation();
+    void SpeechService.session.cancel();
+    RuntimeSearchService.session.clearConversation();
+    RuntimeKnowledgeService.session.clearConversation();
+    // Keeps the previous conversation saved and starts one with empty model memory; no session restart is needed.
+    RuntimeChatService.conversations.startNew();
+    RuntimeChatService.session.context.clear();
     this.service.cancel(this.requestId);
     this.searchSession.cancel();
     this.searchTurns = [];
@@ -811,13 +913,58 @@ struct Index {
     this.searchScenario = SearchScenario.Normal;
     this.requestId = '';
     this.operationId = '';
-    this.messages = [];
-    this.input = ''; this.voiceDraft = undefined; this.voiceText = '';
+    this.showMessages([]);
+    this.input = ''; this.voiceDraft = undefined; this.voiceText = ''; this.discardImage();
     this.searchVoiceQuery = false; this.knowledgeVoiceQuery = false;
     this.result = undefined;
     this.requestState = RequestState.Unsupported;
     this.scenario = DemoScenario.Normal;
     this.changeTab(0);
+  }
+
+  /** Opens a saved conversation from the menu: its messages come back and the model remembers it again. */
+  private async openConversation(id: string): Promise<void> {
+    if (this.blocked()) { this.notice('请稍候', '等这次回答完成后再切换对话。'); return; }
+    this.drawerOpen = false;
+    if (id === this.conversations.currentId) { this.changeTab(0); return; }
+    SpeechService.session.cancel();
+    this.inputController.stopEditing();
+    this.discardImage(); this.voiceDraft = undefined; this.voiceText = '';
+    RuntimeKnowledgeService.session.clearConversation();
+    RuntimeChatService.session.context.clear();
+    const restored: ChatMessage[] | undefined = await RuntimeChatService.conversations.switchTo(id);
+    if (!this.alive) return;
+    this.showMessages(restored === undefined ? [] : restored);
+    if (restored === undefined) this.notice('打不开这段对话', '它可能已被删除，已为你开始一段新对话。');
+    this.changeTab(0);
+  }
+
+  private deleteConversation(item: ConversationSummary): void {
+    if (this.blocked() && item.id === this.conversations.currentId) {
+      this.notice('请稍候', '等这次回答完成后再删除当前对话。'); return;
+    }
+    this.getUIContext().showAlertDialog({
+      title: '删除这段对话？',
+      message: `「${item.title}」的聊天记录和休比对这段对话的记忆都会删除，无法恢复。已创建的日程和文档不受影响。`,
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: { value: '删除', action: () => { void this.removeConversation(item.id); } }
+    });
+  }
+  private async removeConversation(id: string): Promise<void> {
+    const current: boolean = id === this.conversations.currentId;
+    if (current && this.blocked()) { this.notice('请稍候', '等这次回答完成后再删除当前对话。'); return; }
+    if (current) { RuntimeKnowledgeService.session.clearConversation(); RuntimeChatService.session.context.clear(); }
+    const wasCurrent: boolean = await RuntimeChatService.conversations.remove(id);
+    if (wasCurrent && this.alive) {
+      this.showMessages([]); this.discardImage(); this.voiceDraft = undefined; this.voiceText = '';
+    }
+  }
+  private conversationTime(time: number): string {
+    const date: Date = new Date(time); const now: Date = new Date();
+    const pad = (value: number): string => (value < 10 ? '0' : '') + value;
+    if (date.toDateString() === now.toDateString()) return `今天 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return date.getFullYear() === now.getFullYear() ? `${date.getMonth() + 1}月${date.getDate()}日` :
+      `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
   }
 
   private updateSearch(turn: SearchTurn): void {
@@ -903,15 +1050,6 @@ struct Index {
     });
   }
 
-  private attachments(): void {
-    this.inputController.stopEditing();
-    this.getUIContext().showAlertDialog({
-      title: '添加内容', message: '图片与文件输入待接入，本次不会读取设备内容。',
-      primaryButton: { value: '图片 · 待接入', action: () => this.notice('图片输入待接入', '本次不会打开相册或读取图片。') },
-      secondaryButton: { value: '文件 · 待接入', action: () => this.notice('文件输入待接入', '本次不会打开文件选择器或读取文件。') }
-    });
-  }
-
   private async confirm(): Promise<void> {
     if (!this.draft || this.executing) {
       return;
@@ -974,13 +1112,12 @@ struct Index {
         if (this.tab === 0 && !(this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen)) {
           Row({ space: 6 }) {
             Circle({ width: 7, height: 7 }).fill(this.headerConnected() ? Theme.ok : Theme.line)
-            Text(this.realChatMode ? (this.headerConnected() ? '休比 · 已连接' : '休比 · 未启用') : '休比 · 演示')
+            Text(this.realChatMode ? this.headerStatus() : '休比 · 演示')
               .fontSize(12).fontColor(Theme.ink)
           }.padding({ left: 10, right: 12, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
             .id('chat-header-status')
-        } else {
-          Text(this.tab === 2 || this.parsedOpen || this.parseOpen || this.embeddingOpen || this.visionSettingsOpen || this.imageKnowledgeOpen ? '本机资料 · 未同步' :
-            (this.tab === 1 && this.realCalendarOpen ? '系统日历' : '演示模式')).fontSize(11).fontColor(Theme.muted)
+        } else if (this.tab === 1 || this.tab === 2) {
+          Text(this.tab === 1 ? '系统日历' : '本机资料').fontSize(11).fontColor(Theme.muted)
             .padding({ left: 9, right: 9, top: 5, bottom: 5 }).backgroundColor(Theme.soft).borderRadius(20)
         }
       }.width('34%')
@@ -997,11 +1134,6 @@ struct Index {
         Blank()
         if (this.tab === 0) {
         Row() {
-          Button({ type: ButtonType.Circle }) {
-            AppIcon({ source: $r('app.media.chat_sliders') })
-          }.width(44).height(44).backgroundColor(Color.Transparent)
-            .accessibilityText(`演示场景设置，当前${this.searchEnabled ? this.searchScenario : this.scenario}`).id('chat-scenarios')
-            .enabled(!this.generating && !this.executing && !this.searchBusy).onClick(() => this.openScenarios())
           Button({ type: ButtonType.Circle }) {
             AppIcon({ source: $r('app.media.chat_newchat') })
           }.width(44).height(44).backgroundColor(Color.Transparent)
@@ -1026,7 +1158,30 @@ struct Index {
         if (message.isUser) {
           Row() {
             Blank().width('8%')
-            if (message.voice !== undefined) {
+            if (message.image !== undefined || message.imageMissing === true) {
+              Column({ space: 6 }) {
+                if (message.image !== undefined) {
+                  Image(message.image).width(180).constraintSize({ maxHeight: 240 }).objectFit(ImageFit.Cover)
+                    .borderRadius(16).border({ width: 1, color: Theme.line }).accessibilityText('你发送的图片')
+                } else {
+                  // Restored conversations never contain the picture itself.
+                  Row({ space: 6 }) {
+                    AppIcon({ source: $r('app.media.ui_image'), size: 18 })
+                    Text('图片（原图未保存）').fontSize(13).fontColor(Theme.muted)
+                  }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).backgroundColor(Theme.soft).borderRadius(14)
+                    .accessibilityText('你曾发送一张图片，原图没有保存')
+                }
+                if (message.voice !== undefined) {
+                  VoiceMessageBubble({ recording: message.voice, playingId: this.voicePlayingId,
+                    onPlay: (clip: VoiceClip): void => this.playVoice(clip) })
+                }
+                if (message.text.length > 0) {
+                  Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
+                    .backgroundColor(Theme.bubble).borderRadius({ topLeft: 20, topRight: 20, bottomLeft: 20, bottomRight: 6 })
+                    .accessibilityText(`你：${message.text}`)
+                }
+              }.constraintSize({ maxWidth: '92%' }).alignItems(HorizontalAlign.End)
+            } else if (message.voice !== undefined) {
               Column({ space: 6 }) {
                 VoiceMessageBubble({ recording: message.voice, playingId: this.voicePlayingId,
                   onPlay: (clip: VoiceClip): void => this.playVoice(clip) })
@@ -1280,6 +1435,7 @@ struct Index {
   }
 
   private async sendVoice(): Promise<void> {
+    if (this.imageDraft !== undefined) { await this.sendImage(); return; }
     const clip = this.voiceDraft; const transcript = this.voiceText; const supplement = this.input;
     const text = composeVoiceMessage(transcript, supplement);
     if (clip === undefined || this.blocked() || text.length === 0 || text.length > 500) return;
@@ -1289,7 +1445,10 @@ struct Index {
     }
     if (!this.searchEnabled && (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY ||
       this.runtimeChat.requestCount >= this.runtimeChat.maxRequests)) {
-      this.notice('真实对话尚不可用', '录音已保存，请启用有剩余次数的会话后发送。'); return;
+      if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
+        this.notice('这段对话已经很长了', '录音已保存，点右上角「开始新对话」后再发送。'); return;
+      }
+      this.notice('助手还没有连接', '录音已保存。请稍候再发送；如果还没保存 DeepSeek Key，请先到「我的 → API Key 管理」保存。'); return;
     }
     const message: ChatMessage = { id: this.service.nextId('message'), isUser: true, text: supplement.trim(), voice: clip };
     this.messages = this.messages.concat([message]); this.voiceDraft = undefined; this.voiceText = ''; this.input = '';
@@ -1310,16 +1469,73 @@ struct Index {
     this.scroller.scrollEdge(Edge.Bottom);
   }
 
+  private async pickImage(fromFiles: boolean): Promise<void> {
+    if (this.blocked()) return;
+    if (!this.realChatMode || this.searchEnabled || this.knowledgeEnabled) {
+      this.notice('图片只能在普通对话里发送', '请先关闭联网搜索或知识库，再添加图片。'); return;
+    }
+    this.inputController.stopEditing();
+    let uri: string = '';
+    try {
+      const context = this.getUIContext().getHostContext();
+      if (fromFiles && context === undefined) throw new Error('NO_CONTEXT');
+      uri = fromFiles && context !== undefined ? await AssistantImageInput.pickFile(context) : await AssistantImageInput.pick();
+    } catch { this.notice(fromFiles ? '没能打开文件选择' : '没能打开图库', '请稍后再试。'); return; }
+    if (uri.length === 0 || !this.alive) return;
+    this.imagePreparing = true;
+    try {
+      const image: VisionChatImage = await AssistantImageInput.prepare(uri);
+      if (!this.alive) { image.bytes.fill(0); return; }
+      this.discardImage(); this.imageDraft = image; this.imageDraftUri = uri;
+    } catch (error) {
+      this.notice('这张图片不能发送', AssistantImageInput.failureText(error as Object));
+    } finally { this.imagePreparing = false; }
+  }
+
+  private discardImage(): void {
+    this.imageDraft?.bytes.fill(0); this.imageDraft = undefined; this.imageDraftUri = '';
+  }
+
+  /** Image + optional voice + optional text in one assistant turn; the transcript stays hidden as in sendVoice. */
+  private async sendImage(): Promise<void> {
+    const image: VisionChatImage | undefined = this.imageDraft; const uri: string = this.imageDraftUri;
+    const clip: VoiceClip | undefined = this.voiceDraft; const transcript: string = this.voiceText; const supplement: string = this.input;
+    if (image === undefined || this.blocked() || (clip !== undefined && transcript.trim().length === 0)) return;
+    const spoken: string = clip === undefined ? supplement.trim() : composeVoiceMessage(transcript, supplement);
+    if (spoken.length > 500) return;
+    if (!this.realChatMode || this.searchEnabled || this.knowledgeEnabled) {
+      this.notice('图片只能在普通对话里发送', '请先关闭联网搜索或知识库；图片和文字都还在输入框里。'); return;
+    }
+    if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
+      this.notice('助手还没有连接', (this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再发送。' :
+        '请先在「我的 → API Key 管理」保存 DeepSeek Key。') + '本次没有发送，图片和文字都保留着。'); return;
+    }
+    if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
+      this.notice('这段对话已经很长了', '请点右上角「开始新对话」继续。本次没有发送。'); return;
+    }
+    const message: ChatMessage = { id: this.service.nextId('message'), isUser: true, text: supplement.trim(), voice: clip, image: uri };
+    this.messages = this.messages.concat([message]);
+    // The session takes ownership of the bytes (it zeroes them after the turn); the composer only forgets them.
+    this.imageDraft = undefined; this.imageDraftUri = ''; this.voiceDraft = undefined; this.voiceText = ''; this.input = '';
+    this.inputController.stopEditing();
+    if (clip !== undefined) { this.hiddenVoiceQueries.add(spoken); }
+    await RuntimeChatService.session.send(spoken.length > 0 ? spoken : ASSISTANT_IMAGE_DEFAULT_PROMPT, image);
+    this.scroller.scrollEdge(Edge.Bottom);
+  }
+
   @Builder
   voiceArchivePanel() {
     Column({ space: 8 }) {
-      Row() {
-        Button(this.voiceArchiveOpen ? '收起录音' : `已保存语音 · ${this.voiceArchive.length}`)
-          .height(44).fontSize(12).fontColor(Theme.accent).backgroundColor(Color.Transparent).id('voice-archive-toggle')
-          .enabled(!this.speech.busy).onClick((): void => { this.refreshVoiceArchive(); this.voiceArchiveOpen = !this.voiceArchiveOpen; })
-        Blank()
-        if (this.voiceArchiveOpen) { Text('仅本机保存').fontSize(11).fontColor(Theme.muted) }
-      }.width('100%')
+      // The saved-recordings row only appears once there is something to list.
+      if (this.voiceArchive.length > 0 || this.voiceArchiveOpen) {
+        Row() {
+          Button(this.voiceArchiveOpen ? '收起录音' : `已保存语音 · ${this.voiceArchive.length}`)
+            .height(44).fontSize(12).fontColor(Theme.accent).backgroundColor(Color.Transparent).id('voice-archive-toggle')
+            .enabled(!this.speech.busy).onClick((): void => { this.refreshVoiceArchive(); this.voiceArchiveOpen = !this.voiceArchiveOpen; })
+          Blank()
+          if (this.voiceArchiveOpen) { Text('仅本机保存').fontSize(11).fontColor(Theme.muted) }
+        }.width('100%')
+      }
       if (this.voiceMessage.length > 0) { Text(this.voiceMessage).fontSize(12).fontColor(Theme.danger) }
       if (this.voiceArchiveOpen) {
         Scroll() {
@@ -1386,7 +1602,7 @@ struct Index {
     Column({ space: 8 }) {
       this.speechPanel()
       this.voiceArchivePanel()
-      if (this.input.length === 0 && this.voiceDraft === undefined && !this.blocked()) {
+      if (this.input.length === 0 && this.voiceDraft === undefined && this.imageDraftUri.length === 0 && !this.blocked()) {
         Row({ space: 6 }) {
           Text('试试').fontSize(Theme.noteSize).fontColor(Theme.muted)
           Text(this.sampleText()).fontSize(13).fontColor(Theme.accent).maxLines(1)
@@ -1395,6 +1611,24 @@ struct Index {
           .id('chat-sample').accessibilityText(`填入示例：${this.sampleText()}`).onClick(() => this.useSample())
       }
       Column({ space: 6 }) {
+        if (this.imagePreparing) {
+          Row({ space: 8 }) {
+            LoadingProgress().width(20).height(20).color(Theme.accent)
+            Text('正在处理图片（去掉位置等信息并压缩）…').fontSize(12).fontColor(Theme.muted).layoutWeight(1)
+          }.width('100%').padding({ left: 6, right: 6 }).id('chat-image-preparing')
+        } else if (this.imageDraftUri.length > 0) {
+          Row({ space: 10 }) {
+            Image(this.imageDraftUri).width(56).height(56).objectFit(ImageFit.Cover).borderRadius(12)
+              .border({ width: 1, color: Theme.line }).accessibilityText('待发送的图片')
+            Column({ space: 2 }) {
+              Text('图片 · 发送时一起交给助手').fontSize(13).fontColor(Theme.ink)
+              Text('只发送压缩后的图片内容，不含文件名和位置信息').fontSize(11).fontColor(Theme.muted)
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+            Button('移除').height(44).fontSize(12).fontColor(Theme.muted).backgroundColor(Color.Transparent)
+              .id('chat-image-remove').enabled(!this.blocked()).accessibilityText('移除待发送的图片')
+              .onClick((): void => this.discardImage())
+          }.width('100%').padding({ left: 4 }).id('chat-image-draft')
+        }
         if (this.voiceDraft !== undefined) {
           Row({ space: 8 }) {
             VoiceMessageBubble({ recording: this.voiceDraft, playingId: this.voicePlayingId,
@@ -1405,8 +1639,8 @@ struct Index {
               .onClick((): void => { this.voiceDraft = undefined; this.voiceText = ''; void SpeechService.session.cancel(); })
           }.width('100%')
         }
-        TextArea({ text: this.input, placeholder: this.voiceDraft === undefined ? '发消息，或说说你的想法…' :
-          '补充文字（可选），和语音一起发送…', controller: this.inputController })
+        TextArea({ text: this.input, placeholder: this.voiceDraft !== undefined ? '补充文字（可选），和语音一起发送…' :
+          (this.imageDraftUri.length > 0 ? '想让我看什么？也可以直接发送…' : '发消息，或说说你的想法…'), controller: this.inputController })
           .fontSize(Theme.bodySize).fontColor(Theme.ink).placeholderColor(Theme.muted).backgroundColor(Color.Transparent)
           .constraintSize({ minHeight: 40, maxHeight: 120 }).width('100%').padding({ left: 6, right: 6, top: 4, bottom: 4 })
           .enabled(!this.blocked()).onChange((value: string) => this.input = value)
@@ -1415,29 +1649,36 @@ struct Index {
         Row({ space: 6 }) {
           ModeChip({ icon: $r('app.media.chat_globe'), label: '搜索', on: this.searchEnabled, disabled: this.blocked(),
             chipId: 'chat-search-toggle',
-            a11y: `${this.realChatMode ? '真实联网搜索' : '联网搜索演示'}，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`,
+            a11y: `联网搜索，${this.searchEnabled ? '已开启，点击关闭' : '已关闭，点击开启'}`,
             onTap: (): void => { void this.toggleSearch(); } })
           ModeChip({ icon: $r('app.media.chat_book'), label: this.ragPreparing ? '准备中…' : '允许使用个人知识库', on: this.knowledgeEnabled,
             disabled: this.blocked() && !this.knowledgeEnabled, chipId: 'chat-knowledge-toggle',
             a11y: `个人知识库授权，${this.ragPreparing ? '正在只读恢复' : (this.knowledgeEnabled ? '已允许按需使用，点击撤销' : '未授权，点击允许读取及已说明的查询与片段外发')}`,
             onTap: (): void => { void this.toggleKnowledge(); } })
           Blank()
-          Row() {
-            Button({ type: ButtonType.Circle }) {
-              AppIcon({ source: $r('app.media.chat_plus'), size: 26 })
-            }.width(44).height(44).backgroundColor(Color.Transparent).enabled(!this.blocked()).onClick(() => this.attachments())
-              .accessibilityText('添加图片或文件，待接入')
-            if (this.input.trim().length > 0 || this.voiceDraft !== undefined) {
+          Row({ space: 2 }) {
+            if (this.realChatMode && this.imageDraftUri.length === 0) {
+              Button({ type: ButtonType.Circle }) {
+                AppIcon({ source: $r('app.media.ui_image'), size: 24 })
+              }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('添加一张图片发给助手：从图库或文件中选择')
+                .id('chat-image').enabled(!this.blocked())
+                .bindMenu([
+                  { value: '从图库选择', action: (): void => { void this.pickImage(false); } },
+                  { value: '从文件选择', action: (): void => { void this.pickImage(true); } }
+                ])
+            }
+            if (this.input.trim().length === 0 && this.voiceDraft === undefined) {
+              Button({ type: ButtonType.Circle }) {
+                AppIcon({ source: $r('app.media.ui_microphone'), size: 24 })
+              }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('开始普通话语音输入')
+                .id('chat-speech').enabled(!this.blocked()).onClick(() => this.startSpeech())
+            }
+            if (this.input.trim().length > 0 || this.voiceDraft !== undefined || this.imageDraftUri.length > 0) {
               Button({ type: ButtonType.Circle }) {
                 AppIcon({ source: $r('app.media.chat_up'), size: 22})
               }.width(44).height(44).backgroundColor(Theme.accent).accessibilityText('发送消息').id('chat-send')
                 .enabled(!this.blocked() && this.composerLength() <= 500 &&
                   (this.voiceDraft === undefined || this.voiceText.trim().length > 0)).onClick(() => this.send())
-            } else {
-              Button({ type: ButtonType.Circle }) {
-                AppIcon({ source: $r('app.media.chat_wave'), size: 26 })
-              }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText('开始普通话语音输入')
-                .id('chat-speech').enabled(!this.blocked()).onClick(() => this.startSpeech())
             }
           }
         }.width('100%').alignItems(VerticalAlign.Center)
@@ -1457,12 +1698,47 @@ struct Index {
   }
 
   @Builder
+  conversationList() {
+    Column({ space: 4 }) {
+      Row() {
+        Text('历史对话').fontSize(13).fontColor(Theme.muted).layoutWeight(1)
+        Button('新对话').height(44).fontSize(12).fontColor(Theme.accent).backgroundColor(Color.Transparent)
+          .id('drawer-new-conversation').enabled(!this.blocked())
+          .onClick(() => { this.drawerOpen = false; this.newConversation(); })
+      }.width('100%').padding({ left: 6, top: 16 })
+      if (this.conversations.message.length > 0) {
+        Text(this.conversations.message).fontSize(12).fontColor(Theme.amber).width('100%').padding({ left: 6, right: 6 })
+      }
+      if (this.conversations.list.length === 0) {
+        Text(this.conversations.ready ? '还没有保存的对话' : '对话记录准备中…').fontSize(12).fontColor(Theme.muted)
+          .width('100%').padding({ left: 6, top: 4 })
+      }
+      ForEach(this.conversations.list, (item: ConversationSummary) => {
+        Row({ space: 4 }) {
+          Column({ space: 2 }) {
+            Text(item.title).fontSize(15).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .fontColor(item.id === this.conversations.currentId ? Theme.accent : Theme.ink)
+            Text(this.conversationTime(item.updatedAt)).fontSize(11).fontColor(Theme.muted)
+          }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+          Button({ type: ButtonType.Circle }) {
+            AppIcon({ source: $r('app.media.ui_close'), size: 14 })
+          }.width(44).height(44).backgroundColor(Color.Transparent).accessibilityText(`删除对话：${item.title}`)
+            .onClick(() => this.deleteConversation(item))
+        }.width('100%').padding({ left: 14, right: 2, top: 4, bottom: 4 }).constraintSize({ minHeight: 52 }).borderRadius(15)
+          .backgroundColor(item.id === this.conversations.currentId ? Theme.soft : Color.Transparent)
+          .accessibilityText(`${item.title}，${this.conversationTime(item.updatedAt)}${item.id === this.conversations.currentId ? '，当前对话' : ''}`)
+          .onClick(() => { void this.openConversation(item.id); })
+      }, (item: ConversationSummary) => item.id + ':' + item.updatedAt + ':' + item.title)
+    }.width('100%').id('drawer-conversations')
+  }
+
+  @Builder
   navigationDrawer() {
     Column() {
       Row({ space: 8 }) {
         Column({ space: 6 }) {
           Text('Shuvi 休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
-          Text(this.realChatMode ? '个人助理 · 真实功能' : '个人助理 · 演示模式').fontSize(12).fontColor(Theme.muted)
+          Text('个人助理').fontSize(12).fontColor(Theme.muted)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Button({ type: ButtonType.Circle }) {
           AppIcon({ source: $r('app.media.ui_close'), size: 22 })
@@ -1480,20 +1756,16 @@ struct Index {
                 if (index === 0 && this.draft !== undefined) {
                   Text(this.executing ? '处理中' : '待确认').fontSize(11).fontColor(Theme.amber)
                 }
-                if (index === 1 && this.records.length > 0) {
-                  Text(`${this.records.length}`).fontSize(12).fontColor(Theme.accent)
-                    .accessibilityText(`${this.records.length} 条演示日程`)
-                }
               }.width('100%').padding(14).constraintSize({ minHeight: 52 })
             }.width('100%').borderRadius(15).backgroundColor(this.tab === index ? Theme.soft : Color.Transparent)
               .accessibilityText(`${name}${this.tab === index ? '，已选中' : ''}`).onClick(() => this.changeTab(index))
           }, (name: string) => name)
+          if (this.realChatMode) {
+            this.conversationList()
+          }
         }.width('100%')
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
-      Button('演示场景设置  ›', { type: ButtonType.Normal }).width('100%').constraintSize({ minHeight: 44 })
-        .fontSize(13).fontColor(Theme.accent).backgroundColor(Color.Transparent)
-        .enabled(!this.generating && !this.executing && !this.searchBusy).onClick(() => this.openScenarios())
-      Text('演示模式不联网、不写日历；真实对话、搜索和日程在助手页开启\n知识库资料保存在本机').fontSize(11).fontColor(Theme.muted)
+      Text('资料和 API Key 只保存在本机').fontSize(11).fontColor(Theme.muted)
         .width('100%').padding({ top: 16 })
     }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
       .backgroundColor(Theme.inputSurface).borderRadius({ topRight: 26, bottomRight: 26 })
@@ -1542,10 +1814,20 @@ struct Index {
       }
       Scroll(this.scroller) {
         Column() {
-            if (this.migrationOpen) {
+            if (this.apiKeysOpen) {
+              if (this.apiKeysReady) {
+                ApiKeysView({ embedding: this.embeddingService, parse: this.parseService, parseCredential: this.parseState.credential,
+                  settings: this.sharedKnowledge?.unifiedSettings,
+                  onBack: (): void => { this.apiKeysOpen = false; this.scroller.scrollEdge(Edge.Top); },
+                  onDeepSeekChanged: (): void => { void this.refreshDeepSeekStatus(); } })
+              } else {
+                LoadingProgress().width(32).height(32).color(Theme.accent).margin({ top: 48 })
+              }
+            } else if (this.migrationOpen) {
               KnowledgeMigrationView({migration:this.sharedKnowledge?.migration,queue:this.sharedKnowledge?.unifiedQueue,vectors:this.sharedKnowledge?.unifiedVectors,onBack:(): void=> { this.migrationOpen=false; }})
             } else if (this.visionSettingsOpen) {
-              VisionSettingsView({service:this.sharedKnowledge?.unifiedSettings,queue:this.sharedKnowledge?.unifiedQueue,onBack:(): void=> { this.visionSettingsOpen=false; this.scroller.scrollEdge(Edge.Top); }})
+              VisionSettingsView({service:this.sharedKnowledge?.unifiedSettings,queue:this.sharedKnowledge?.unifiedQueue,onBack:(): void=> { this.visionSettingsOpen=false; this.scroller.scrollEdge(Edge.Top); },
+                onKeys: (): void => { this.openApiKeys(); }})
             } else if (this.imageKnowledgeOpen) {
               ImageKnowledgeView({service:this.sharedKnowledge?.imageKnowledge,previewService:this.parsedService,queue:this.sharedKnowledge?.unifiedQueue,initialOccurrence:this.imageKnowledgeOccurrence,onBack:(): void=> { this.imageKnowledgeOpen=false; this.imageKnowledgeOccurrence=''; }})
             } else if (this.parsedOpen) {
@@ -1579,8 +1861,6 @@ struct Index {
            } else if (this.imageIngestionOpen) {
               ImageIngestionView({ service: this.imageIngestionService, embedding: this.embeddingService, onBack: (): void => { this.imageIngestionOpen = false; this.imageIngestionService?.pause(); }, onOriginal: (document: ImageDocument): void => { this.openImageOriginal(document); },
                onParseSettings: (): void => { this.imageIngestionOpen = false; this.openParse(true); }, onEmbeddingSettings: (): void => { this.imageIngestionOpen = false; this.openEmbedding(); } })
-           } else if (this.platformDiagnosticsOpen) {
-              KnowledgePlatformDiagnostics({ onBack: (): void => { this.platformDiagnosticsOpen = false; }, onImageHappyPath: (): void => { this.platformDiagnosticsOpen = false; this.openImages(); } })
           } else if (this.showScenarios) {
             this.scenarioPanel()
            } else if (this.pdfIngestionOpen) {
@@ -1588,11 +1868,9 @@ struct Index {
                PdfIngestionView({ service: this.pdfIngestionService, lifecycle: this.derivedLifecycle, onBack: (): void => { this.pdfIngestionOpen = false; } })
              } else { Text('PDF 准备服务尚未就绪，原件和 ZIP 保留').width('100%') }
            } else if (this.embeddingOpen) {
-             if (this.embeddingOpening) {
-               LoadingProgress().width(32).height(32)
-               Text('正在读取嵌入配置…').width('100%')
-             } else if (this.embeddingService !== undefined) {
-                EmbeddingSettingsView({ service: this.embeddingService, unifiedSettings:this.sharedKnowledge?.unifiedSettings, clearEpoch: this.embeddingClearEpoch, onBack: (): void => { this.closeEmbedding(); } })
+             if (this.embeddingService !== undefined) {
+                EmbeddingSettingsView({ service: this.embeddingService, unifiedSettings:this.sharedKnowledge?.unifiedSettings, clearEpoch: this.embeddingClearEpoch, onBack: (): void => { this.closeEmbedding(); },
+                  onKeys: (): void => { this.openApiKeys(); } })
              } else {
                Text('本机配置服务尚未就绪或不可用，未发送请求').width('100%')
                Button('返回').onClick((): void => { this.closeEmbedding(); })
@@ -1602,7 +1880,8 @@ struct Index {
                DocumentParseView({ parseState: this.parseState, service: this.parseService,
                  settingsMode: this.parseSettings, clearEpoch: this.parseState.inputEpoch,
                    onClose: (): void => { this.closeParse(); }, onPreparePdf: (resultId: string): void => { this.preparePdf(resultId); },
-                    onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenImages: (): void => { this.closeParse(); this.openImages(); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); } })
+                    onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenImages: (): void => { this.closeParse(); this.openImages(); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); },
+                    onKeys: (): void => { this.openApiKeys(); } })
              } else {
                Column({ space: 12 }) {
                  Text(this.parseState.message || '正在打开独立解析准备区…').fontSize(14).width('100%')
@@ -1621,22 +1900,10 @@ struct Index {
               this.assistant()
             }
           } else if (this.tab === 1) {
-            if (this.realCalendarOpen) {
-              Row() {
-                Button('‹ 工作台').fontSize(14).fontColor(Theme.accent).backgroundColor(Color.Transparent)
-                  .constraintSize({ minHeight: Theme.controlHeight }).padding({ left: 4, right: 12 })
-                  .accessibilityText('返回工作台').id('calendar-back')
-                  .onClick((): void => { this.realCalendarOpen = false; })
-              }.width('100%')
-              CalendarCapabilityCheck()
-            } else if (this.calendarOpen) {
+            if (this.calendarOpen) {
               this.calendar()
             } else {
-              WorkbenchPage({ recordCount: this.records.length,
-                onDocuments: (): void => { this.changeTab(2); this.parsedDocumentId = ''; this.openParsed(); },
-                onCalendar: () => this.calendarOpen = true,
-                onRealCalendar: (): void => { this.realCalendarOpen = true; },
-                onNotice: (title: string, message: string) => this.notice(title, message) })
+              CalendarCapabilityCheck({ onKeys: (): void => { this.openApiKeys(); } })
             }
            } else if (this.tab === 2) {
              if (this.knowledgeReady) {
@@ -1653,14 +1920,11 @@ struct Index {
               }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 20, bottom: 20 })
             }
            } else {
-              if (this.developerToolsOpen) { Button('本机能力诊断').id('r2-open-diagnostics').onClick((): void => { this.platformDiagnosticsOpen = true; })
-              }
-
              ProfilePage({ floatingAssistantEnabled: this.floatingAssistantEnabled,
                onFloatingAssistantChange: (enabled: boolean): void => { this.floatingAssistantEnabled = enabled; }, onNotice: (title: string, message: string) => this.notice(title, message),
+               onApiKeys: (): void => { this.openApiKeys(); },
                onVisionSettings: (): void => { this.openVisionSettings(); },
                onParseSettings: (): void => { this.openParse(true); }, onEmbeddingSettings: (): void => { this.openEmbedding(); } })
-             Button(this.developerToolsOpen ? '收起高级诊断' : '高级诊断', { type: ButtonType.Normal }).fontSize(13).fontColor(Theme.muted).backgroundColor(Color.Transparent).constraintSize({ minHeight: 44 }).onClick((): void => { this.developerToolsOpen = !this.developerToolsOpen; })
           }
         }.width('100%').constraintSize({ maxWidth: 640,
           minHeight: this.tab === 0 && this.messages.length === 0 && !this.showScenarios ? this.contentHeight : 0 })

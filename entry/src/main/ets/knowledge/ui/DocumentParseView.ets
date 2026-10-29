@@ -24,8 +24,9 @@ export struct DocumentParseView {
   onPrepareImage: (resultId: string) => void = (_resultId: string): void => {};
   onOpenImages: () => void = (): void => {};
   onOpenDocx: () => void = (): void => {};
+  /** The MinerU token is saved and changed in 我的 → API Key 管理. */
+  onKeys: () => void = (): void => {};
   @Prop @Watch('clearSecret') clearEpoch: number = 0;
-  @State private tokenInput: string = '';
   @State private credentialFeedback: string = '';
   @State private resumeId: string = '';
   @State private deleteFeedback: string = '';
@@ -46,12 +47,16 @@ export struct DocumentParseView {
   @State private copyView: string = 'list';
   @State private copyFolder: string = '';
   @State private copyPage: number = 0;
-  private tokenController: TextInputController = new TextInputController();
-  clearSecret(): void { this.tokenInput = ''; this.tokenController.stopEditing(); }
+  /** No secret is typed on this page any more; the watch stays so navigation keeps clearing transient copy input. */
+  clearSecret(): void { this.copyController.stopEditing(); }
   aboutToAppear(): void {
     this.showSettings = this.settingsMode;
     this.updateTaskRows();
-    if (this.service === undefined) { this.credentialFeedback = '安全配置服务不可用，保存未执行'; }
+    if (this.service === undefined) { this.credentialFeedback = '解析服务暂不可用，请稍后重新打开本页'; }
+  }
+  private credentialText(): string {
+    return this.parseState.credential === DocumentCredentialStatus.Configured ? 'Token 已保存' :
+      (this.parseState.credential === DocumentCredentialStatus.Missing ? '未保存 Token' : '暂不可用');
   }
   aboutToDisappear(): void { this.clearSecret(); this.service?.clearInput(); }
   updateTaskRows(): void {
@@ -139,15 +144,6 @@ export struct DocumentParseView {
       secondaryButton: { value: '删除', action: (): void => { this.deleteId = original.id; this.deleteFeedback=''; this.deleteLocalCopy(); } }
     });
   }
-  private confirmRemoveToken(): void {
-    this.clearSecret();
-    this.getUIContext().showAlertDialog({
-      title: '删除解析凭据？',
-      message: '删除后需要重新填写 Token 才能继续使用云端解析。已导入的资料不会受影响。',
-      primaryButton: { value: '取消', action: (): void => {} },
-      secondaryButton: { value: '删除凭据', action: (): void => { this.service?.removeToken(); } }
-    });
-  }
   private confirmRetire(): void {
     this.getUIContext().showAlertDialog({
       title: '停止跟踪这个云端任务？',
@@ -155,17 +151,6 @@ export struct DocumentParseView {
       primaryButton: { value: '取消', action: (): void => {} },
       secondaryButton: { value: '停止跟踪', action: (): void => { this.service?.retireOccupancy(true); } }
     });
-  }
-  private async saveCredential(): Promise<void> {
-    let input: string = this.tokenInput;
-    const service: DocumentParseService | undefined = this.service;
-    const replace: boolean = this.parseState.credential === DocumentCredentialStatus.Configured;
-    this.credentialFeedback = ''; this.clearSecret();
-    try {
-      if (service === undefined) { this.credentialFeedback = '安全配置服务不可用，保存未执行'; return; }
-      await service.saveToken(input, replace);
-    } catch { this.credentialFeedback = '安全配置动作失败，未确认保存；请重新打开设置查看状态'; }
-    finally { input = ''; this.clearSecret(); }
   }
   private async deleteLocalCopy(): Promise<void> {
     if (this.service===undefined || this.deletingCopy || this.parseState.busy) { return; }
@@ -222,25 +207,18 @@ export struct DocumentParseView {
               Text('MinerU 精准解析').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
               Text('用于文字、表格与版式的识别，识别结果会保存在本机。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-            Text(this.parseState.credential).fontSize(11).fontColor(this.parseState.credential === DocumentCredentialStatus.Configured ? Theme.accent : Theme.muted)
+            Text(this.credentialText()).fontSize(11).fontColor(this.parseState.credential === DocumentCredentialStatus.Configured ? Theme.accent : Theme.muted)
               .padding({ left: 9, right: 9, top: 4, bottom: 4 }).backgroundColor(Theme.soft).borderRadius(10)
           }.width('100%')
-          TextInput({ text: this.tokenInput, placeholder: '输入服务 Token', controller: this.tokenController }).fontColor(Theme.ink).backgroundColor(Theme.inputSurface).borderRadius(12).border({ width: 1, color: Theme.line })
-            .type(InputType.Password).showPasswordIcon(false).copyOption(CopyOptions.None).selectionMenuHidden(true)
-            .enableAutoFill(false).enablePreviewText(false)
-            .maxLength(1025).onChange((text: string): void => { this.tokenInput = text; })
-          Row({ space: 10 }) {
-            Button('保存 / 更新').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).layoutWeight(1).enabled(this.service !== undefined && !this.parseState.busy && this.tokenInput.length > 0)
-              .onClick((): void => { this.saveCredential(); })
-            Button('删除凭据').fontSize(14).fontColor(Theme.danger).backgroundColor(Theme.warning).borderRadius(12).constraintSize({ minHeight: 44 }).layoutWeight(1).enabled(!this.parseState.busy && this.parseState.credential === DocumentCredentialStatus.Configured)
-              .onClick((): void => { this.confirmRemoveToken(); })
-          }.width('100%')
+          Text('Token 在「API Key 管理」中保存和修改。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+          Button('管理 API Key').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%')
+            .id('parse-open-keys').onClick((): void => { this.onKeys(); })
           Row({ space: 10 }) {
             Text('启用云端解析').fontColor(Theme.ink).fontSize(14).layoutWeight(1)
             Toggle({ type: ToggleType.Switch, isOn: this.parseState.snapshot.config.enabled }).selectedColor(Theme.accent)
               .onChange((isOn: boolean): void => { this.service?.setEnabled(isOn); })
           }.width('100%')
-          Text('保存凭据不会上传任何文件。PDF、DOCX 与图片会在「我的资料」逐份确认后发送。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+          Text('保存 Token 不会上传任何文件。PDF、DOCX 与图片会在「我的资料」逐份确认后发送。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
         }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
         Column({ space: 10 }) {
           Row({ space: 10 }) {

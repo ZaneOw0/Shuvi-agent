@@ -267,25 +267,20 @@ for (const item of require('./mineru-repository-host-cases.cjs')(outputRoot)) {
   test(`Mineru repository host boundary · ${item.name}`, item.run);
 }
 
-test('保存视图源码契约 · 服务缺失可见且提交捕获输入先于清理', () => {
+test('保存视图源码契约 · MinerU Token 只在 API Key 管理中保存，提交前清空输入', () => {
   const view = fs.readFileSync(path.join(project, 'entry/src/main/ets/knowledge/ui/DocumentParseView.ets'), 'utf8');
-  const action = view.slice(view.indexOf('private async saveCredential()'), view.indexOf('  build()'));
-  const expected = ['let input: string = this.tokenInput', 'const service: DocumentParseService | undefined = this.service',
-    'this.clearSecret()', 'if (service === undefined)', 'await service.saveToken(input, replace)'];
-  let prior = -1;
-  for (const step of expected) {
-    const at = action.indexOf(step);
-    if (at <= prior) throw new Error('Save action ordering changed');
-    prior = at;
+  const keys = fs.readFileSync(path.join(project, 'entry/src/main/ets/components/ApiKeysView.ets'), 'utf8');
+  if (view.includes('InputType.Password') || view.includes('saveToken(') || !view.includes('.onClick((): void => { this.onKeys(); })')) {
+    throw new Error('Parse settings still own the token');
   }
-  if (action.includes('service?.saveToken') || !action.includes('catch { this.credentialFeedback =') ||
-    !action.includes("finally { input = ''; this.clearSecret(); }") || !view.includes("@Prop @Watch('clearSecret') clearEpoch")) {
-    throw new Error('Save feedback or input lifetime contract missing');
-  }
-  if (view.indexOf('Text(this.parseState.message)') > view.indexOf('TextInput({') ||
-    !view.includes('Text(this.credentialFeedback)') || view.includes('this.credentialFeedback || this.parseState.message') ||
-    !view.includes('.enabled(this.service !== undefined && !this.parseState.busy && this.tokenInput.length > 0)') ||
-    !view.includes('.onClick((): void => { this.saveCredential(); })')) throw new Error('Save action visibility or wiring missing');
+  if (!view.includes('Text(this.credentialFeedback)') || view.includes('this.credentialFeedback || this.parseState.message') ||
+    !view.includes('Text(this.parseState.message)')) throw new Error('Parse status visibility changed');
+  const card = keys.slice(keys.indexOf('private save(): void'), keys.indexOf('  build()'));
+  if (!card.includes('const value: string = this.input.trim(); this.clearInput();') ||
+    card.indexOf('this.clearInput()') > card.indexOf('this.onSave(value)')) throw new Error('Input lifetime contract missing');
+  const save = keys.slice(keys.indexOf('private async saveMineru('), keys.indexOf('private async removeMineru('));
+  if (!save.includes('if (this.busy || service === undefined) { return; }') || !save.includes('await service.saveToken(value,') ||
+    save.includes('service?.saveToken') || !save.includes('catch {')) throw new Error('MinerU save wiring missing');
 });
 
 test('转发视图源码契约 · V1可观察任务进度前置且前台导航不暂停', () => {
@@ -342,9 +337,10 @@ test('M2边界审计 · M1核心题集脚本字节保留及平台隔离', () => 
   }
   const permissions = fs.readFileSync(path.join(project, 'entry/src/main/module.json5'), 'utf8').match(/ohos\.permission\.[A-Z_]+/g) || [];
   // Knowledge adds no permission. READ/WRITE_CALENDAR belong to the calendar feature and were explicitly
-  // approved for it (spec 01 §7, "权限"); any other change still fails this exact-list check.
-  if (JSON.stringify(permissions) !== JSON.stringify(['ohos.permission.INTERNET', 'ohos.permission.READ_CALENDAR', 'ohos.permission.WRITE_CALENDAR'])) throw new Error('Permission scope changed');
+  // approved for it (spec 01 §7, "权限"); MICROPHONE (in use only) belongs to voice messages and was approved with
+  // PR #24 (spec 12 §4). Any other change still fails this exact-list check.
+  if (JSON.stringify(permissions) !== JSON.stringify(['ohos.permission.MICROPHONE', 'ohos.permission.INTERNET', 'ohos.permission.READ_CALENDAR', 'ohos.permission.WRITE_CALENDAR'])) throw new Error('Permission scope changed');
   const backup = JSON.parse(fs.readFileSync(path.join(project, 'entry/src/main/resources/base/profile/backup_config.json'), 'utf8'));
   const oldBackup = JSON.parse(baseline('entry/src/main/resources/base/profile/backup_config.json'));
-  if (backup.allowToBackupRestore !== true || !oldBackup.excludes.every(p=>backup.excludes.includes(p)) || backup.excludes.some(p => !p.includes('knowledge_parse_v1') && !p.includes('shuvi_parse_stage_v1.db') && !p.includes('knowledge_pdf_v1') && !p.includes('shuvi_kb_vector_v1.db') && !p.includes('knowledge_unified_v1'))) throw new Error('M1 backup isolation changed');
+  if (backup.allowToBackupRestore !== true || !oldBackup.excludes.every(p=>backup.excludes.includes(p)) || backup.excludes.some(p => !p.includes('knowledge_parse_v1') && !p.includes('shuvi_parse_stage_v1.db') && !p.includes('knowledge_pdf_v1') && !p.includes('shuvi_kb_vector_v1.db') && !p.includes('knowledge_unified_v1') && p !== '/data/storage/el2/base/files/voice_messages/')) throw new Error('M1 backup isolation changed');
 });

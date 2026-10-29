@@ -224,4 +224,78 @@ module.exports = function ({ load, root, services, writableRdb, assistantHarness
     assert.equal(result.engine, 'literal-scan'); assert.equal(result.status, 'ok'); assert.equal(result.hits.length, 1);
     assert.equal(await adapter.validate(result.hits, cancel), true); await adapter.close();
   });
+  test('L2 durable memory and compaction exclude retrieved evidence and later derived answers after revocation', async () => {
+    const marker = 'PRIVATE_RAG_SOURCE_26';
+    const s = await setup({ enabled: false, hits: () => [hit('sensitive-evidence', 1)] });
+    const h = assistantHarness({ tools: {}, extraTools: s.tools, rounds: [
+      { content: '普通对话记忆保留' },
+      { tool_calls: [toolCall('private1', 'knowledge_search', query())] },
+      { content: JSON.stringify({ kind: 'grounded', answer: marker, citations: [1] }) },
+      { content: JSON.stringify({ kind: 'general', answer: '沿用来源的派生回答' + marker, citations: [] }) },
+      body => {
+        const wire = JSON.stringify(body.messages);
+        assert.match(wire, /普通对话记忆保留/);
+        assert.doesNotMatch(wire, /PRIVATE_RAG_SOURCE_26|sensitive-evidence|营业安排|私有问题|派生回答/);
+        assert(!body.tools.some(t => t.function.name === 'knowledge_search'));
+        return { content: '授权已撤销，普通记忆仍然可用' };
+      }
+    ] });
+    await h.start();
+    try {
+      await h.ui.send('普通问题'); await waitChat(h.ui);
+      await s.tools.activateRag(false);
+      await h.ui.send('私有问题'); await waitChat(h.ui); assert.match(h.ui.snapshot().reply, /PRIVATE_RAG_SOURCE_26/);
+      await h.ui.send('继续解释'); await waitChat(h.ui);
+      const persisted = JSON.stringify(h.ui.context.memory.snapshot());
+      assert.match(persisted, /普通对话记忆保留/);
+      assert.doesNotMatch(persisted, /PRIVATE_RAG_SOURCE_26|营业安排|私有问题|派生回答|knowledge_search/);
+      await s.tools.deactivateRag();
+      // Simulate restoring the serializable model memory before the next request.
+      h.ui.context.memory.restore(JSON.parse(persisted));
+      await h.ui.send('撤销后继续'); await waitChat(h.ui);
+      assert.equal(h.calls(), 5); assert.match(h.ui.snapshot().reply, /普通记忆仍然可用/);
+    } finally { await h.ui.stop(); }
+  });
+  test('L2 tool authorization revisions purge transient knowledge context on conversation change', async () => {
+    const s = await setup();
+    const h = assistantHarness({ tools: {}, extraTools: s.tools, rounds: [
+      { tool_calls: [toolCall('old1', 'knowledge_search', query())] }, final(),
+      body => { assert.equal(body.messages.length, 2); assert.doesNotMatch(JSON.stringify(body), /合成资料|营业安排/); return { content: '新对话' }; }
+    ] });
+    await h.start();
+    try {
+      await h.ui.send('旧对话查资料'); await waitChat(h.ui);
+      s.tools.clearConversation(); h.ui.clearConversation();
+      await h.ui.send('新对话'); await waitChat(h.ui);
+      assert.equal(h.calls(), 3); assert.equal(s.tools.snapshot().consent, false);
+    } finally { await h.ui.stop(); }
+  });
+  test('L2 keeps the authorized session model-request cap while ordinary conversations remain unlimited', async () => {
+    const s = await setup();
+    const h = assistantHarness({ tools: {}, extraTools: s.tools, rounds: Array.from({ length: 10 }, () => final('general', [])) });
+    await h.start();
+    try {
+      for (let i = 0; i < 10; i++) { await h.ui.send('普通询问' + i); await waitChat(h.ui); assert.equal(h.ui.snapshot().succeeded, true); }
+      await h.ui.send('第十一次'); await waitChat(h.ui);
+      assert.equal(h.calls(), 10); assert.equal(h.ui.snapshot().succeeded, false);
+      assert(h.requests.every(r => r.max_tokens === 2048)); assert.equal(s.port.calls.length, 0);
+    } finally { await h.ui.stop(); }
+  });
+  test('PR26 image memory works with the production optional knowledge port while knowledge is disabled', async () => {
+    const s = await setup({ enabled: false });
+    const { VisionChatImage } = load(path.join(services, 'VisionChatProtocol.ets'));
+    const image = Object.assign(new VisionChatImage(), { mime: 'image/jpeg', width: 10, height: 10, bytes: new Uint8Array([1, 2, 3]) });
+    const h = assistantHarness({ tools: {}, extraTools: s.tools, rounds: [
+      body => { assert(Array.isArray(body.messages[1].content)); assert(!body.tools.some(t => t.function.name === 'knowledge_search')); return { content: '图片文字' }; },
+      body => { assert.doesNotMatch(JSON.stringify(body), /image_url|base64/); assert.match(JSON.stringify(body), /图片文字/); return { content: '普通追问' }; }
+    ] });
+    await h.start();
+    try {
+      await h.ui.send('识图', image); await waitChat(h.ui);
+      assert(image.bytes.every(b => b === 0));
+      await h.ui.send('继续'); await waitChat(h.ui);
+      assert.equal(h.calls(), 2); assert.equal(h.ui.context.memory.turns().length, 2); assert.equal(s.port.calls.length, 0);
+    } finally { await h.ui.stop(); }
+  });
+
 };

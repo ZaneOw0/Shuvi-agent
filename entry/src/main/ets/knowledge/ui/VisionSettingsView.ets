@@ -9,8 +9,8 @@ export struct VisionSettingsView {
   service: UnifiedSettingsService | undefined=undefined;
   queue: UnifiedProcessingQueue | undefined=undefined;
   onBack: () => void=(): void=>{};
+  onKeys: () => void=(): void=>{};
   @State jobsOpen: boolean = false;
-  @State secretInput: string='';
   @State credential: string='Missing';
   @State automaticOn: boolean=false;
   @State costConsent: boolean=false;
@@ -22,7 +22,7 @@ export struct VisionSettingsView {
   @State retryId: string='';
   private listener: () => void=(): void=> { this.refresh(); };
   aboutToAppear(): void { this.queue?.subscribe(this.listener); this.refresh(); }
-  aboutToDisappear(): void { this.secretInput=''; this.costConsent=false; this.queue?.unsubscribe(this.listener); }
+  aboutToDisappear(): void { this.costConsent=false; this.queue?.unsubscribe(this.listener); }
   private async refresh(): Promise<void> {
     try {
       const state=await this.service?.setting('Vision'); this.automaticOn=state?.enabled ?? false;
@@ -33,26 +33,11 @@ export struct VisionSettingsView {
     }
     catch { this.message='设置或任务读取失败，自动处理未开启'; }
   }
-  private async saveKey(remove: boolean=false): Promise<void> {
-    let secret: string=this.secretInput; this.secretInput=''; this.busy=true;
-    try { await this.service?.saveVisionKey(secret,remove); this.costConsent=false; this.message='凭据已保存，自动处理需要重新确认；本次没有探测服务'; }
-    catch { this.message='凭据保存失败，没有使用明文降级'; }
-    finally { secret=''; this.secretInput=''; this.busy=false; await this.refresh(); }
-  }
   private async saveEnabled(): Promise<void> {
-    this.busy=true; try { await this.service?.enableVision(!this.automaticOn,this.costConsent); this.message=this.automaticOn?'已关闭自动图片理解':'已开启自动图片理解'; this.costConsent=false; } catch { this.message='需要可用 Key，并确认发送范围与可能费用'; } finally { this.busy=false; await this.refresh(); }
-  }
-  private confirmRemoveKey(): void {
-    this.secretInput='';
-    this.getUIContext().showAlertDialog({
-      title: '删除图片理解 Key？',
-      message: '删除后需要重新填写 Key 才能继续自动生成图片描述与标签。已生成的描述和标签会保留。',
-      primaryButton: { value: '取消', action: (): void => {} },
-      secondaryButton: { value: '删除 Key', action: (): void => { this.saveKey(true); } }
-    });
+    this.busy=true; try { await this.service?.enableVision(!this.automaticOn,this.costConsent); this.message=this.automaticOn?'已关闭自动图片理解':'已开启自动图片理解'; this.costConsent=false; } catch { this.message='需要先在「我的 → API Key 管理」保存 DeepSeek Key，并确认发送范围与可能费用'; } finally { this.busy=false; await this.refresh(); }
   }
   private jobPageCount(): number { return Math.max(1, Math.ceil(this.jobTotal / 6)); }
-  private credentialText(): string { return this.credential === 'Configured' ? '已配置' : this.credential === 'Missing' ? '未配置' : '暂不可用'; }
+  private credentialText(): string { return this.credential === 'Configured' ? 'Key 已保存' : this.credential === 'Missing' ? '未保存 Key' : '暂不可用'; }
   build() {
     Column({ space:14 }) {
       Row({ space: 12 }) {
@@ -75,12 +60,8 @@ export struct VisionSettingsView {
             .padding({ left: 9, right: 9, top: 4, bottom: 4 }).backgroundColor(Theme.soft).borderRadius(10)
         }.width('100%')
         Text('每次只发送当前这一张图片，用于生成中文描述和标签；不会发送正文、聊天或整库内容。可能产生费用。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-        TextInput({text:this.secretInput,placeholder:'输入图片理解 Key'}).fontColor(Theme.ink).backgroundColor(Theme.inputSurface).borderRadius(12).border({ width: 1, color: Theme.line }).id('upd-vision-key')
-          .type(InputType.Password).showPasswordIcon(false).copyOption(CopyOptions.None).selectionMenuHidden(true).enableAutoFill(false).enablePreviewText(false).maxLength(1024).onChange((v: string): void=> { this.secretInput=v; })
-        Row({ space: 10 }) {
-          Button('保存 / 更新 Key').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).layoutWeight(1).id('upd-vision-save-key').enabled(!this.busy && this.secretInput.length>0).onClick((): void=> { this.saveKey(); })
-          Button('删除 Key').fontSize(14).fontColor(Theme.danger).backgroundColor(Theme.warning).borderRadius(12).constraintSize({ minHeight: 44 }).layoutWeight(1).enabled(!this.busy && this.credential === 'Configured').onClick((): void=> { this.confirmRemoveKey(); })
-        }.width('100%')
+        Text('使用「API Key 管理」中保存的 DeepSeek Key。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+        Button('管理 API Key').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('upd-vision-open-keys').onClick((): void=> { this.onKeys(); })
       }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
       Column({ space: 12 }) {
         Text('自动生成描述与标签').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')

@@ -59,20 +59,20 @@ export class CalendarDraftSession {
     else if (value.lifecycle !== ShuviRuntimeState.READY) {
       this.awaiting = false; this.context.clear();
       this.view.message = value.lifecycle === ShuviRuntimeState.STARTING ? '正在启用草稿生成…' :
-        '草稿生成尚未启用或会话已停止；可重新启用，也可手动填写。';
+        '草稿生成尚未连接或已断开；可点「连接」，也可手动填写。';
     }
     this.publish();
   }
   async start(factory: ShuviRuntimeSessionFactory, key: Uint8Array): Promise<void> {
     await this.chat.start(factory, key);
     if (this.view.lifecycle === ShuviRuntimeState.READY) {
-      this.view.message = '已就绪；点击“同意发送并生成草稿”才调用模型。'; this.publish();
+      this.view.message = '已连接；写好描述后点「生成草稿」。'; this.publish();
     }
   }
   async generate(input: string, approved: boolean): Promise<void> {
     if (this.view.busy) return;
     if (!approved || this.view.lifecycle !== ShuviRuntimeState.READY || !input.trim() || input.length > 500) {
-      this.view.message = '请先启用模型，并明确同意发送本次 1–500 字符的描述。'; this.publish(); return;
+      this.view.message = '请先连接，并填写 1–500 字的描述。'; this.publish(); return;
     }
     this.context.bind(input, Date.now()); this.awaiting = true;
     await this.chat.send(input);

@@ -29,13 +29,19 @@ export const CHAT_POLICY: string = 'shuvi-model-only-v1';
 /** User turns per enable, for every chat purpose. */
 export const CHAT_MAX_REQUESTS: number = 10;
 // One tool-capable assistant turn may chain several model requests; these caps bound the whole turn.
-export const TOOL_TURN_TIMEOUT_MS: number = 90000;
-export const TOOL_TURN_WALL_MS: number = 90000;
-export const TOOL_TURN_MAX_INPUT_TOKENS: number = 32768;
-export const TOOL_TURN_MAX_OUTPUT_TOKENS: number = 2048;
-export const TOOL_TURN_MAX_COST_MICROS: number = 20000;
-/** Model HTTP requests one tool-capable assistant session may send across all of its turns. */
-export const ASSISTANT_MAX_MODEL_REQUESTS: number = 10;
+export const TOOL_TURN_TIMEOUT_MS: number = 110000;
+export const TOOL_TURN_WALL_MS: number = 120000;
+// Input tokens are summed over every request of the turn (history is resent each round; DeepSeek V4.1 Flash has a
+// 1M-token context). Worst case at the reviewed peak price: about US$0.09 per turn.
+export const TOOL_TURN_MAX_INPUT_TOKENS: number = 262144;
+export const TOOL_TURN_MAX_OUTPUT_TOKENS: number = 8192;
+export const TOOL_TURN_MAX_COST_MICROS: number = 100000;
+// A conversation has no turn limit: older turns are compacted into a model-written summary instead.
+export const ASSISTANT_HISTORY_COMPACT_AT_CHARS: number = 40000;
+export const ASSISTANT_HISTORY_KEEP_RECENT_CHARS: number = 16000;
+export const ASSISTANT_HISTORY_HARD_CAP_CHARS: number = 120000;
+/** Request body cap for an assistant turn carrying one image (≤4 MB sanitized bytes, base64 plus text history). */
+export const ASSISTANT_IMAGE_REQUEST_BYTES: number = 8 * 1024 * 1024;
 // App-owned composition scope; the default public-chat/search scope remains unchanged.
 export enum ChatPurpose { PUBLIC_CHAT, CALENDAR_DRAFT, ASSISTANT }
 function chatPrivacy(purpose: ChatPurpose): PrivacyClass {
@@ -60,8 +66,10 @@ export class ChatToolKit {
 export function assistantToolLimits(): ToolTurnLimits {
   const limits: ToolTurnLimits = new ToolTurnLimits();
   limits.maxUserChars = 2000; limits.maxOutputTokens = TOOL_TURN_MAX_OUTPUT_TOKENS;
-  limits.maxInputTokens = TOOL_TURN_MAX_INPUT_TOKENS; limits.maxAttempts = ASSISTANT_MAX_MODEL_REQUESTS;
-  limits.historyChars = 12000;
+  limits.maxInputTokens = TOOL_TURN_MAX_INPUT_TOKENS; limits.maxAttempts = 0;
+  limits.historyChars = ASSISTANT_HISTORY_HARD_CAP_CHARS; limits.maxImageRequestBytes = ASSISTANT_IMAGE_REQUEST_BYTES;
+  limits.compactAtChars = ASSISTANT_HISTORY_COMPACT_AT_CHARS; limits.keepRecentChars = ASSISTANT_HISTORY_KEEP_RECENT_CHARS;
+  limits.summaryMaxTokens = 2048;
   return limits;
 }
 export class ChatAnswer {
@@ -133,7 +141,7 @@ export class ChatModelAdapter implements StepDispatchPort {
     if (request.toolInvocation !== undefined || request.step.kind !== WorkflowStepKind.LLM || request.step.stepId !== 'chat-answer' ||
       !request.task.userIntent.trim() || request.task.userIntent.length > 500 || request.task.privacyClass !== chatPrivacy(this.purpose) ||
       (this.purpose !== ChatPurpose.PUBLIC_CHAT && this.context === undefined) ||
-      this.active.size > 0 || this.calls >= CHAT_MAX_REQUESTS || budget.maxInputTokens < maxInput || budget.maxOutputTokens < maxOutput ||
+      this.active.size > 0 || (!this.tools && this.calls >= CHAT_MAX_REQUESTS) || budget.maxInputTokens < maxInput || budget.maxOutputTokens < maxOutput ||
       budget.maxMonetaryCostMicros < estimate || budget.maxWallTimeMs < (this.tools ? TOOL_TURN_WALL_MS : 30000)) {
       receipt.rejectionCode = 'CHAT_SCOPE_OR_BUDGET_REJECTED'; return receipt;
     }
@@ -257,9 +265,10 @@ export class ChatRuntimeFactory implements ShuviRuntimeSessionFactory {
     const http = new SessionModelHttpClient(new ArkTsDeepSeekHttpClient());
     const profile = startupModelProfile(); profile.privacyClasses = [chatPrivacy(this.purpose)];
     const kit: ChatToolKit | undefined = this.tools;
+    if (kit !== undefined) { profile.maxInputTokens = TOOL_TURN_MAX_INPUT_TOKENS; profile.maxOutputTokens = TOOL_TURN_MAX_OUTPUT_TOKENS; }
     const transport: DeepSeekToolTransport | undefined = kit === undefined ? undefined :
       new DeepSeekToolTransport(profile, http, kit.documents(), kit.turn, assistantToolLimits(), kit.extra);
-    // The tool transport owns the conversation turns and the document tools; the session closes it with its resources.
+    // The tool transport owns the document tools (the conversation owns its history); the session closes it with its resources.
     if (transport !== undefined) resources.memory = transport;
     const model = createDeepSeekProvider(profile, startupModelPrice(digest), digest, resources.credentials, http, undefined, transport);
     const tools = transport !== undefined;

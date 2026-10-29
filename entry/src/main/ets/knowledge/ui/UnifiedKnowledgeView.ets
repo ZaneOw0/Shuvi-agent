@@ -51,16 +51,16 @@ export struct UnifiedKnowledgeView {
     if (!(error instanceof ParsedFailure)) { return '本机语义检索准备失败，未发送问题。请重新搜索后重试。'; }
     let message: string = '语义检索准备失败，未发送问题。';
     switch (error.category) {
-      case 'UnifiedEmbeddingDisabled': message = '统一自动嵌入尚未启用。请在「我的 → 嵌入模型设置」确认范围与费用后启用，并等待资料向量化完成。'; break;
-      case 'UnifiedEmbeddingCostRequired': message = '当前嵌入设置尚未确认可能费用，请到嵌入模型设置确认。'; break;
-      case 'UnifiedEmbeddingPaused': message = '嵌入处理已暂停，请先恢复处理。'; break;
-      case 'UnifiedEmbeddingBaselineRequired': message = '当前统一嵌入工程基线尚未确认，请到嵌入模型设置确认。'; break;
-      case 'UnifiedEmbeddingConfigChanged': message = '模型或凭据配置已变化，请重新确认统一嵌入设置并完成资料向量化。'; break;
+      case 'UnifiedEmbeddingDisabled': message = '自动入库尚未启用。请到「我的 → 嵌入模型」开启，等资料处理完成后再用语义搜索。'; break;
+      case 'UnifiedEmbeddingCostRequired': message = '请先到「我的 → 嵌入模型」确认发送范围与可能费用。'; break;
+      case 'UnifiedEmbeddingPaused': message = '资料处理已暂停，请先恢复处理。'; break;
+      case 'UnifiedEmbeddingBaselineRequired': message = '请先到「我的 → 嵌入模型」重新开启自动入库。'; break;
+      case 'UnifiedEmbeddingConfigChanged': message = 'Key 或模型设置已变化。请到「我的 → 嵌入模型」重新开启自动入库，并等资料处理完成。'; break;
       case 'UnifiedSpaceMissing': message = '尚无当前模型的新统一向量空间。请先完成至少一份资料的向量化；保存原件或 OCR 入库还不包含向量。'; break;
       case 'UnifiedTargetsMissing': message = '当前范围没有已完成向量化且有效的资料，请检查资料是否归档、向量任务是否完成。'; break;
       case 'CurrentLocalScopeRequired': message = '请先点击「搜索」建立当前问题，再使用语义搜索。'; break;
       case 'LocalMembershipChangedStartNewSession': message = '资料范围刚发生变化，请重新点击「搜索」。'; break;
-      case 'UnifiedQueryCountOrBaseline': message = '当前问题的本机计数、模型或基线校验未通过；当前统一模式要求硅基流动 BAAI/bge-m3，单次输入不超过 8192 tokens。'; break;
+      case 'UnifiedQueryCountOrBaseline': message = '这个问题没能用于语义搜索：可能太长，或嵌入模型设置有变化。请缩短后重试，或到「我的 → 嵌入模型」检查。'; break;
       case 'UnifiedScopeIncomplete': message = '本机资料范围读取未完成，请重试搜索。'; break;
     }
     return message + '\n未发送问题。原因：' + error.category;

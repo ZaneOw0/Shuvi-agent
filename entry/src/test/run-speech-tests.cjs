@@ -580,3 +580,23 @@ test('page back cancels active speech before closing PDF and preserves normal dr
   fixture.speech.busy=false;assert.equal(fixture.onBackPress(),true);assert.deepEqual(calls,['speech','pdf']);
   pdf.shared.expanded=false;fixture.drawerOpen=true;assert.equal(fixture.onBackPress(),true);assert.equal(fixture.drawerOpen,false);
 });
+
+test('PR26 voice plus image dispatches both through the page and keeps the transcript out of the bubble', async () => {
+  const page=fs.readFileSync(path.resolve(root,'../../pages/Index.ets'),'utf8');
+  const method=page.match(/  private async sendImage\(\): Promise<void> \{[\s\S]*?\n  \}/);assert.ok(method);
+  const code=ts.transpileModule('class ImageSendFixture {\n'+method[0]+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.None}}).outputText;
+  for (const authorized of [false,true]) {
+    const {fixture,calls,clip}=voiceSendFixture();const image={bytes:new Uint8Array([1,2,3])};
+    const impl=new Function('composeVoiceMessage','ShuviRuntimeState','RuntimeChatService','ASSISTANT_IMAGE_DEFAULT_PROMPT','Edge',code+';return new ImageSendFixture();')(
+      harness().load('VoiceAudio').composeVoiceMessage,{READY:'ready'},
+      {session:{async send(text,attached){calls.push({text,attached});}}},'请看看这张图片。',{Bottom:1});
+    fixture.sendImage=impl.sendImage;fixture.imageDraft=image;fixture.imageDraftUri='file://chosen-image';
+    fixture.inputController={stopEditing(){}};fixture.knowledgeEnabled=authorized;
+    await fixture.sendVoice();
+    if(authorized){assert.equal(calls.length,0);assert.equal(fixture.imageDraft,image);assert.equal(fixture.voiceDraft,clip);continue;}
+    assert.equal(calls.length,1);assert.equal(calls[0].attached,image);assert.equal(calls[0].text,'语音里的要求\n\n另外请列成三点');
+    assert.equal(fixture.messages[0].voice,clip);assert.equal(fixture.messages[0].image,'file://chosen-image');
+    assert.equal(fixture.messages[0].text,'另外请列成三点');assert(fixture.hiddenVoiceQueries.has(calls[0].text));
+    assert.equal(fixture.imageDraft,undefined);assert.equal(fixture.voiceDraft,undefined);
+  }
+});
