@@ -64,6 +64,6 @@ node scripts/l0-host-summary.cjs --full-host
 
 ## 4. 文档与边界
 
-PR #26 新增多模态和历史对话 spec 改为 15/16，保留 main 的 RAG spec 13/14，更新索引、交接链接、三链路图与本报告。main 的 `AGENTS.md` 替代 skill/CLI 约定随合并保留。
+PR #26 新增多模态和历史对话 spec 改为 15/16，保留 main 的 RAG spec 11/14，更新索引、交接链接、三链路图与本报告。main 的 `AGENTS.md` 替代 skill/CLI 约定随合并保留。
 
 本报告只确认合并后的宿主逻辑回归和构建。真实语义质量、模型是否正确选择检索、设备上 FTS tokenizer、图片加语音、UI 以及真机仍需独立验收；此前任一分支的设备记录不能直接作为合并版本的验收结果。

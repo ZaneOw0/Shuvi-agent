@@ -1,7 +1,6 @@
 # Local AI Gateway（Shuvi 子项目）
 
 > 状态：已实现待验收（源码导入）；迁移后的验证记录见主仓库部署文档。
-> 更新日期：2026-10-23。
 > 运行平台：Windows x64 / .NET 10。该子项目不参与 Hvigor 构建，不进入手机 HAP。
 
 本目录保存固定上游提交 `21017a1e91a1067119f4772762295c3e343cef40` 的网关源码、测试、脚本和运行时清单。文件来源与导入哈希见 [UPSTREAM.json](UPSTREAM.json)，许可证见 [LICENSE](LICENSE)，第三方声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

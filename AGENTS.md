@@ -1,7 +1,7 @@
 # AGENTS.md — Shuvi（休比）鸿蒙工程
 
 > 面向在本仓库工作的 AI Agent。人类协作规则以 [docs/01-协作与工程约定](docs/01-协作与工程约定.md) 为唯一权威，本文件是它的可执行摘要。
-> 状态：已有可构建、可安装的 `entry`；功能与验收进度以 [docs/08-项目进度与验收](docs/08-项目进度与验收.md) 为准，平板/手机同一 HAP 的响应式适配见 [specs/17-平板端适配与手机功能一致性验收](specs/17-平板端适配与手机功能一致性验收.md)。
+> 状态：已有可构建、可安装的 `entry`；功能与验收进度以 [docs/08-项目进度与验收](docs/08-项目进度与验收.md) 为准，平板/手机同一 HAP 的响应式适配见 [specs/17-平板端适配与手机功能一致性验收](specs/15-平板端适配与手机功能一致性验收.md)。
 
 ## 1. 项目定位
 
@@ -27,21 +27,26 @@
 ```
 HarmonyPA/
 ├── AppScope/          # 应用级配置：app.json5（bundleName=com.example.shuvi、版本、图标、名称）
-├── entry/             # 唯一 HAP 模块（Stage 模型，deviceTypes: phone / tablet，零权限）
+├── entry/             # 唯一 HAP 模块（Stage 模型，phone / tablet，网络、麦克风与日历权限）
 │   ├── src/main/ets/
 │   │   ├── entryability/EntryAbility.ets        # UIAbility 入口，onWindowStageCreate 加载 pages/Index
 │   │   ├── entrybackupability/EntryBackupAbility.ets
 │   │   ├── pages/Index.ets                      # 入口页面：四页导航、响应式 Overlay/Embed 布局
 │   │   ├── components/                          # FeaturePages.ets、Theme.ets
 │   │   ├── mock/MockAssistantService.ets        # 前端 Mock 数据，未接真实能力
-│   │   └── model/AssistantModels.ets            # 前端领域模型
+│   │   ├── model/AssistantModels.ets            # 领域与界面模型
+│   │   ├── services/                            # 会话、模型、日历、文档与媒体服务
+│   │   └── knowledge/                           # 内容、检索、处理队列与来源预览
 │   ├── src/test/                                # 本机 host 测试（run-host-tests.cjs）
 │   ├── src/main/module.json5                    # mainElement、pages 清单、abilities、requestPermissions
 │   ├── src/main/resources/                      # base / dark 资源（element、media、profile）
 │   ├── build-profile.json5                      # apiType: stageMode，targets: default / ohosTest
 │   └── hvigorfile.ts                            # hapTasks
 ├── scripts/           # 一键脚本与 Git 钩子，见第 6 节
-├── specs/             # 按「用户闭环」划分的功能契约，三条开发线的唯一对齐点
+├── specs/             # 当前功能契约，按用户闭环组织
+├── modules/           # Agent HAR
+├── services/          # 独立服务
+├── tests/             # 独立测试宿主
 ├── docs/              # 00 总览 / 01 协作约定 / 02 平台基线 / 03 鸿蒙概念速览
 ├── signing/           # 签名占位，仅 README.md 入库，证书材料全部 gitignore
 ├── .local/            # 本机签名缓存与本地草稿（gitignore，不入库）
@@ -89,7 +94,7 @@ HarmonyPA/
 
 - `.ets` 文件改完先 `arkts_check`，再 `build_project`；构建失败出现 `ERROR` 时加载 `arkts-error-fixes` skill 修复后重跑（无 DevEco Code 运行时环境的替代方案见 5.1）。
 - **必须先 `build_project` 成功，才能 `start_app`**；任务结束前也必须保证 `build_project` 通过。
-- **每次测试必须落盘日志**（构建 / 模拟器 / 真机一律如此）：用 `scripts/capture-test-log.sh <scope> [窗口] [设备]`，结果写入 `.cache/test-logs/`，含设备原始日志、`meta.txt`（提交、未提交改动数、工作区指纹、设备）与 `index.tsv` 索引；并把日志路径与复现命令写进对应 spec。未落盘的测试不作为证据（见 [docs/01](docs/01-协作与工程约定.md) 第 7.0 节）。
+- **每次测试必须落盘日志**（构建 / 模拟器 / 真机一律如此）：用 `scripts/capture-test-log.sh <scope> [窗口] [设备]`，结果写入 `.cache/test-logs/`，含设备原始日志、`meta.txt`（提交、未提交改动数、工作区指纹、设备）与 `index.tsv` 索引；并把日志路径与复现命令写进对应验收记录，由 spec 链接。未落盘的测试不作为证据（见 [docs/01](docs/01-协作与工程约定.md) 第 7.0 节）。
 - ArkTS 严格规则由构建阶段（`CompileArkTS`）强制拦截，本地报错以构建输出为准。
 
 ### 5.1 无 DevEco Code 运行时环境的替代方案
@@ -119,18 +124,18 @@ devecocli skills add --agent codex --skill hmos-runtime-fix-skill
 ```bash
 scripts/dev-run.sh                  # 唯一活动设备；无活动时清单首模拟器；多活动停止
 scripts/dev-run.sh --emulator 'Mate 90 Pro' --product default
-scripts/dev-run.sh --force-sign     # 仅显式授权时强签；本轮验证不用
+scripts/dev-run.sh --force-sign     # 仅显式授权时强签；使用前确认当前任务授权
 scripts/dev-run.sh --no-build       # 显式跳构建，需已有产物，仍检查目标与签名
 scripts/dev-run.sh --no-emulator    # 不启动停止态实例，运行态可使用
 scripts/dev-run.sh --device '<serial>' --emulator '<name>' --product default
 scripts\dev-run.cmd                 # Windows 入口，转发到 dev-run.sh
 ```
 
-macOS 本机开发入口（2026-10-14 新增，与 `dev-run.sh` 相互独立）：`scripts/dev-run-mac.sh`。流程一致，但先做**登录预检**（`auth status` 需含 `Current user:`，否则提示 `devecocli auth login`）与**模拟器许可预检**（只读 `.emu_config` + 识别启动时的 `license agreements are not accepted`，提示 `devecocli emulator license`）；目标用 JSON 清单解析（实例名含空格安全），不做任何 Git 写操作，工具原始输出只落 `.local/mac-run/`，模板退出时按字节恢复。隔离回归 `scripts/tests/dev-run-mac.test.cjs`（两 Bash 各 12/12；含登录/许可阻断、尾随版本提醒容忍、JSON5 签名缓存复用、模板恢复）。
+macOS 本机开发入口（与 `dev-run.sh` 相互独立）：`scripts/dev-run-mac.sh`。流程一致，但先做**登录预检**（`auth status` 需含 `Current user:`，否则提示 `devecocli auth login`）与**模拟器许可预检**（只读 `.emu_config` + 识别启动时的 `license agreements are not accepted`，提示 `devecocli emulator license`）；目标用 JSON 清单解析（实例名含空格安全），不做任何 Git 写操作，工具原始输出只落 `.local/mac-run/`，模板退出时按字节恢复。隔离回归 `scripts/tests/dev-run-mac.test.cjs`（两 Bash 各 12/12；含登录/许可阻断、尾随版本提醒容忍、JSON5 签名缓存复用、模板恢复）。
 
 环境变量：`EMULATOR_NAME`、`PRODUCT`、`DEVECOCLI_BIN`。
 
-**平台适配，勿改回依赖 PATH bash**：提交版 `dev-run.cmd` 由 `where git` 推导 Git Bash（`<Git>\cmd`、`mingw64\bin`、`usr\bin` 与标准安装位置为备选），显式拒绝 `System32\bash.exe`（PATH 的 `bash` 可能是 WSL），原样转发 `%*` 并返回 `.sh` 的真实退出码；保持 ASCII/CRLF、`setlocal enabledelayedexpansion`。CLI 后缀探测（`devecocli.cmd`/`.exe`）、`cygpath` 转 native 路径与 batch 环境槽分派属于未提交工作，未在本机/原生 Windows 复验。
+**Windows 包装**：由 Git for Windows 安装定位 Bash，拒绝 System32 的 WSL bash；保持 ASCII/CRLF，原样转发参数和退出码。CLI 后缀、native 路径与目标选择按现有脚本处理。
 
 显式目标优先于其他活动设备；双参数必须可证明同一实例，否则启动前停止。JSON 清单/view 非零、畸形、重复或矛盾映射不回退；启动后核验同一 serial 就绪（最多 240 秒），run 始终带明确 serial 和同 product。构建失败不安装，授权/许可/签名冲突不盲重试，不卸载、不清资料、不创建/改名实例。详见 [scripts/README](scripts/README.md)。
 
@@ -142,15 +147,14 @@ macOS 本机开发入口（2026-10-14 新增，与 `dev-run.sh` 相互独立）�
 
 **一次性手动步骤（脚本只提示、不代为执行）**：`devecocli auth login`（脚本仅做登录态预检）、`devecocli emulator license accept` 与系统镜像下载（脚本不代为同意协议；镜像不随 DevEco Studio 分发，未下载时实例只是配置桩，`emulator start` 退出码 0 但无法进入 hdc）。
 
-**状态说明（2026-10-14）**：`dev-run.sh` / `dev-run.cmd` 均已恢复到提交版；跨平台重写中仍有效的取证基建（`dev-run-support.cjs`、重写后的 `capture-test-log.sh`）随本次提交入库，面向已回退实现的 86 例 `dev-run.test.cjs` 已移除（备份在仓库外，历史见 `spec/dev-run-portability/`）。macOS 本机启动用 `scripts/dev-run-mac.sh`。
 
 `capture-test-log.sh <scope> [窗口] [设备]` 保留接口，先 RUN_CMD 后设备日志；`CAPTURE_HOST_ONLY=1` 明确跳设备。Node 摘要代替 GNU sha1sum、空数组兼容 Bash 3.2，独占证据目录和索引；meta 分开 cmd/log 状态，命令失败优先传播原 RC，日志/元数据失败亦非零。原始流在私有临时目录，公共输出保守过滤，禁止将私有命令交给 RUN_CMD。
 
-隔离回归入口 `TEST_BASH=/bin/bash node --test scripts/tests/dev-run-mac.test.cjs`（两 Bash 各 12/12，证据 `.cache/test-logs/2026-10-14-dev-run-mac-bash{32,53}-2ac9098-4/`）。真实调用记录：2026-10-13 RC 1、240 秒就绪超时；2026-10-14 镜像缺失时启动前 `emulator-image-missing`，镜像就绪后 `dev-run-mac.sh` 端到端成功——锁定 `127.0.0.1:5555`、复用签名缓存、构建成功、安装启动 RC 0，设备侧确认包与进程存在（证据 `.cache/test-logs/2026-10-14-dev-run-mac-e2e-2ac9098-4/`）；模板字节始终一致。已知故障：停在 `Installing artifacts...` 属设备侧 hdc 会话停摆，恢复见 `scripts/README.md`。Windows 原生未实测。
+隔离回归使用 `scripts/tests/dev-run-mac.test.cjs`，具体命令见 scripts/README.md；平台与设备结果分别取证。
 
 ### 6.2 pre-push 钩子
 
-`scripts/hooks/pre-push` 逐个提交检查，拒绝推送含签名配置的 `build-profile.json5`。`dev-run.sh` **不执行 Git config**。人类另行授权后手动配置 `git config core.hooksPath scripts/hooks`，这不属于启动脚本操作；钩子旧源码注释的自动设置描述以本节为准。
+`scripts/hooks/pre-push` 逐个提交检查，拒绝推送含签名配置的 `build-profile.json5`。`dev-run.sh` **不执行 Git config**。人类另行授权后手动配置 `git config core.hooksPath scripts/hooks`，这不属于启动脚本操作；具体使用见脚本说明。
 
 CI 门禁（顺序：依赖安装 → 代码检查 → 构建）：
 
@@ -159,7 +163,7 @@ scripts\ci-windows.cmd              # 需先设置 CLT_HOME 与 JAVA_HOME
 scripts\ci-windows.cmd --no-install # 跳过依赖安装
 ```
 
-CI 已知限制：`codelinter.bat` 退出码恒为 1，脚本改读其 JSON 报告判定；CI 不签名、不安装、不做设备测试；真机验收为人工门禁。触发条件仅为 `pull_request → main` 与 `push → main`。
+CI 检查结合有效 JSON、控制台和内部日志判定，工具退出码与空报告不单独作为通过证据；扫描覆盖缺失或分析器异常按失败处理。CI 不签名、不安装、不做设备测试；触发 main PR 和 main 推送。
 
 ## 7. ArkTS 编码约束
 
@@ -174,7 +178,7 @@ ArkTS 不是任意 TypeScript，写 `.ets` 前加载 `arkts-grammar-standards` s
 
 ## 8. Git 与协作
 
-- 长分支：`main`（可集成、可演示）+ `dev/ux`、`dev/agent`、`dev/platform` etc；功能短分支从对应 `dev/*` 切出。
+- 长分支：`main`（可集成、可演示）与各主责开发分支；`fix/patch` 承接从 main 开出的发布前补丁和仓库规范，功能短分支从已对齐基线切出。
 - **禁止直接推 `main`，禁止 force push**；PR 至少 1 人评审，建议 squash merge。
 - 提交格式：`类型(范围): 中文描述`，如 `feat(calendar): 增加日程确认卡片`。类型：`feat / fix / docs / style / refactor / perf / test / build / ci / chore / revert`。
 - 单提交只做一个逻辑变化，不混入无关格式化或依赖升级。
@@ -186,7 +190,7 @@ ArkTS 不是任意 TypeScript，写 `.ets` 前加载 `arkts-grammar-standards` s
 - 文档语言中文，技术名词保留原文，中英文间留空格。
 - 功能 spec 按用户闭环划分，文件名 `NN-功能名.md`，模板见 [specs/_模板.md](specs/_模板.md)。
 - spec 描述顺序固定：`用户流程 → 页面事项 → 业务与 Agent 事项 → 平台能力 → 验收方式`。
-- 状态流转：`待确认 → 已确认待实现 → 已实现待验收 → 已验收 → 已下线`，状态变化附版本与证据。
+- 状态流转：`待确认 → 已确认待实现 → 已实现待验收 → 已验收 → 已下线`，状态对应当前实现，具体版本、日期与证据写入验收记录。
 - 验收必须覆盖四类路径：正常、异常、权限拒绝、模型失败。
 - 跨模块契约先形成共同理解再并行实现；页面可用固定样例，核心可用假适配器。
 
@@ -198,3 +202,7 @@ ArkTS 不是任意 TypeScript，写 `.ets` 前加载 `arkts-grammar-standards` s
 - `.sh` 必须 LF、`.cmd/.bat` 必须 CRLF、`scripts/hooks/*` 必须 LF（无扩展名，已在 `.gitattributes` 单独约定），改动脚本注意行尾。
 - 签名相关改动、`.local/`、`build/`、`.hvigor/`、`oh_modules/`、`.idea/` 均被 gitignore，不要试图提交。
 - 进程被回收后不假设 Agent 自动续跑；「草稿生成 / 日程创建 / 提醒注册 / 提醒送达」不可混为成功。
+
+## 11. 文档归类
+
+当前说明只维护现有行为、契约、目标与真实限制。诊断放 `docs/diagnostics/`，实施、合并和验收放 `docs/verification/`；固定上游、许可和测试语料保留来源。功能 spec 不堆叠历史增强记录，链接专属证据。
