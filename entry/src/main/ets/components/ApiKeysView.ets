@@ -1,6 +1,6 @@
 import util from '@ohos.util';
 import { Theme } from './Theme';
-import { DeepSeekKeyService, DeepSeekKeyStatus } from '../services/model/DeepSeekCredentialStore';
+import { DeepSeekKeyService, DeepSeekKeyStatus, TavilyKeyService } from '../services/model/DeepSeekCredentialStore';
 import { EmbeddingService } from '../knowledge/application/EmbeddingService';
 import { DocumentParseService } from '../knowledge/application/DocumentParseService';
 import { EmbeddingCredentialStatus, EmbeddingDetectionStatus, EmbeddingProvider } from '../knowledge/domain/EmbeddingModels';
@@ -87,12 +87,14 @@ export struct ApiKeysView {
   @State embeddingSaved: boolean = false;
   @State embeddingUnavailable: boolean = false;
   @State mineruNote: string = '';
+  @State tavilyStatus: DeepSeekKeyStatus = DeepSeekKeyStatus.Checking;
+  @State tavilyNote: string = '';
   @State busy: boolean = false;
   @State clearEpoch: number = 0;
   private listener: KnowledgeCallbackListener = new KnowledgeCallbackListener((): void => { this.embeddingChanged(); });
 
   aboutToAppear(): void {
-    void this.refreshDeepSeek();
+    void this.refreshDeepSeek(); void this.refreshTavily();
     this.embedding?.subscribe(this.listener); this.embeddingChanged();
   }
   aboutToDisappear(): void { this.clearEpoch++; this.embedding?.unsubscribe(this.listener); }
@@ -104,6 +106,29 @@ export struct ApiKeysView {
   private async refreshDeepSeek(): Promise<void> {
     try { this.deepSeekStatus = await DeepSeekKeyService.store.status(); }
     catch { this.deepSeekStatus = DeepSeekKeyStatus.Unavailable; }
+  }
+
+  private async refreshTavily(): Promise<void> {
+    try { this.tavilyStatus = await TavilyKeyService.store.status(); }
+    catch { this.tavilyStatus = DeepSeekKeyStatus.Unavailable; }
+  }
+  private async saveTavily(value: string): Promise<void> {
+    if (this.busy) { return; }
+    const key: Uint8Array = new util.TextEncoder().encodeInto(value);
+    this.busy = true; this.tavilyNote = '';
+    try {
+      await TavilyKeyService.store.save(key);
+      this.tavilyNote = '已保存。在助手页打开「搜索」即可使用；之前没连上的话，点「重新连接」。';
+    }
+    catch { this.tavilyNote = '没有保存：Key 格式不正确或本机安全存储暂不可用。'; }
+    finally { key.fill(0); await this.refreshTavily(); this.busy = false; }
+  }
+  private async removeTavily(): Promise<void> {
+    if (this.busy) { return; }
+    this.busy = true;
+    try { await TavilyKeyService.store.remove(); this.tavilyNote = '已删除。'; }
+    catch { this.tavilyNote = '删除没有完成，请稍后重试。'; }
+    finally { await this.refreshTavily(); this.busy = false; }
   }
 
   private async visionWasOn(): Promise<boolean> {
@@ -262,7 +287,15 @@ export struct ApiKeysView {
             (): void => { void this.removeMineru(); });
         } })
 
-      Text('联网搜索使用的 Tavily Key 保存在运行搜索服务的电脑上，不在手机里。').fontSize(12).fontColor(Theme.muted).width('100%')
+      ApiKeyCard({ name: 'Tavily', idPrefix: 'api-keys-tavily', busy: this.busy, clearEpoch: this.clearEpoch,
+        saved: this.tavilyStatus === DeepSeekKeyStatus.Saved, unavailable: this.tavilyStatus === DeepSeekKeyStatus.Unavailable,
+        note: this.tavilyNote,
+        usage: '用于助手页的联网搜索。保存即表示同意：每次搜索前会先请你确认关键词，确认后关键词会从本机直接发送到 Tavily（api.tavily.com），可能消耗额度、产生费用，以供应商账单为准。',
+        onSave: (value: string): void => { void this.saveTavily(value); },
+        onRemove: (): void => {
+          this.confirm('删除 Tavily Key？', '删除后联网搜索需要重新保存 Key 才能使用。已有的搜索结果不受影响。',
+            (): void => { void this.removeTavily(); });
+        } })
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ bottom: 24 })
   }
 }

@@ -6,8 +6,8 @@ import { LiveSearchSource } from '../services/model/SearchTaskSupport';
 import { SourceLinkService } from '../services/SourceLinkService';
 
 /**
- * Web search inside the assistant. The session connects with the DeepSeek key saved in 我的 → API Key 管理; every search
- * still asks for consent with the exact keywords before anything is sent.
+ * Web search inside the assistant. The phone calls Tavily directly with the Tavily key saved in 我的 → API Key 管理, and
+ * DeepSeek (its own saved key) writes the answer; every search still asks for consent with the exact keywords first.
  */
 @Component
 export struct RuntimeSearchPanel {
@@ -42,7 +42,7 @@ export struct RuntimeSearchPanel {
           .onClick((): void => { this.onKeys(); })
       } else if (this.disconnected() || this.view.lifecycle === ShuviRuntimeState.STARTING) {
         Text(this.connecting || this.view.lifecycle === ShuviRuntimeState.STARTING ? '正在连接搜索服务…' :
-          (this.view.lifecycle === ShuviRuntimeState.FAILED ? '搜索服务没有连接上。' : '搜索还没有连接。'))
+          (this.view.lifecycle === ShuviRuntimeState.FAILED ? '搜索没有连接上。请确认已在「我的 → API Key 管理」保存 Tavily Key。' : '搜索还没有连接。'))
           .fontSize(13).fontColor(Theme.muted).width('100%').id('runtime-search-status')
         if (this.disconnected() && !this.connecting) {
           Button(this.view.lifecycle === ShuviRuntimeState.FAILED ? '重新连接' : '连接').fontSize(14).fontColor(Theme.accent)
@@ -61,7 +61,7 @@ export struct RuntimeSearchPanel {
           Column({ space: 6 }) {
             Text('只发送你确认过的关键词，不读取聊天历史、知识库或日历。')
               .fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
-            Text('搜索服务目前运行在开发电脑上。为控制费用，本机暂时只允许一次搜索，重启也不重置；失败或取消也可能占用。费用以 Tavily 和 DeepSeek 账单为准。')
+            Text('关键词由手机直接发送到 Tavily（api.tavily.com），使用你在「我的 → API Key 管理」保存的 Tavily Key。每次搜索都可能消耗 Tavily 额度，失败或取消也可能计费；费用以 Tavily 和 DeepSeek 账单为准。')
               .fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
           }.width('100%').padding(10).backgroundColor(Theme.inputSurface).borderRadius(Theme.radius)
         }

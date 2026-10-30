@@ -23,6 +23,9 @@ const nativeModules = {
       async encodeToString(bytes) { return Buffer.from(bytes).toString('base64'); }
     } },
   '@ohos.security.asset': {},
+  // Key stores are only constructed in assembly tests; their Asset calls are exercised with explicit overrides.
+  '@kit.AssetStoreKit': { asset: {} },
+  '@kit.ArkTS': { util: { TextEncoder: Encoder, TextDecoder: Decoder } },
   '@kit.BasicServicesKit': {},
   '@ohos.app.ability.common': {},
   '@ohos.data.relationalStore': {
@@ -1661,12 +1664,13 @@ function liveSearchHarness(options = {}, existing) {
         usage: { prompt_tokens: 180, completion_tokens: 20, total_tokens: 200 } }) }), cancel() {} };
     }
   }
-  const assembly = load(path.join(services, 'SearchRuntimeAssembly.ets'), {
-    '@harmony_agent/mcp-client': { ...mcp, McpClientManager: Manager }
-  });
+  // Default: replace the in-app Tavily manager with a scripted tool. `direct` keeps the real manager and fakes HTTPS only.
+  const assembly = options.direct ? load(path.join(services, 'SearchRuntimeAssembly.ets')) :
+    load(path.join(services, 'SearchRuntimeAssembly.ets'), { './DirectTavilySearch': { DirectTavilySearchManager: Manager } });
   const chat = load(path.join(services, 'ChatRuntimeAssembly.ets'), { './DeepSeekHttpClient': { ArkTsDeepSeekHttpClient: ModelClient } });
   const ui = new RuntimeSearchSession(); ui.onForeground();
-  const factory = new assembly.SearchRuntimeFactory(opener, true);
+  const factory = options.direct ? new assembly.SearchRuntimeFactory(opener, true, options.direct.http, options.direct.keys) :
+    new assembly.SearchRuntimeFactory(opener, true);
   const answerFactory = new chat.ChatRuntimeFactory(opener, true, ui.context);
   return { ui, factory, answerFactory, trace, dbs, assembly, async start() {
     await ui.start(factory, answerFactory, new TextEncoder().encode('test-only-key'));
@@ -1684,10 +1688,11 @@ async function authorizeSearch(h) {
   assert.equal(h.ui.snapshot().preview.query, 'same query');
   await h.ui.decide(true);
 }
-test('search UX: actual grant, one MCP call, durable pending CNY bill, then real model answer', async () => {
+test('search UX: actual grant, one tool call, durable pending CNY bill, real answer, then another search', async () => {
   const h = liveSearchHarness(); await h.start();
   try {
-    assert.equal(h.trace.profiles[0].retryToolCallOnExpiredSession, false);
+    assert.equal(h.trace.profiles[0].endpoint, 'https://api.tavily.com/search');
+    assert.equal(h.trace.profiles[0].allowInsecureHttp, false);
     await authorizeSearch(h); await waitSearch(h.ui, view => !view.busy);
     assert.equal(h.ui.snapshot().stage, 'complete', h.ui.snapshot().message);
     assert.equal(h.trace.tools, 1); assert.equal(h.trace.models, 1);
@@ -1700,11 +1705,18 @@ test('search UX: actual grant, one MCP call, durable pending CNY bill, then real
     assert.equal(payload.operations[0].pendingInvoice.accountScope, 'shuvi-dev-tavily');
     assert.equal(payload.operations[0].invoice, undefined);
     assert.equal(payload.operations[0].state, invoiceCore.OperationJournalState.RESULT_RECORDED);
-    assert.equal(await h.ui.send('second query'), false); assert.equal(h.trace.tools, 1);
+    // No one-search trial cap: a later search needs only its own consent.
+    assert.equal(h.ui.snapshot().allowance, true);
+    assert.equal(await h.ui.send('same query'), true); await waitSearch(h.ui, view => view.preview !== undefined);
+    assert.equal(h.trace.tools, 1, 'the second search also waits for consent'); await h.ui.decide(true);
+    await waitSearch(h.ui, view => !view.busy);
+    assert.equal(h.ui.snapshot().stage, 'complete', h.ui.snapshot().message); assert.equal(h.trace.tools, 2);
+    assert.equal(JSON.parse(h.dbs.search.envelope.payloadJson).operations.length, 2);
   } finally { await h.ui.stop(); }
   const reopened = liveSearchHarness({}, h.dbs); await reopened.start();
-  assert.equal(reopened.ui.snapshot().allowance, false);
-  assert.equal(await reopened.ui.send('same query'), false); assert.equal(reopened.trace.tools, 0);
+  assert.equal(reopened.ui.snapshot().allowance, true);
+  await authorizeSearch(reopened); await waitSearch(reopened.ui, view => !view.busy);
+  assert.equal(reopened.trace.tools, 1); assert.equal(reopened.ui.snapshot().stage, 'complete');
   await reopened.ui.stop();
 });
 test('search deny never calls provider and does not consume dispatch allowance', async () => {
@@ -1749,14 +1761,15 @@ test('model failure retains real sources; explicit retry answers without another
     assert.equal(h.ui.snapshot().stage, 'complete'); assert.equal(h.trace.tools, 1); assert.equal(h.trace.models, 2);
   } finally { await h.ui.stop(); }
 });
-test('background stops search, discards late results and keeps persistent trial occupied', async () => {
+test('background stops search and discards late results; a reopened session may search again', async () => {
   const gate = deferred(); const h = liveSearchHarness({ toolGate: gate }); await h.start();
   await authorizeSearch(h); await waitSearch(h.ui, () => h.trace.tools === 1);
   await h.ui.onBackground(); gate.resolve(); await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(h.ui.snapshot().sources.length, 0); assert.equal(h.trace.models, 0);
   assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.STOPPED);
   h.ui.onForeground(); assert.equal(h.trace.tools, 1);
-  const reopen = liveSearchHarness({}, h.dbs); await reopen.start(); assert.equal(reopen.ui.snapshot().allowance, false); await reopen.ui.stop();
+  const reopen = liveSearchHarness({}, h.dbs); await reopen.start(); assert.equal(reopen.ui.snapshot().allowance, true);
+  assert.equal(reopen.trace.tools, 0, 'nothing is re-sent on reopen'); await reopen.ui.stop();
 });
 test('bad result never becomes a source or answer; no automatic network retry', async () => {
   const h = liveSearchHarness({ badResult: true }); await h.start();
@@ -1764,7 +1777,7 @@ test('bad result never becomes a source or answer; no automatic network retry', 
     await authorizeSearch(h); await waitSearch(h.ui, () => h.trace.tools === 1);
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(h.ui.snapshot().sources.length, 0); assert.equal(h.trace.models, 0);
-    assert.equal(h.ui.snapshot().allowance, false);
+    assert.equal(h.trace.tools, 1, 'no automatic retry');
     assert.equal(h.ui.snapshot().busy, false);
     assert.equal(h.ui.snapshot().stage, 'failed');
   } finally { await h.ui.stop(); }
@@ -1817,7 +1830,7 @@ test('tool failure ends waiting promptly without fake success, free settlement o
   const operation = JSON.parse(h.dbs.search.envelope.payloadJson).operations[0];
   assert.equal(operation.invoice, undefined); assert.equal(operation.pendingInvoice, undefined);
   const reopened = liveSearchHarness({}, h.dbs); await reopened.start();
-  assert.equal(reopened.ui.snapshot().allowance, false); await reopened.ui.stop();
+  assert.equal(reopened.ui.snapshot().allowance, true); assert.equal(reopened.trace.tools, 0); await reopened.ui.stop();
 });
 test('search result write failure exposes neither source nor answer and retains dispatch evidence', async () => {
   const gate = deferred(); const h = liveSearchHarness({ toolGate: gate }); await h.start();
@@ -1825,10 +1838,11 @@ test('search result write failure exposes neither source nor answer and retains 
   h.dbs.search.failWrites = true; gate.resolve(); await waitSearch(h.ui, v => v.lifecycle === ShuviRuntimeState.STOPPED);
   assert.equal(h.ui.snapshot().sources.length, 0); assert.equal(h.trace.models, 0);
   h.dbs.search.failWrites = false;
+  assert.equal(JSON.parse(h.dbs.search.envelope.payloadJson).operations.length, 1, 'dispatch evidence is kept');
   const reopened = liveSearchHarness({}, h.dbs); await reopened.start();
-  assert.equal(reopened.ui.snapshot().allowance, false); await reopened.ui.stop();
+  assert.equal(reopened.ui.snapshot().allowance, true); assert.equal(reopened.trace.tools, 0); await reopened.ui.stop();
 });
-test('search quota is enforced before dispatch even when two tasks already awaited consent', async () => {
+test('two tasks that each received consent dispatch exactly once each', async () => {
   const h = liveSearchHarness(); const session = h.factory.create(); await session.start(new TextEncoder().encode('test-only-key'));
   const prompts = [];
   try {
@@ -1839,8 +1853,9 @@ test('search quota is enforced before dispatch even when two tasks already await
     assert.equal(prompts.length, 2);
     await session.authorize(prompts[0], true);
     for (let i = 0; i < 100 && h.trace.tools === 0; i++) await new Promise(r => setTimeout(r, 2));
-    try { await session.authorize(prompts[1], true); } catch { /* Durable allowance rejects the queued task. */ }
-    assert.equal(h.trace.tools, 1);
+    await session.authorize(prompts[1], true);
+    for (let i = 0; i < 100 && h.trace.tools < 2; i++) await new Promise(r => setTimeout(r, 2));
+    await new Promise(r => setTimeout(r, 10)); assert.equal(h.trace.tools, 2);
   } finally { await session.stop(); }
 });
 
@@ -4256,4 +4271,6 @@ test('chat journal keeps accepting turns past 128 records by retiring the oldest
   } finally { await h.ui.stop(); }
 });
 
+require('./tavily-direct-tests.cjs')({ load, root, services, digest, deferred, liveSearchHarness, waitSearch, authorizeSearch,
+  setNativeFactory: factory => { nativeFactory = factory; }, loadDeepSeekKeyStore, ShuviRuntimeState });
 require('./l2-tool-tests.cjs')({ load, root, services, writableRdb, assistantHarness, fakeDocuments, toolCall, waitChat, assertValidToolHistory });

@@ -8,6 +8,8 @@ import { SearchAuthorizationPreview } from './SearchAuthorizationPreview';
 import { LiveSearchSource, SearchAnswerContext, parseLiveSearch, validSearchCitations } from './SearchTaskSupport';
 import { parseChatAnswer } from './ChatRuntimeAssembly';
 
+const SEARCH_FULL: string = '本机搜索记录已满，暂时不能继续搜索；旧记录目前不会自动清理。';
+
 export class RuntimeSearchView {
   lifecycle: ShuviRuntimeState = ShuviRuntimeState.IDLE;
   busy: boolean = false;
@@ -74,11 +76,11 @@ export class RuntimeSearchSession {
       await this.model.start(answerFactory, modelKey);
       if (generation !== this.generation) return;
       this.view.lifecycle = ShuviRuntimeState.READY; this.view.allowance = factory.available();
-      this.view.message = this.view.allowance ? '已就绪。发送关键词后，仍需确认本次搜索。' : '本机一次搜索额度已占用，请核对账单；未自动释放或重新搜索。';
+      this.view.message = this.view.allowance ? '已就绪。发送关键词后，仍需确认本次搜索。' : SEARCH_FULL;
       this.publish();
     } catch {
       if (generation === this.generation) {
-        await this.stop(); this.view.message = '启动失败。检查搜索服务、8787 转发和本机存储；未自动调用搜索。';
+        await this.stop(); this.view.message = '启动失败。请确认已在「我的 → API Key 管理」保存 Tavily Key，并检查本机存储；未自动调用搜索。';
         if (this.search.lifecycleState() !== ShuviRuntimeState.BLOCKED && this.model.lifecycleState() !== ShuviRuntimeState.BLOCKED) {
           this.view.lifecycle = ShuviRuntimeState.FAILED;
         }
@@ -94,7 +96,7 @@ export class RuntimeSearchSession {
     await this.stop();
     if (this.view.lifecycle !== ShuviRuntimeState.STOPPED) return;
     this.view.stage = 'failed';
-    this.view.message = '搜索失败或结果未能可靠保存，未生成回答；本次额度已保留，请核对执行记录与费用。';
+    this.view.message = '搜索失败或结果未能可靠保存，未生成回答；请核对执行记录与 Tavily 用量。';
     this.view.billing = '执行结果 / 费用待核对（CNY），未记为零'; this.publish();
   }
   async stop(): Promise<void> {
@@ -139,8 +141,7 @@ export class RuntimeSearchSession {
     } catch {
       if (this.active(generation)) {
         this.finish(answering ? 'answerFailed' : 'failed', answering ? '回答未完成，真实来源已保留；可仅重试回答。' :
-          '搜索任务未完成，未自动重试。请检查连接或本机额度；费用不能按零计算。');
-        if (!answering) { this.view.allowance = false; this.publish(); }
+          '搜索任务未完成，未自动重试。请检查网络和 Tavily Key；费用不能按零计算。');
       }
     }
   }
@@ -212,6 +213,7 @@ export class RuntimeSearchSession {
     this.view.preview = undefined; this.prompt = undefined;
     this.factory?.previews.forgetTask(this.taskId);
     try { this.view.allowance = this.factory?.available() === true; } catch { this.view.allowance = false; }
+    if (!this.view.allowance && this.view.lifecycle === ShuviRuntimeState.READY) this.view.message = message + SEARCH_FULL;
     this.publish();
   }
   async retryAnswer(): Promise<void> {

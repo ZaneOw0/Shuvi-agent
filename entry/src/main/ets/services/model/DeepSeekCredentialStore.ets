@@ -5,6 +5,8 @@ import { BusinessError } from '@kit.BasicServicesKit';
 /** Opt-in "remember DeepSeek key" storage: the system Asset Store on this device only, never synced or logged. */
 export enum DeepSeekKeyStatus { Checking = 'Checking', Missing = 'Missing', Saved = 'Saved', Unavailable = 'Unavailable' }
 export const DEEPSEEK_KEY_ALIAS: string = 'shuvi.deepseek.api-key.v1';
+/** Web search calls Tavily straight from the phone; its key is a separate device-only record of the same shape. */
+export const TAVILY_KEY_ALIAS: string = 'shuvi.tavily.api-key.v1';
 export const DEEPSEEK_KEY_MAX_BYTES: number = 2048;
 const ASSET_NOT_FOUND: number = 24000002;
 
@@ -12,7 +14,7 @@ export interface DeepSeekAssetPort {
   query(query: asset.AssetMap): Promise<asset.AssetMap[]>; add(attributes: asset.AssetMap): Promise<void>;
   update(query: asset.AssetMap, attributes: asset.AssetMap): Promise<void>; remove(query: asset.AssetMap): Promise<void>;
 }
-class PlatformDeepSeekAssetStore implements DeepSeekAssetPort {
+export class PlatformDeepSeekAssetStore implements DeepSeekAssetPort {
   query(query: asset.AssetMap): Promise<asset.AssetMap[]> { return asset.query(query); }
   add(attributes: asset.AssetMap): Promise<void> { return asset.add(attributes); }
   update(query: asset.AssetMap, attributes: asset.AssetMap): Promise<void> { return asset.update(query, attributes); }
@@ -22,25 +24,34 @@ export class DeepSeekCredentialError extends Error {
   readonly stage: string;
   constructor(stage: string) { super('DEEPSEEK_KEY_STORE_' + stage); this.stage = stage; }
 }
-function aliasQuery(kind?: asset.ReturnType): asset.AssetMap {
+function aliasQuery(alias: string, kind?: asset.ReturnType): asset.AssetMap {
   const query: asset.AssetMap = new Map<asset.Tag, asset.Value>();
-  query.set(asset.Tag.ALIAS, new util.TextEncoder().encodeInto(DEEPSEEK_KEY_ALIAS));
+  query.set(asset.Tag.ALIAS, new util.TextEncoder().encodeInto(alias));
   if (kind !== undefined) { query.set(asset.Tag.RETURN_TYPE, kind); }
   return query;
 }
-/** Printable ASCII without spaces, 1..2048 bytes: DeepSeek keys never need anything else. */
+/** Printable ASCII without spaces, 1..2048 bytes: DeepSeek and Tavily keys never need anything else. */
 export function deepSeekKeyAcceptable(key: Uint8Array): boolean {
   if (key.length === 0 || key.length > DEEPSEEK_KEY_MAX_BYTES) { return false; }
   for (let i: number = 0; i < key.length; i++) { if (key[i] < 0x21 || key[i] > 0x7e) { return false; } }
   return true;
 }
 
-export class DeepSeekCredentialStore {
+/** What a caller that only reads a saved key needs: status, and a fresh copy it clears after use. */
+export interface CredentialKeySource {
+  status(): Promise<DeepSeekKeyStatus>;
+  load(): Promise<Uint8Array | undefined>;
+}
+
+export class DeepSeekCredentialStore implements CredentialKeySource {
   private readonly store: DeepSeekAssetPort;
-  constructor(store: DeepSeekAssetPort = new PlatformDeepSeekAssetStore()) { this.store = store; }
+  private readonly alias: string;
+  constructor(store: DeepSeekAssetPort = new PlatformDeepSeekAssetStore(), alias: string = DEEPSEEK_KEY_ALIAS) {
+    this.store = store; this.alias = alias;
+  }
 
   private async rows(kind: asset.ReturnType): Promise<asset.AssetMap[]> {
-    return Promise.resolve().then((): Promise<asset.AssetMap[]> => this.store.query(aliasQuery(kind)))
+    return Promise.resolve().then((): Promise<asset.AssetMap[]> => this.store.query(aliasQuery(this.alias, kind)))
       .catch((error: BusinessError): asset.AssetMap[] => {
         if (error?.code === ASSET_NOT_FOUND) { return []; }
         throw new DeepSeekCredentialError('QUERY');
@@ -64,10 +75,10 @@ export class DeepSeekCredentialStore {
       const attributes: asset.AssetMap = new Map<asset.Tag, asset.Value>();
       attributes.set(asset.Tag.SECRET, secret);
       if (await this.checked() === DeepSeekKeyStatus.Saved) {
-        await Promise.resolve().then((): Promise<void> => this.store.update(aliasQuery(), attributes))
+        await Promise.resolve().then((): Promise<void> => this.store.update(aliasQuery(this.alias), attributes))
           .catch((): void => { throw new DeepSeekCredentialError('UPDATE'); });
       } else {
-        attributes.set(asset.Tag.ALIAS, new util.TextEncoder().encodeInto(DEEPSEEK_KEY_ALIAS));
+        attributes.set(asset.Tag.ALIAS, new util.TextEncoder().encodeInto(this.alias));
         attributes.set(asset.Tag.ACCESSIBILITY, asset.Accessibility.DEVICE_UNLOCKED);
         attributes.set(asset.Tag.SYNC_TYPE, asset.SyncType.NEVER);
         attributes.set(asset.Tag.CONFLICT_RESOLUTION, asset.ConflictResolution.THROW_ERROR);
@@ -91,7 +102,7 @@ export class DeepSeekCredentialStore {
   /** Removes the entry even when its attributes look wrong, so a damaged record can always be cleared. */
   async remove(): Promise<void> {
     if ((await this.rows(asset.ReturnType.ATTRIBUTES)).length > 0) {
-      await Promise.resolve().then((): Promise<void> => this.store.remove(aliasQuery()))
+      await Promise.resolve().then((): Promise<void> => this.store.remove(aliasQuery(this.alias)))
         .catch((): void => { throw new DeepSeekCredentialError('REMOVE'); });
     }
     if ((await this.rows(asset.ReturnType.ATTRIBUTES)).length !== 0) { throw new DeepSeekCredentialError('UNCONFIRMED'); }
@@ -100,4 +111,9 @@ export class DeepSeekCredentialStore {
 
 export class DeepSeekKeyService {
   static readonly store: DeepSeekCredentialStore = new DeepSeekCredentialStore();
+}
+
+/** The Tavily key used by web search: same device-only, never-synced Asset Store record, under its own alias. */
+export class TavilyKeyService {
+  static readonly store: DeepSeekCredentialStore = new DeepSeekCredentialStore(new PlatformDeepSeekAssetStore(), TAVILY_KEY_ALIAS);
 }
