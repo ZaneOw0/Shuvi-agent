@@ -1,5 +1,5 @@
 import { Theme } from '../../components/Theme';
-import { DocumentParseViewState, DocumentCredentialStatus, DocumentOriginal, DocumentTestAcknowledgement, DocumentParseTask, DocumentParseResultEnvelope, DocumentParseStage, DocumentParseFormat } from '../domain/DocumentParseModels';
+import { DocumentParseViewState, DocumentCredentialStatus, DocumentOriginal, DocumentParseTask, DocumentParseStage, DocumentParseFormat } from '../domain/DocumentParseModels';
 import { DocumentParseService } from '../application/DocumentParseService';
 import { parseFailureSummary } from '../pipeline/ParseFailurePolicy';
 import { documentIsImage } from '../pipeline/DocumentParsePolicy';
@@ -15,14 +15,10 @@ class ParseTaskGroup {
 @Component
 export struct DocumentParseView {
   @State capabilityOpen: boolean = false;
-  @State resultDetailsOpen: boolean = false;
   @Link @Watch('updateTaskRows') parseState: DocumentParseViewState;
   @Prop settingsMode: boolean = true;
   service: DocumentParseService | undefined = undefined;
   onClose: () => void = (): void => {};
-  onPreparePdf: (resultId: string) => void = (_resultId: string): void => {};
-  onPrepareImage: (resultId: string) => void = (_resultId: string): void => {};
-  onOpenDocx: () => void = (): void => {};
   /** The MinerU token is saved and changed in 我的 → API Key 管理. */
   onKeys: () => void = (): void => {};
   @Prop @Watch('clearSecret') clearEpoch: number = 0;
@@ -41,7 +37,6 @@ export struct DocumentParseView {
   @State private taskView: string = 'list';
   @State private taskFolder: string = '';
   @State private taskPage: number = 0;
-  @State private resultPage: number = 0;
   @State private copySort: string = 'time';
   @State private copyView: string = 'list';
   @State private copyFolder: string = '';
@@ -77,7 +72,6 @@ export struct DocumentParseView {
     }
     this.taskRows = next;
     if (this.taskPage * 6 >= this.taskRowsForView().length) { this.taskPage = Math.max(0, Math.ceil(this.taskRowsForView().length / 6) - 1); }
-    if (this.resultPage * 3 >= this.parseState.snapshot.results.length) { this.resultPage = Math.max(0, Math.ceil(this.parseState.snapshot.results.length / 3) - 1); }
     if (this.copyPage * 8 >= this.copyRows().length) { this.copyPage = Math.max(0, Math.ceil(this.copyRows().length / 8) - 1); }
   }
   private taskGroupKey(stage: DocumentParseStage): string {
@@ -102,11 +96,6 @@ export struct DocumentParseView {
     }
     return groups;
   }
-  private visibleResults(): DocumentParseResultEnvelope[] {
-    const rows: DocumentParseResultEnvelope[] = this.parseState.snapshot.results;
-    return rows.slice(this.resultPage * 3, this.resultPage * 3 + 3);
-  }
-  private resultPageCount(): number { return Math.max(1, Math.ceil(this.parseState.snapshot.results.length / 3)); }
   private copyRows(): DocumentOriginal[] {
     const rows: DocumentOriginal[] = this.parseState.snapshot.originals.filter((o: DocumentOriginal): boolean => o.title.toLowerCase().includes(this.copyFilter.trim().toLowerCase()));
     const filtered: DocumentOriginal[] = this.copyFolder.length === 0 ? rows : rows.filter((o: DocumentOriginal): boolean => this.copyCategory(o) === this.copyFolder);
@@ -169,18 +158,6 @@ export struct DocumentParseView {
       else { this.deleteFeedback='本机副本已删除。'+(current.snapshot.cleanup.length>0?'临时文件仍待清理，可重试本机清理。':''); this.deleteId=''; }
     } catch { this.deleteFeedback='本机副本删除未确认，原记录保留，请重试。'; }
     finally { this.deletingCopy=false; this.updateTaskRows(); }
-  }
-  private isPdfResult(result: DocumentParseResultEnvelope): boolean {
-    const task: DocumentParseTask | undefined = this.parseState.snapshot.tasks.find((item: DocumentParseTask): boolean => item.id === result.taskId);
-    return this.parseState.snapshot.originals.some((original: DocumentOriginal): boolean => original.id === task?.originalId && original.format === DocumentParseFormat.Pdf);
-  }
-  private isImageResult(result: DocumentParseResultEnvelope): boolean {
-    const task = this.parseState.snapshot.tasks.find((item: DocumentParseTask): boolean => item.id === result.taskId);
-    return this.parseState.snapshot.originals.some((original: DocumentOriginal): boolean => original.id === task?.originalId && documentIsImage(original.format));
-  }
-  private isDocxResult(result: DocumentParseResultEnvelope): boolean {
-    const task: DocumentParseTask | undefined = this.parseState.snapshot.tasks.find((t: DocumentParseTask): boolean => t.id === result.taskId);
-    return this.parseState.snapshot.originals.some((o: DocumentOriginal): boolean => o.id === task?.originalId && o.format === DocumentParseFormat.Docx);
   }
   build() {
     Column({ space: 14 }) {
@@ -317,39 +294,6 @@ export struct DocumentParseView {
               })
             }.width('100%')
           }
-          if (this.parseState.snapshot.results.length > 0) { Button(this.resultDetailsOpen ? '收起结果信息' : '查看结果信息').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('parse-result-details').onClick((): void => { this.resultDetailsOpen = !this.resultDetailsOpen; }) }
-          ForEach(this.visibleResults(), (result: DocumentParseResultEnvelope) => {
-            Column({ space: 8 }) {
-              Text('解析服务已完成，结果已保存在本机').fontColor(Theme.ink).fontWeight(FontWeight.Medium).width('100%')
-              if (this.resultDetailsOpen) {
-                Text(`接收于 ${new Date(result.receivedAt).toLocaleString()} · ${this.sizeText(result.bytes)}`).fontColor(Theme.muted).fontSize(12).lineHeight(19).width('100%')
-                Text('内容尚待整理，可打开文件继续处理。').fontColor(Theme.muted).fontSize(12).width('100%')
-              }
-              if (this.isPdfResult(result)) {
-                Button('查看并整理内容').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(!this.parseState.busy)
-                  .onClick((): void => { this.onPreparePdf(result.assetId); })
-              }
-              if (this.isImageResult(result)) {
-                Button('查看图片文字').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('image-result-review-'+result.assetId).enabled(!this.parseState.busy)
-                  .onClick((): void => { this.onPrepareImage(result.assetId); })
-              }
-              if (this.isDocxResult(result)) { Button('查看 Word 内容').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('docx-result-open-'+result.assetId).enabled(!this.parseState.busy).onClick(this.onOpenDocx) }
-            }.width('100%').padding(14).backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
-          }, (result: DocumentParseResultEnvelope): string => result.assetId)
-          if (this.parseState.snapshot.results.length > 3) {
-            Row({ space: 10 }) {
-              Button('上一页').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14 }).enabled(this.resultPage > 0).onClick((): void => { this.resultPage--; })
-              Text(`${this.resultPage + 1} / ${this.resultPageCount()}`).fontSize(13).fontColor(Theme.ink).layoutWeight(1).textAlign(TextAlign.Center)
-              Button('下一页').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14 }).enabled(this.resultPage + 1 < this.resultPageCount()).onClick((): void => { this.resultPage++; })
-            }.width('100%')
-          }
-          Button('选择文件，仅保存原件').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(!this.parseState.busy).onClick((): void => { this.service?.prepare(); })
-          ForEach(this.parseState.snapshot.originals, (original: DocumentOriginal) => {
-            if (!documentIsImage(original.format) && original.format !== DocumentParseFormat.Docx) {
-              DocumentParseOriginalRow({ original: original, service: this.service, refreshEpoch: this.parseState.inputEpoch,
-                submitBlockReason: this.service?.submitReason(original) ?? '解析能力不可用' })
-            }
-          }, (original: DocumentOriginal): string => original.id)
         }.width('100%')
       }
       if (this.copyManager) {
@@ -518,57 +462,6 @@ struct DocumentParseTaskRow {
         }.width('100%').padding(12).backgroundColor(Theme.inputSurface).borderRadius(12)
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 12, bottom: 12 })
-      .border({ width: { bottom: 1 }, color: Theme.line })
-  }
-}
-
-@Component
-struct DocumentParseOriginalRow {
-  @Prop original: DocumentOriginal = new DocumentOriginal();
-  service: DocumentParseService | undefined = undefined;
-  @Prop refreshEpoch: number = 0;
-  @Prop submitBlockReason: string = '解析能力不可用';
-  @State private whole: boolean = false;
-  @State private images: boolean = false;
-  @State private nonSensitive: boolean = false;
-  @State private unknownPrivacy: boolean = false;
-  @State private free: boolean = false;
-  @State private open: boolean = false;
-  private confirmFile(): void {
-    const a: DocumentTestAcknowledgement = new DocumentTestAcknowledgement();
-    a.fullFile = this.whole; a.embeddedImages = this.images; a.nonSensitive = this.nonSensitive; a.privacyUnknown = this.unknownPrivacy; a.freeEligible = this.free;
-    this.service?.confirm(this.original.id, a);
-    this.whole = false; this.images = false; this.nonSensitive = false; this.unknownPrivacy = false; this.free = false;
-  }
-  private sizeText(bytes: number): string {
-    if (bytes <= 0) { return '大小未知'; }
-    if (bytes >= 1024 * 1024) { return `${(bytes / (1024 * 1024)).toFixed(1)} MB`; }
-    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  }
-  build() {
-    Column({ space: 10 }) {
-      Row({ space: 10 }) {
-        Column({ space: 4 }) {
-          Text(this.original.title).fontColor(Theme.ink).fontSize(15).fontWeight(FontWeight.Medium).width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(`${this.original.format} · ${this.sizeText(this.original.bytes)}${this.original.pages > 0 ? ' · ' + String(this.original.pages) + ' 页' : ''}`).fontColor(Theme.muted).fontSize(11).width('100%')
-        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        Button(this.open ? '收起' : '开始解析').fontSize(12).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(10).constraintSize({ minHeight: 44 }).onClick((): void => { this.open = !this.open; })
-      }.width('100%')
-      if (this.open) {
-        Text((this.original.format === DocumentParseFormat.Pdf ? '' : this.original.preflightReason) || '发送前需要确认以下内容。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.whole).onChange((v: boolean): void => { this.whole = v; }).accessibilityText('同意发送完整原文件'); Text('发送完整原文件').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.images).onChange((v: boolean): void => { this.images = v; }).accessibilityText('确认包含全部内嵌图'); Text('包含文件中的全部内嵌图').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.nonSensitive).onChange((v: boolean): void => { this.nonSensitive = v; }).accessibilityText('确认文件为非敏感测试文件'); Text('这是一份有权使用、且不含敏感信息的测试文件').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.unknownPrivacy).onChange((v: boolean): void => { this.unknownPrivacy = v; }).accessibilityText('知悉服务留存条件未知'); Text('我知悉服务的留存与使用条件尚不明确，仍同意本次解析').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.free).onChange((v: boolean): void => { this.free = v; }).accessibilityText('确认本次免费资格'); Text('本次有免费解析资格，不授权收费').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Text('固定使用 vlm 模式，开启表格与行内公式识别；扫描质量仍需以结果为准。').fontColor(Theme.muted).fontSize(11).lineHeight(18).width('100%')
-        Button('确认本件用途').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(this.whole && this.images && this.nonSensitive && this.unknownPrivacy && this.free)
-          .onClick((): void => { this.confirmFile(); })
-        Text(this.submitBlockReason).fontColor(Theme.muted).fontSize(11).width('100%')
-        Button('开始云端解析').fontSize(13).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(this.submitBlockReason === '')
-          .onClick((): void => { this.service?.submit(this.original.id); })
-      }
-    }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 14, bottom: 14 })
       .border({ width: { bottom: 1 }, color: Theme.line })
   }
 }

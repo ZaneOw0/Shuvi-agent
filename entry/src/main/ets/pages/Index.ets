@@ -621,14 +621,6 @@ struct Index {
     if (this.sharedKnowledge === undefined) { return; } this.imageSourceOpen = true;
     try { await this.sharedKnowledge.imageSources.open(document); } catch { this.knowledgeState.message = '图片来源核验或释放未完成'; }
   }
-  private async prepareImage(resultId: string): Promise<void> {
-    await this.consumeParsed(resultId);
-  }
-  private async consumeParsed(id: string): Promise<void> {
-    this.closeParse(); await this.openParsed();
-    try { if (this.parseService !== undefined && this.parsedImports !== undefined) { await this.parsedImports.consume(this.parseService,id); } }
-    catch (error) { this.parsedMessage = error instanceof Error ? error.message : '统一产物未完成，原件/ZIP保留'; }
-  }
   private closeEmbedding(): void { this.embeddingClearEpoch++; this.embeddingService?.clearInput(); this.embeddingOpen = false; this.scroller.scrollEdge(Edge.Top); }
   private async openEmbedding(): Promise<void> {
     this.embeddingOpen = true; this.parseOpen = false; this.scroller.scrollEdge(Edge.Top);
@@ -639,9 +631,6 @@ struct Index {
     const shared: KnowledgeAssembly | undefined = this.sharedKnowledge;
     if (shared === undefined || !shared.repository.ready()) { throw new Error('EMBEDDING_SETTINGS_UNAVAILABLE'); }
     this.embeddingService = shared.embedding;
-  }
-  private async preparePdf(resultId: string): Promise<void> {
-    await this.consumeParsed(resultId);
   }
   private async openPdfJobs(): Promise<void> {
     const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
@@ -1942,9 +1931,7 @@ struct Index {
              if (this.parsePreparation.phase === SettingsPreparationPhase.Ready && this.parseService !== undefined) {
                DocumentParseView({ parseState: this.parseState, service: this.parseService,
                  settingsMode: this.parseSettings, clearEpoch: this.parseState.inputEpoch,
-                   onClose: (): void => { this.closeParse(); }, onPreparePdf: (resultId: string): void => { this.preparePdf(resultId); },
-                    onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); },
-                    onKeys: (): void => { this.openApiKeys(); } })
+                 onClose: (): void => { this.closeParse(); }, onKeys: (): void => { this.openApiKeys(); } })
              } else {
                SettingsPreparationView({ title: '解析引擎', preparation: this.parsePreparation,
                  onBack: (): void => { this.closeParse(); }, onRetry: (): void => { void this.openParse(this.parseSettings); } })
