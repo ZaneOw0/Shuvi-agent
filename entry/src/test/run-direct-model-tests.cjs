@@ -23,6 +23,9 @@ const nativeModules = {
       async encodeToString(bytes) { return Buffer.from(bytes).toString('base64'); }
     } },
   '@ohos.security.asset': {},
+  // Key stores are only constructed in assembly tests; their Asset calls are exercised with explicit overrides.
+  '@kit.AssetStoreKit': { asset: {} },
+  '@kit.ArkTS': { util: { TextEncoder: Encoder, TextDecoder: Decoder } },
   '@kit.BasicServicesKit': {},
   '@ohos.app.ability.common': {},
   '@ohos.data.relationalStore': {
@@ -1622,7 +1625,7 @@ function writableRdb() {
 }
 function liveSearchHarness(options = {}, existing) {
   const dbs = existing || { search: writableRdb(), chat: writableRdb() };
-  const trace = { tools: 0, models: 0, requests: [], profiles: [], disconnects: 0 };
+  const trace = { tools: 0, requests: [], profiles: [], disconnects: 0, chatCancels: 0 };
   const mcp = load(path.join(root, 'modules/harmony_agent/mcp_client/Index.ets'));
   const opener = { open(config) { return (config.name === 'shuvi_search_execution_v1.db' ? dbs.search : dbs.chat).opener.open(config); } };
   class Manager {
@@ -1651,131 +1654,132 @@ function liveSearchHarness(options = {}, existing) {
     async disconnectAll() { trace.disconnects++; }
     async unregisterServer() {}
   }
-  class ModelClient {
-    start(request) {
-      trace.models++; trace.body = JSON.parse(request.body);
-      if (options.modelGate) return { result: options.modelGate.promise, cancel() {} };
-      return { result: Promise.resolve({ statusCode: options.modelStatus || 200, body: JSON.stringify({
-        object: 'chat.completion', model: 'deepseek-flash', choices: [{ index: 0, message: { role: 'assistant',
-          content: 'See the official documentation [1].' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 180, completion_tokens: 20, total_tokens: 200 } }) }), cancel() {} };
-    }
-  }
-  const assembly = load(path.join(services, 'SearchRuntimeAssembly.ets'), {
-    '@harmony_agent/mcp-client': { ...mcp, McpClientManager: Manager }
-  });
-  const chat = load(path.join(services, 'ChatRuntimeAssembly.ets'), { './DeepSeekHttpClient': { ArkTsDeepSeekHttpClient: ModelClient } });
+  // Default: replace the in-app Tavily manager with a scripted tool. `direct` keeps the real manager and fakes HTTPS only.
+  const assembly = options.direct ? load(path.join(services, 'SearchRuntimeAssembly.ets')) :
+    load(path.join(services, 'SearchRuntimeAssembly.ets'), { './DirectTavilySearch': { DirectTavilySearchManager: Manager } });
   const ui = new RuntimeSearchSession(); ui.onForeground();
-  const factory = new assembly.SearchRuntimeFactory(opener, true);
-  const answerFactory = new chat.ChatRuntimeFactory(opener, true, ui.context);
-  return { ui, factory, answerFactory, trace, dbs, assembly, async start() {
-    await ui.start(factory, answerFactory, new TextEncoder().encode('test-only-key'));
-    assert.equal(ui.snapshot().lifecycle, ShuviRuntimeState.READY, ui.snapshot().message);
-  } };
+  trace.keyLoads = 0; trace.erased = [];
+  ui.prepare(async () => { trace.chatCancels++; },
+    options.loadKey ? async () => { trace.keyLoads++; return new TextEncoder().encode('test-only-key'); } : undefined);
+  // `eraser` stands in for deleting the database file: the stored row is gone and the next open starts empty.
+  const eraser = options.eraser ? { async erase(config) { trace.erased.push(config.name); dbs.search.envelope = undefined; } } : undefined;
+  const factory = options.direct ? new assembly.SearchRuntimeFactory(opener, true, options.direct.http, options.direct.keys, eraser) :
+    new assembly.SearchRuntimeFactory(opener, true, undefined, undefined, eraser);
+  if (options.storeLimitBytes) factory.storeLimitBytes = options.storeLimitBytes;
+  return { ui, factory, trace, dbs, assembly,
+    async start() {
+      assert.equal(await ui.activate(factory, new TextEncoder().encode('test-only-key')), true, ui.snapshot().message);
+      assert.equal(ui.snapshot().lifecycle, ShuviRuntimeState.READY); assert.equal(ui.snapshot().consent, true);
+    },
+    /** One model turn that calls web_search once; returns the parsed tool reply. */
+    async search(query = 'same query') {
+      ui.begin('用户问题', 'turn-' + Math.random(), Date.now() + 60000);
+      return JSON.parse(await ui.invoke('web_search', JSON.stringify({ query }), 'call-1'));
+    } };
 }
 async function waitSearch(ui, predicate) {
   for (let i = 0; i < 100; i++) { if (predicate(ui.snapshot())) return; await new Promise(resolve => setTimeout(resolve, 2)); }
   assert.fail('Search state did not arrive: ' + JSON.stringify(ui.snapshot()));
 }
-async function authorizeSearch(h) {
-  assert.equal(await h.ui.send('same query'), true);
-  await waitSearch(h.ui, view => view.preview !== undefined);
-  assert.equal(h.trace.tools, 0); assert.equal(h.trace.models, 0);
-  assert.equal(h.ui.snapshot().preview.query, 'same query');
-  await h.ui.decide(true);
-}
-test('search UX: actual grant, one MCP call, durable pending CNY bill, then real model answer', async () => {
+test('web_search tool: an authorized conversation runs one durable search per call and may search again', async () => {
   const h = liveSearchHarness(); await h.start();
   try {
-    assert.equal(h.trace.profiles[0].retryToolCallOnExpiredSession, false);
-    await authorizeSearch(h); await waitSearch(h.ui, view => !view.busy);
-    assert.equal(h.ui.snapshot().stage, 'complete', h.ui.snapshot().message);
-    assert.equal(h.trace.tools, 1); assert.equal(h.trace.models, 1);
-    assert.equal(h.ui.snapshot().sources.length, 1); assert.match(h.ui.snapshot().answer, /\[1\]/);
-    assert.match(h.trace.body.messages[1].content, /Declarative UI/);
-    assert.equal(h.trace.body.tools, undefined);
+    assert.equal(h.trace.profiles[0].endpoint, 'https://api.tavily.com/search');
+    assert.equal(h.trace.profiles[0].allowInsecureHttp, false);
+    assert.deepEqual(h.ui.names(), ['web_search']); assert.equal(h.ui.definitions()[0].function.name, 'web_search');
+    assert.match(h.ui.policy(), /\[W1\]/);
+    const reply = await h.search('ArkUI 官方文档');
+    assert.equal(reply.status, 'ok'); assert.deepEqual(reply.results.map(r => r.source), ['W1']);
+    assert.equal(reply.results[0].url, 'https://developer.huawei.com/consumer/cn/arkui');
+    assert.equal(h.trace.tools, 1); assert.deepEqual(h.trace.requests[0], { query: 'ArkUI 官方文档', maxResults: 3 });
     const payload = JSON.parse(h.dbs.search.envelope.payloadJson);
     assert.equal(payload.operations.length, 1);
     assert.equal(payload.operations[0].pendingInvoice.currency, 'CNY');
     assert.equal(payload.operations[0].pendingInvoice.accountScope, 'shuvi-dev-tavily');
     assert.equal(payload.operations[0].invoice, undefined);
     assert.equal(payload.operations[0].state, invoiceCore.OperationJournalState.RESULT_RECORDED);
-    assert.equal(await h.ui.send('second query'), false); assert.equal(h.trace.tools, 1);
+    assert.equal(h.ui.snapshot().sources.length, 1); assert.equal(h.ui.snapshot().query, 'ArkUI 官方文档');
+    const answer = await h.ui.finish('官方文档从这里开始 [W1]。');
+    assert.match(answer, /网页来源：\n\[W1\] Official documentation\nhttps:\/\/developer\.huawei\.com/);
+    assert.equal((await h.search('second query')).status, 'ok'); assert.equal(h.trace.tools, 2);
+    assert.equal(JSON.parse(h.dbs.search.envelope.payloadJson).operations.length, 2);
   } finally { await h.ui.stop(); }
   const reopened = liveSearchHarness({}, h.dbs); await reopened.start();
-  assert.equal(reopened.ui.snapshot().allowance, false);
-  assert.equal(await reopened.ui.send('same query'), false); assert.equal(reopened.trace.tools, 0);
+  assert.equal((await reopened.search()).status, 'ok'); assert.equal(reopened.trace.tools, 1);
   await reopened.ui.stop();
 });
-test('search deny never calls provider and does not consume dispatch allowance', async () => {
-  const h = liveSearchHarness(); await h.start();
-  let denialEvidence;
-  const authorize = h.ui.search.authorize.bind(h.ui.search);
-  h.ui.search.authorize = async (...args) => {
-    try { const receipt = await authorize(...args); denialEvidence = receipt; return receipt; }
-    catch (error) { denialEvidence = String(error); throw error; }
-  };
-  try {
-    await h.ui.send('same query'); await waitSearch(h.ui, v => !!v.preview); await h.ui.decide(false);
-    await waitSearch(h.ui, v => !v.busy);
-    assert.equal(h.trace.tools, 0); assert.equal(h.trace.models, 0);
-    assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.READY, JSON.stringify(denialEvidence));
-    assert.equal(h.ui.snapshot().stage, 'denied');
-    assert.equal(h.factory.available(), true);
-  } finally { await h.ui.stop(); }
+test('without authorization the tool is neither offered nor callable', async () => {
+  const h = liveSearchHarness();
+  assert.deepEqual(h.ui.names(), []); assert.deepEqual(h.ui.definitions(), []); assert.match(h.ui.policy(), /未开启/);
+  await assert.rejects(h.ui.invoke('web_search', '{"query":"q"}', 'call'), /SEARCH_DENIED/);
+  await h.start(); await h.ui.deactivate();
+  assert.deepEqual(h.ui.names(), []); assert.equal(h.ui.snapshot().consent, false);
+  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.STOPPED);
+  await assert.rejects(h.ui.invoke('web_search', '{"query":"q"}', 'call'), /SEARCH_DENIED/);
+  assert.equal(h.trace.tools, 0);
 });
-test('expired or missing authorization preview cannot be approved', async () => {
+test('a mismatched or missing authorization preview is never approved', async () => {
   const h = liveSearchHarness(); await h.start();
   try {
-    await h.ui.send('same query'); await waitSearch(h.ui, v => !!v.preview);
-    h.factory.previews.clear(); await h.ui.decide(true);
-    assert.equal(h.trace.tools, 0); assert.equal(h.ui.snapshot().busy, false);
+    h.factory.previews.resolve = () => undefined;
+    assert.equal((await h.search()).status, 'failed'); assert.equal(h.trace.tools, 0);
   } finally { await h.ui.stop(); }
 });
-test('empty actual sources end search without calling the model, retaining unknown billing', async () => {
+test('per-turn limits, odd arguments and a cleared conversation stop searching', async () => {
+  const h = liveSearchHarness(); await h.start();
+  try {
+    h.ui.begin('q', 'turn-1', Date.now() + 60000);
+    for (const args of ['{}', '{"query":"  "}', '{"query":"q","maxResults":5}', 'not json', JSON.stringify({ query: 'x'.repeat(201) })]) {
+      assert.equal(JSON.parse(await h.ui.invoke('web_search', args, 'c')).status, 'invalid_query', args);
+    }
+    assert.equal(JSON.parse(await h.ui.invoke('web_search', '{"query":"one"}', 'c1')).status, 'ok');
+    assert.equal(JSON.parse(await h.ui.invoke('web_search', '{"query":"two"}', 'c2')).status, 'ok');
+    assert.equal(JSON.parse(await h.ui.invoke('web_search', '{"query":"three"}', 'c3')).status, 'budget_exceeded');
+    assert.equal(h.trace.tools, 2);
+    h.ui.begin('q', 'turn-2', Date.now() + 1000);
+    assert.equal(JSON.parse(await h.ui.invoke('web_search', '{"query":"late"}', 'c4')).status, 'budget_exceeded');
+    h.ui.clearConversation(); await waitSearch(h.ui, view => view.consent === false && view.lifecycle === ShuviRuntimeState.STOPPED);
+    assert.deepEqual(h.ui.names(), []); assert.equal(h.trace.tools, 2);
+  } finally { await h.ui.stop(); }
+});
+test('empty sources are reported as empty and keep unknown billing pending', async () => {
   const h = liveSearchHarness({ empty: true, unknownUsage: true }); await h.start();
   try {
-    await authorizeSearch(h); await waitSearch(h.ui, v => !v.busy);
-    assert.equal(h.ui.snapshot().stage, 'empty'); assert.equal(h.trace.models, 0);
+    const reply = await h.search(); assert.equal(reply.status, 'empty'); assert.deepEqual(reply.results, []);
     assert.equal(JSON.parse(h.dbs.search.envelope.payloadJson).operations[0].pendingInvoice.usageState, 'unknown');
+    assert.equal(await h.ui.finish('没有找到。'), '没有找到。');
   } finally { await h.ui.stop(); }
 });
-test('model failure retains real sources; explicit retry answers without another search', async () => {
-  const options = { modelStatus: 401 }; const h = liveSearchHarness(options); await h.start();
-  try {
-    await authorizeSearch(h); await waitSearch(h.ui, v => !v.busy);
-    assert.equal(h.ui.snapshot().stage, 'answerFailed'); assert.equal(h.ui.snapshot().sources.length, 1);
-    options.modelStatus = 200; await h.ui.retryAnswer(); await waitSearch(h.ui, v => !v.busy);
-    assert.equal(h.ui.snapshot().stage, 'complete'); assert.equal(h.trace.tools, 1); assert.equal(h.trace.models, 2);
-  } finally { await h.ui.stop(); }
-});
-test('background stops search, discards late results and keeps persistent trial occupied', async () => {
+test('background stops the search and discards the late result; a reopened session may search again', async () => {
   const gate = deferred(); const h = liveSearchHarness({ toolGate: gate }); await h.start();
-  await authorizeSearch(h); await waitSearch(h.ui, () => h.trace.tools === 1);
-  await h.ui.onBackground(); gate.resolve(); await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal(h.ui.snapshot().sources.length, 0); assert.equal(h.trace.models, 0);
-  assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.STOPPED);
+  const pending = h.search(); await waitSearch(h.ui, () => h.trace.tools === 1);
+  await h.ui.onBackground(); gate.resolve();
+  assert.equal((await pending).status, 'failed'); await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(h.ui.snapshot().sources.length, 0); assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.STOPPED);
   h.ui.onForeground(); assert.equal(h.trace.tools, 1);
-  const reopen = liveSearchHarness({}, h.dbs); await reopen.start(); assert.equal(reopen.ui.snapshot().allowance, false); await reopen.ui.stop();
+  const reopen = liveSearchHarness({}, h.dbs); await reopen.start();
+  assert.equal(reopen.trace.tools, 0, 'nothing is re-sent on reopen'); await reopen.ui.stop();
 });
-test('bad result never becomes a source or answer; no automatic network retry', async () => {
+test('bad result never becomes a source; no automatic network retry', async () => {
   const h = liveSearchHarness({ badResult: true }); await h.start();
   try {
-    await authorizeSearch(h); await waitSearch(h.ui, () => h.trace.tools === 1);
-    await new Promise(resolve => setTimeout(resolve, 10));
-    assert.equal(h.ui.snapshot().sources.length, 0); assert.equal(h.trace.models, 0);
-    assert.equal(h.ui.snapshot().allowance, false);
-    assert.equal(h.ui.snapshot().busy, false);
-    assert.equal(h.ui.snapshot().stage, 'failed');
+    assert.equal((await h.search()).status, 'failed');
+    assert.equal(h.ui.snapshot().sources.length, 0); assert.equal(h.trace.tools, 1, 'no automatic retry');
   } finally { await h.ui.stop(); }
 });
-test('dispatch persistence failure prevents provider call', async () => {
+test('dispatch persistence failure prevents the provider call', async () => {
   const h = liveSearchHarness(); await h.start();
   try {
-    await h.ui.send('same query'); await waitSearch(h.ui, v => !!v.preview);
-    h.dbs.search.failWrites = true; await h.ui.decide(true);
-    assert.equal(h.trace.tools, 0); assert.equal(h.trace.models, 0);
-  } finally { h.dbs.search.failWrites = false; await h.ui.stop(); }
+    const authorize = h.ui.search.authorize.bind(h.ui.search);
+    h.ui.search.authorize = async (...args) => { h.dbs.search.failWrites = true; return authorize(...args); };
+    assert.equal((await h.search()).status, 'failed'); assert.equal(h.trace.tools, 0);
+  } finally {
+    h.dbs.search.failWrites = false;
+    // A Runtime that could not persist may refuse a clean shutdown; the session then reports BLOCKED, as before.
+    try { await h.ui.stop(); } catch (error) {
+      assert.match(String(error), /SEARCH_CLOSE_UNCONFIRMED/); assert.equal(h.ui.snapshot().lifecycle, ShuviRuntimeState.BLOCKED);
+    }
+  }
 });
 test('search URL and model context reject unsafe sources and mismatched questions', () => {
   for (const url of ['file:///etc/passwd', 'https://user:pass@example.com/', 'http://127.0.0.1/', 'http://[::1]/',
@@ -1794,41 +1798,46 @@ test('search URL and model context reject unsafe sources and mismatched question
   assert.equal(searchSupport.validSearchCitations('answer without sources', 1), false);
 });
 
-test('concurrent approval clicks cannot dispatch a second billed request', async () => {
-  const h = liveSearchHarness(); await h.start();
+test('a second call while one is in flight is refused instead of dispatching again', async () => {
+  const gate = deferred(); const h = liveSearchHarness({ toolGate: gate }); await h.start();
   try {
-    await h.ui.send('same query'); await waitSearch(h.ui, v => !!v.preview);
-    await Promise.all([h.ui.decide(true), h.ui.decide(true), h.ui.decide(true)]);
-    await waitSearch(h.ui, v => !v.busy); assert.equal(h.trace.tools, 1); assert.equal(h.trace.models, 1);
+    const first = h.search(); await waitSearch(h.ui, () => h.trace.tools === 1);
+    await assert.rejects(h.ui.invoke('web_search', '{"query":"again"}', 'c2'), /SEARCH_BUSY/);
+    gate.resolve(); assert.equal((await first).status, 'ok'); assert.equal(h.trace.tools, 1);
   } finally { await h.ui.stop(); }
 });
-test('cancel before approval performs no network search and keeps allowance after reopen', async () => {
-  const h = liveSearchHarness(); await h.start();
-  await h.ui.send('same query'); await waitSearch(h.ui, v => !!v.preview); await h.ui.stop();
-  assert.equal(h.trace.tools, 0); assert.equal(h.trace.models, 0);
-  const reopened = liveSearchHarness({}, h.dbs); await reopened.start();
-  assert.equal(reopened.ui.snapshot().allowance, true); await reopened.ui.stop();
-});
-test('tool failure ends waiting promptly without fake success, free settlement or retry', async () => {
-  const h = liveSearchHarness({ failTool: true }); await h.start();
-  await authorizeSearch(h); await waitSearch(h.ui, v => v.lifecycle === ShuviRuntimeState.STOPPED);
-  assert.equal(h.ui.snapshot().stage, 'failed'); assert.equal(h.ui.snapshot().sources.length, 0);
-  assert.equal(h.trace.tools, 1); assert.equal(h.trace.models, 0);
-  const operation = JSON.parse(h.dbs.search.envelope.payloadJson).operations[0];
-  assert.equal(operation.invoice, undefined); assert.equal(operation.pendingInvoice, undefined);
-  const reopened = liveSearchHarness({}, h.dbs); await reopened.start();
-  assert.equal(reopened.ui.snapshot().allowance, false); await reopened.ui.stop();
-});
-test('search result write failure exposes neither source nor answer and retains dispatch evidence', async () => {
+test('a cancelled model turn ends the in-flight call without a retry', async () => {
   const gate = deferred(); const h = liveSearchHarness({ toolGate: gate }); await h.start();
-  await authorizeSearch(h); await waitSearch(h.ui, () => h.trace.tools === 1);
-  h.dbs.search.failWrites = true; gate.resolve(); await waitSearch(h.ui, v => v.lifecycle === ShuviRuntimeState.STOPPED);
-  assert.equal(h.ui.snapshot().sources.length, 0); assert.equal(h.trace.models, 0);
-  h.dbs.search.failWrites = false;
-  const reopened = liveSearchHarness({}, h.dbs); await reopened.start();
-  assert.equal(reopened.ui.snapshot().allowance, false); await reopened.ui.stop();
+  try {
+    const pending = h.search(); await waitSearch(h.ui, () => h.trace.tools === 1);
+    await h.ui.cancel(); assert.equal((await pending).status, 'failed');
+    gate.resolve(); await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(h.trace.tools, 1); assert.equal(h.ui.snapshot().sources.length, 0);
+    await h.ui.cancelCurrent(); assert.equal(h.trace.chatCancels, 1);
+  } finally { await h.ui.stop(); }
 });
-test('search quota is enforced before dispatch even when two tasks already awaited consent', async () => {
+test('tool failure ends the call promptly without fake success, free settlement or retry', async () => {
+  const h = liveSearchHarness({ failTool: true }); await h.start();
+  try {
+    assert.equal((await h.search()).status, 'failed');
+    assert.equal(h.ui.snapshot().sources.length, 0); assert.equal(h.trace.tools, 1);
+    const operation = JSON.parse(h.dbs.search.envelope.payloadJson).operations[0];
+    assert.equal(operation.invoice, undefined); assert.equal(operation.pendingInvoice, undefined);
+  } finally { await h.ui.stop(); }
+});
+test('result write failure exposes no source, withdraws authorization and keeps dispatch evidence', async () => {
+  const gate = deferred(); const h = liveSearchHarness({ toolGate: gate }); await h.start();
+  const pending = h.search(); await waitSearch(h.ui, () => h.trace.tools === 1);
+  h.dbs.search.failWrites = true; gate.resolve();
+  assert.equal((await pending).status, 'failed');
+  await waitSearch(h.ui, view => view.consent === false && view.lifecycle === ShuviRuntimeState.STOPPED);
+  assert.equal(h.ui.snapshot().sources.length, 0); assert.match(h.ui.snapshot().message, /未能可靠保存/);
+  h.dbs.search.failWrites = false;
+  assert.equal(JSON.parse(h.dbs.search.envelope.payloadJson).operations.length, 1, 'dispatch evidence is kept');
+  const reopened = liveSearchHarness({}, h.dbs); await reopened.start();
+  assert.equal(reopened.trace.tools, 0); await reopened.ui.stop();
+});
+test('two tasks that each received consent dispatch exactly once each', async () => {
   const h = liveSearchHarness(); const session = h.factory.create(); await session.start(new TextEncoder().encode('test-only-key'));
   const prompts = [];
   try {
@@ -1839,8 +1848,9 @@ test('search quota is enforced before dispatch even when two tasks already await
     assert.equal(prompts.length, 2);
     await session.authorize(prompts[0], true);
     for (let i = 0; i < 100 && h.trace.tools === 0; i++) await new Promise(r => setTimeout(r, 2));
-    try { await session.authorize(prompts[1], true); } catch { /* Durable allowance rejects the queued task. */ }
-    assert.equal(h.trace.tools, 1);
+    await session.authorize(prompts[1], true);
+    for (let i = 0; i < 100 && h.trace.tools < 2; i++) await new Promise(r => setTimeout(r, 2));
+    await new Promise(r => setTimeout(r, 10)); assert.equal(h.trace.tools, 2);
   } finally { await session.stop(); }
 });
 
@@ -2757,8 +2767,11 @@ function coordinatorAssistantStubs(trace = {}) {
     ChatPurpose
   };
 }
-test('assistant coordinator consumes one key for a single model and composes an ungranted knowledge tool', async () => {
-  const trace = { chatKey:undefined, ragKey:undefined, chatStopped:0, ragStopped:0 }; let chatState = ShuviRuntimeState.IDLE;
+test('assistant coordinator consumes one key for a single model and composes ungranted knowledge and web-search tools', async () => {
+  const trace = { chatKey:undefined, ragKey:undefined, chatStopped:0, ragStopped:0, searchStopped:0 }; let chatState = ShuviRuntimeState.IDLE;
+  const fakeSearchSession = { prepare(cancelChat) { trace.searchCancel = cancelChat; }, async stop() { trace.searchStopped++; },
+    async activate(factory, key) { trace.searchFactory = factory; trace.searchKey = key.slice(); key.fill(0); return true; },
+    async deactivate() { trace.searchDeactivated = true; } };
   const assistantContext = {};
   const fakeKnowledgeSession = { answerContext:{},
     prepare(search, executor) { trace.knowledgeSearch = search; trace.knowledgeExecutor = executor; },
@@ -2775,6 +2788,8 @@ test('assistant coordinator consumes one key for a single model and composes an 
       snapshot() { return {lifecycle:chatState}; }, async stop() { trace.chatStopped++; }
     }}},
     './RuntimeKnowledgeService': { RuntimeKnowledgeService:{session:fakeKnowledgeSession} },
+    './RuntimeSearchService': { RuntimeSearchService:{session:fakeSearchSession} },
+    './SearchRuntimeAssembly': { searchRuntimeFactory(context, debug) { return { kind:'search-factory', context, debug }; } },
     '../../knowledge/infra/KnowledgeAssembly': { KnowledgeAssembly:{forContext() { return { createAgentSearch() { return { kind: 'knowledge-search' }; } }; }} },
     './KnowledgeAgentRuntime': { KnowledgeAgentRuntime: class { constructor(opener, search, permitted) { Object.assign(this, { opener, search, permitted }); } } },
     '../../knowledge/infra/KnowledgeRagSessionAdapter': { KnowledgeRagSessionAdapter:class { constructor(assembly) { this.assembly=assembly; } } }
@@ -2783,7 +2798,14 @@ test('assistant coordinator consumes one key for a single model and composes an 
   const hostContext = {};
   await coordinator.RuntimeAssistantCoordinator.start(hostContext, true, key);
   assert(key.every(value => value === 0)); assert.equal(trace.ragKey, undefined);
-  assert.equal(trace.knowledgeSearch.kind, 'knowledge-search'); assert.equal(trace.chatFactory.tools.extra, fakeKnowledgeSession);
+  assert.equal(trace.knowledgeSearch.kind, 'knowledge-search');
+  assert.deepEqual(trace.chatFactory.tools.extra.parts, [fakeKnowledgeSession, fakeSearchSession]);
+  assert.equal(typeof trace.searchCancel, 'function', 'the search tool can cancel the assistant turn');
+  const searchKey = new TextEncoder().encode('search-session-key');
+  assert.equal(await coordinator.RuntimeAssistantCoordinator.enableSearch(hostContext, true, searchKey), true);
+  assert.equal(trace.searchFactory.kind, 'search-factory'); assert.equal(trace.searchFactory.context, hostContext);
+  assert(searchKey.every(value => value === 0)); assert.equal(new TextDecoder().decode(trace.searchKey), 'search-session-key');
+  await coordinator.RuntimeAssistantCoordinator.disableSearch(); assert.equal(trace.searchDeactivated, true);
   assert.equal(new TextDecoder().decode(trace.chatKey), 'one-session-key');
   assert.equal(trace.chatFactory.purpose, ChatPurpose.ASSISTANT);
   // Tool mode: the prompt port and the turn policy both wrap the session's one AssistantContext.
@@ -2794,6 +2816,7 @@ test('assistant coordinator consumes one key for a single model and composes an 
   assert.equal(trace.chatFactory.debug, true); assert.equal(trace.calendarFactories, 1);
   assert.equal(trace.calendarFactory.opener, trace.chatFactory.opener); assert.equal(trace.chatFactory.opener.context, hostContext);
   await coordinator.RuntimeAssistantCoordinator.stop(); assert.equal(trace.chatStopped,1); assert.equal(trace.ragStopped,1);
+  assert.equal(trace.searchStopped,1);
 });
 test('assistant coordinator does not retain or prepare a RAG key when assistant startup fails', async () => {
   let prepared = 0; const fakeKnowledgeSession = { answerContext:{}, snapshot() { return {lifecycle:ShuviRuntimeState.IDLE}; },
@@ -4239,6 +4262,47 @@ test('conversation store keeps working in memory when the local store cannot ope
   await store.flush(); assert.equal(memory.turns().length, 1);
 });
 
+test('conversation store keeps sent pictures as named local copies: restored, missing, damaged and deleted', async () => {
+  const { AssistantMemory } = load(path.join(services, '../conversation/AssistantMemory.ets'));
+  const { AssistantConversations, validChatImageName } = load(path.join(services, '../conversation/AssistantConversations.ets'));
+  const rows = new Map();
+  const port = { async open() {}, async close() {},
+    async list() { return [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+      .map(r => ({ id: r.id, title: r.title, createdAt: r.createdAt, updatedAt: r.updatedAt })); },
+    async load(id) { const row = rows.get(id); return row === undefined ? undefined : { ...row }; },
+    async save(record) { rows.set(record.id, { ...record }); }, async remove(id) { rows.delete(id); } };
+  const a = 'chat-image-11111111-1111-4111-8111-111111111111.jpg'; const b = 'chat-image-22222222-2222-4222-8222-222222222222.png';
+  const files = new Set([a, b]); const removed = []; const asked = [];
+  const images = { uri(name) { asked.push(name); return files.has(name) ? 'file://app/chat_images/' + name : undefined; },
+    remove(names) { for (const name of names) { removed.push(name); files.delete(name); } } };
+  assert.equal(validChatImageName(a), true); assert.equal(validChatImageName('../' + a), false);
+  assert.equal(validChatImageName('chat-image-x.jpg'), false); assert.equal(validChatImageName(a + '.tmp'), false);
+  let now = 1; let n = 0;
+  const memory = new AssistantMemory(); const store = new AssistantConversations(memory, () => ++now, () => 'conv-' + (++n));
+  store.useImages(images); await store.open(port);
+  store.saveMessages([{ id: 'm1', isUser: true, text: '看图', image: 'file://app/chat_images/' + a, imageFile: a },
+    { id: 'm2', isUser: true, text: '', image: 'file://media/Photo/9/IMG_9.jpg' }]);
+  await store.flush();
+  const json = rows.get('conv-1').messagesJson;
+  assert.ok(json.includes(a)); assert.doesNotMatch(json, /file:\/\/|IMG_9/, 'only the kept file name is stored, never a URI');
+  store.startNew(); store.saveMessages([{ id: 'x', isUser: true, text: '另一段', image: 'file://app/chat_images/' + b, imageFile: b }]);
+  await store.flush();
+  const back = await store.switchTo('conv-1');
+  assert.equal(back[0].image, 'file://app/chat_images/' + a); assert.equal(back[0].imageFile, a); assert.equal(back[0].imageMissing, undefined);
+  assert.equal(back[1].imageMissing, true, 'a picture sent without a kept copy keeps the placeholder'); assert.equal(back[1].image, undefined);
+  files.delete(a); await store.switchTo('conv-2');
+  const gone = await store.switchTo('conv-1');
+  assert.equal(gone[0].imageMissing, true, 'a kept copy that is gone shows the placeholder'); assert.equal(gone[0].image, undefined);
+  rows.set('conv-3', { id: 'conv-3', title: '坏记录', createdAt: 1, updatedAt: 0, memoryJson: '',
+    messagesJson: JSON.stringify([{ id: 'd', isUser: true, text: '', image: true, imageFile: '../../evil.jpg' }]) });
+  const damaged = await store.switchTo('conv-3');
+  assert.equal(damaged[0].imageMissing, true); assert.equal(asked.includes('../../evil.jpg'), false, 'a damaged name is never resolved');
+  await store.switchTo('conv-1');
+  assert.equal(await store.remove('conv-2'), false); assert.deepEqual(removed, [b], 'deleting another conversation deletes its picture');
+  assert.equal(await store.remove('conv-1'), true); assert.deepEqual(removed, [b, a], 'deleting the current conversation deletes its picture');
+  assert.equal(rows.has('conv-1') || rows.has('conv-2'), false);
+});
+
 test('chat journal keeps accepting turns past 128 records by retiring the oldest finished records', async () => {
   const turns = 135;
   const h = toolHarness(Array.from({ length: turns }, (_, i) => ({ content: '答' + i })), { });
@@ -4256,4 +4320,7 @@ test('chat journal keeps accepting turns past 128 records by retiring the oldest
   } finally { await h.ui.stop(); }
 });
 
+require('./tavily-direct-tests.cjs')({ load, root, services, digest, deferred, liveSearchHarness, waitSearch,
+  setNativeFactory: factory => { nativeFactory = factory; }, loadDeepSeekKeyStore, ShuviRuntimeState,
+  assistantHarness, fakeDocuments, toolCall, waitChat, assertValidToolHistory });
 require('./l2-tool-tests.cjs')({ load, root, services, writableRdb, assistantHarness, fakeDocuments, toolCall, waitChat, assertValidToolHistory });

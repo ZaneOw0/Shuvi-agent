@@ -1,5 +1,7 @@
 # Shuvi 联网搜索 MCP Server
 
+> 2026-10-30：应用改为手机直连 Tavily（Key 存在手机，见 [spec 03 §6.12](../../specs/03-联网搜索.md)），不再连接本服务和 8787 转发。本服务保留作参考和本机验证，下文为此前记录。
+
 > 2026-10-24：debug ArkUI → Runtime 授权 → MCP 搜索 → 来源持久化 → 模型回答已接线；用户确认主要模拟器交互符合预期，设备证据待归档，限一次未核账派发。使用 `npm.cmd --prefix services/search-mcp start` 启动正常服务；`start:discovery` 不执行搜索。勿额外运行收费 smoke；步骤和证据见 [spec 03 §6.11](../../specs/03-联网搜索.md)。以下日期记录为此前阶段结果。
 
 > v0.1，本机服务端首轮验收已完成，范围见 spec 第 6 节。独立 Node.js 服务，不打包进鸿蒙 HAP。

@@ -5,14 +5,15 @@ import { AgentApplicationBackend, AgentApplicationBackendConfig, AgentFrontendTa
   AgentRuntimeFacade, ProductionAgentRuntimeConfig, ProductionAgentRuntimePorts, RuntimeClockPort, RuntimeIdGeneratorPort,
   SingleAgentHostPorts, SingleAgentHostResourcePort, SingleAgentHostRuntimeFactoryPort, ToolRegistry } from '@harmony_agent/agent-runtime';
 import { RuntimeExecutionRecoveryBridgeConfig } from '@harmony_agent/agent-storage';
-import { McpClientManager, McpManagerOptions, McpServerProfile } from '@harmony_agent/mcp-client';
+import { McpClientManager, McpManagerOptions } from '@harmony_agent/mcp-client';
 import { ConnectorClockPort, McpAgentAdapter, McpClientManagerToolPort, McpInvocationPolicyBridge, McpProviderRegistry,
   McpReadOnlyToolPolicyRegistry, SHUVI_WEB_SEARCH_TOOL_ID, ShuviWebSearchMcpClientToolPort, ShuviWebSearchMcpConfig,
   ShuviWebSearchMcpHostResource, ShuviWebSearchToolInvocationPreparer, ShuviWebSearchToolPreparationConfig,
   createMcpProductionAgentRuntime } from '@harmony_agent/agent-connectors';
 import { AgentHostDigest } from './AgentHostDigest';
 import { AgentRdbOpenPort, NativeAgentRdbOpen } from './AgentRdbResources';
-import { SearchExecutionResource } from './SearchExecutionResource';
+import { NativeSearchStoreEraser, SEARCH_STORE_SOFT_LIMIT_BYTES, SearchExecutionResource,
+  SearchStoreEraserPort } from './SearchExecutionResource';
 import { SearchUsageReceipts, SearchUsageMcpAdapter } from './SearchUsageReceipts';
 import { SearchPendingInvoice } from './SearchPendingInvoice';
 import { PreviewingSearchPreparer, SearchAuthorizationPreviews } from './SearchAuthorizationPreview';
@@ -22,6 +23,9 @@ import { ArkTsDeepSeekHttpClient } from './DeepSeekHttpClient';
 import { ShuviRuntimeSession, ShuviRuntimeSessionFactory, ShuviRuntimeSessionPort, ShuviSessionResources } from './ShuviRuntimeSession';
 import { UnsettledSearchAccounting } from './RuntimeStartupAssembly';
 import { ExplicitSearchPlanner, SEARCH_ACCOUNT, SEARCH_CURRENCY, SEARCH_POLICY, SEARCH_RESERVATION } from './SearchTaskSupport';
+import { CredentialKeySource, TavilyKeyService } from './DeepSeekCredentialStore';
+import { DirectTavilySearchManager } from './DirectTavilySearch';
+import { ArkTsTavilyHttpClient, TAVILY_SEARCH_ENDPOINT, TavilyHttpClientPort } from './TavilyHttpClient';
 
 class SearchClock implements RuntimeClockPort, ConnectorClockPort {
   nowMs(): number { return Date.now(); }
@@ -39,18 +43,6 @@ class SearchResources implements ShuviSessionResources {
   memory: SingleAgentHostResourcePort = new NoSearchMemory();
   execution: SearchExecutionResource;
   constructor(execution: SearchExecutionResource) { this.execution = execution; }
-}
-/** Never retry a potentially billed tool call when its MCP session expires. */
-export class SingleAttemptSearchManager extends McpClientManager {
-  registerServer(profile: McpServerProfile): void {
-    const copy: McpServerProfile = {
-      id: profile.id, endpoint: profile.endpoint, displayName: profile.displayName, protocolMode: profile.protocolMode,
-      connectTimeoutMs: profile.connectTimeoutMs, requestTimeoutMs: profile.requestTimeoutMs,
-      maxResponseBytes: profile.maxResponseBytes, allowInsecureHttp: profile.allowInsecureHttp,
-      retryToolCallOnExpiredSession: false
-    };
-    super.registerServer(copy);
-  }
 }
 class SearchBackendFactory implements SingleAgentHostRuntimeFactoryPort {
   private readonly ports: ProductionAgentRuntimePorts; private readonly adapter: McpAgentAdapter;
@@ -71,7 +63,7 @@ class BoundedSearchSession extends ShuviRuntimeSession {
     this.execution = resources.execution;
   }
   async submit(request: AgentFrontendTaskRequest): Promise<AgentFrontendTaskHandle> {
-    if (!this.execution.available()) throw new Error('SEARCH_TRIAL_ALLOWANCE_EXHAUSTED');
+    if (!this.execution.available()) throw new Error('SEARCH_HISTORY_FULL');
     return await super.submit(request);
   }
 }
@@ -79,9 +71,19 @@ export class SearchRuntimeFactory implements ShuviRuntimeSessionFactory {
   onOutcomeRejected: (taskId: string) => void = (_taskId: string): void => {};
   readonly previews: SearchAuthorizationPreviews = new SearchAuthorizationPreviews();
   private readonly opener: AgentRdbOpenPort; private readonly debug: boolean;
+  private readonly http: TavilyHttpClientPort; private readonly keys: CredentialKeySource;
+  private readonly eraser?: SearchStoreEraserPort;
+  /** Size at which new searches stop and the next start clears the store; tests may lower it. */
+  storeLimitBytes: number = SEARCH_STORE_SOFT_LIMIT_BYTES;
   private execution?: SearchExecutionResource;
-  constructor(opener: AgentRdbOpenPort, debug: boolean) { this.opener = opener; this.debug = debug; }
+  /** Search goes straight from the phone to Tavily with the key saved in 我的 → API Key 管理; no computer service. */
+  constructor(opener: AgentRdbOpenPort, debug: boolean, http: TavilyHttpClientPort = new ArkTsTavilyHttpClient(),
+    keys: CredentialKeySource = TavilyKeyService.store, eraser?: SearchStoreEraserPort) {
+    this.opener = opener; this.debug = debug; this.http = http; this.keys = keys; this.eraser = eraser;
+  }
   available(): boolean { return this.execution?.available() === true; }
+  /** True if the store of the current session was full and has just been cleared. */
+  cleared(): boolean { return this.execution?.cleared === true; }
   create(): ShuviRuntimeSessionPort {
     if (!this.debug) throw new Error('SEARCH_DEBUG_ONLY');
     const digest = new AgentHostDigest(); const usage = new SearchUsageReceipts(digest);
@@ -89,11 +91,12 @@ export class SearchRuntimeFactory implements ShuviRuntimeSessionFactory {
     recovery.policyVersion = SEARCH_POLICY; recovery.leaseTtlMs = 60000;
     recovery.outcomeAccounting = new UnsettledSearchAccounting();
     recovery.pendingInvoice = new SearchPendingInvoice(usage, SEARCH_ACCOUNT, SEARCH_CURRENCY);
-    const execution = new SearchExecutionResource(this.opener, recovery, digest); this.execution = execution;
+    const execution = new SearchExecutionResource(this.opener, recovery, digest, this.eraser, this.storeLimitBytes);
+    this.execution = execution;
     execution.onOutcomeRejected = (taskId: string): void => { this.onOutcomeRejected(taskId); };
     const resources = new SearchResources(execution); const policy = new McpInvocationPolicyBridge(digest);
-    const options: McpManagerOptions = { debugBuild: true, invocationPolicy: policy, clientName: 'shuvi-search-trial', clientVersion: '1.0.0' };
-    const manager = new SingleAttemptSearchManager(options);
+    const options: McpManagerOptions = { debugBuild: true, invocationPolicy: policy, clientName: 'shuvi-search', clientVersion: '1.0.0' };
+    const manager = new DirectTavilySearchManager(options, this.http, this.keys);
     const providers = new McpProviderRegistry(digest); const policies = new McpReadOnlyToolPolicyRegistry();
     const adapter = new SearchUsageMcpAdapter(new ShuviWebSearchMcpClientToolPort(new McpClientManagerToolPort(manager)),
       providers, policies, digest, new SearchClock(), execution, policy, usage);
@@ -107,6 +110,8 @@ export class SearchRuntimeFactory implements ShuviRuntimeSessionFactory {
     config.requestedBudget.maxWallTimeMs = 120000; config.requestedBudget.maxToolCalls = 1;
     config.requestedBudget.maxAgentActivations = 1; config.requestedBudget.maxMonetaryCostMicros = SEARCH_RESERVATION;
     const search = new ShuviWebSearchMcpConfig(); search.estimatedCostMicros = SEARCH_RESERVATION;
+    // The registered profile names the real destination; the in-app manager never opens an MCP connection.
+    search.endpoint = TAVILY_SEARCH_ENDPOINT; search.allowInsecureHttp = false;
     const host = new SingleAgentHostPorts(); host.credentialStore = resources.credentials; host.executionStorage = execution;
     host.memoryStorage = resources.memory; host.mcpClient = new ShuviWebSearchMcpHostResource(manager, providers, policies, search);
     host.runtimeFactory = new SearchBackendFactory(ports, adapter, registry);
@@ -114,5 +119,6 @@ export class SearchRuntimeFactory implements ShuviRuntimeSessionFactory {
   }
 }
 export function searchRuntimeFactory(context: common.Context, debug: boolean): SearchRuntimeFactory {
-  return new SearchRuntimeFactory(new NativeAgentRdbOpen(context), debug);
+  return new SearchRuntimeFactory(new NativeAgentRdbOpen(context), debug, new ArkTsTavilyHttpClient(), TavilyKeyService.store,
+    new NativeSearchStoreEraser(context));
 }

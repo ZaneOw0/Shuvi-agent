@@ -12,7 +12,10 @@ export class ConversationSummary {
   createdAt: number = 0;
   updatedAt: number = 0;
 }
-/** A stored conversation: what the user saw plus what the model remembers. Image bytes are never stored. */
+/**
+ * A stored conversation: what the user saw plus what the model remembers. Image bytes never enter the record; a sent
+ * picture is kept as a separate local file (see ChatImageStore) and the record names that file.
+ */
 export class ConversationRecord {
   id: string = '';
   title: string = '';
@@ -39,19 +42,40 @@ export class ConversationView {
   message: string = '';
 }
 
-/** Display message as stored: no picker URI and no image bytes, only the fact that an image was attached. */
+/** Where sent chat pictures are kept on this device; the conversation record only stores their file names. */
+export interface ConversationImagePort {
+  /** Displayable URI of a kept picture, or undefined when the file is gone. */
+  uri(name: string): string | undefined;
+  remove(names: string[]): void;
+}
+
+/** File name of a kept chat picture (no directories, so a damaged record can never point elsewhere). */
+export function validChatImageName(name: string): boolean {
+  return /^chat-image-[0-9a-f-]{36}\.(jpg|png|webp)$/.test(name);
+}
+
+/** Display message as stored: no picker URI and no image bytes, only that an image was attached and its kept file. */
 class StoredChatMessage {
   id: string = '';
   isUser: boolean = false;
   text: string = '';
   voice?: VoiceClip;
   image?: boolean;
+  imageFile?: string;
   calendar?: CalendarCreatedSummary;
   knowledgeSources?: ChatKnowledgeSnapshot;
 }
 
 const MAX_TITLE: number = 24;
 const MAX_TEXT: number = 20000;
+
+function imageFiles(messages: StoredChatMessage[]): string[] {
+  const names: string[] = [];
+  for (const message of messages) {
+    if (message.imageFile !== undefined && validChatImageName(message.imageFile)) names.push(message.imageFile);
+  }
+  return names;
+}
 
 function storedMessage(message: ChatMessage): StoredChatMessage | undefined {
   // Demo search turns are not part of a real conversation.
@@ -63,6 +87,7 @@ function storedMessage(message: ChatMessage): StoredChatMessage | undefined {
     voice.durationMs = message.voice.durationMs; voice.createdAt = message.voice.createdAt; stored.voice = voice;
   }
   if (message.image !== undefined || message.imageMissing === true) stored.image = true;
+  if (message.imageFile !== undefined && validChatImageName(message.imageFile)) stored.imageFile = message.imageFile;
   if (message.calendar !== undefined) stored.calendar = JSON.parse(JSON.stringify(message.calendar)) as CalendarCreatedSummary;
   if (!message.isUser) stored.knowledgeSources = copyChatKnowledgeSnapshot(message.knowledgeSources);
   return stored;
@@ -90,6 +115,9 @@ function parseMessages(json: string): StoredChatMessage[] {
         clip.durationMs = voice.durationMs; clip.createdAt = voice.createdAt; message.voice = clip;
       }
       if (item.image === true) message.image = true;
+      if (typeof item.imageFile === 'string' && validChatImageName(item.imageFile)) {
+        message.imageFile = item.imageFile; message.image = true;
+      }
       if (!item.isUser) message.knowledgeSources = copyChatKnowledgeSnapshot(item.knowledgeSources);
       const calendar: CalendarCreatedSummary | undefined = item.calendar;
       if (calendar !== undefined && objectValue(calendar) && typeof calendar.title === 'string' &&
@@ -141,6 +169,7 @@ export class AssistantConversations {
   private writing?: Promise<void>;
   private loads: number = 0;
   private listener?: (view: ConversationView) => void;
+  private images?: ConversationImagePort;
 
   constructor(memory: AssistantMemory, clock: () => number = (): number => Date.now(),
     ids: () => string = (): string => util.generateRandomUUID()) {
@@ -148,6 +177,8 @@ export class AssistantConversations {
     this.memory.onChange((): void => { if (this.currentId.length > 0) this.scheduleSave(); });
   }
 
+  /** Kept chat pictures: restored messages show them again and deleting a conversation deletes them. */
+  useImages(images: ConversationImagePort): void { this.images = images; }
   attach(listener: (view: ConversationView) => void): void { this.listener = listener; this.publish(); }
   detach(): void { this.listener = undefined; }
   view(): ConversationView {
@@ -226,16 +257,30 @@ export class AssistantConversations {
     return this.displayMessages();
   }
 
-  /** Deletes a conversation; returns true when it was the current one (the page then shows a new empty conversation). */
+  /**
+   * Deletes a conversation and the pictures kept for it; returns true when it was the current one (the page then shows
+   * a new empty conversation).
+   */
   async remove(id: string): Promise<boolean> {
     const current: boolean = id === this.currentId;
+    let pictures: string[] = current ? imageFiles(this.messages) : [];
     if (current) { this.dirty = false; this.reset(); }
+    for (const record of this.pending) {
+      if (record.id === id) pictures = pictures.concat(imageFiles(parseMessages(record.messagesJson)));
+    }
     this.pending = this.pending.filter((item: ConversationRecord): boolean => item.id !== id);
     // A save of this conversation that is already running must finish first, or it would bring the row back.
     await this.flush();
     if (this.port !== undefined && this.ready) {
+      if (!current) {
+        try {
+          const record: ConversationRecord | undefined = await this.port.load(id);
+          if (record !== undefined) pictures = pictures.concat(imageFiles(parseMessages(record.messagesJson)));
+        } catch { /* The row is still deleted; pictures it named stay on the device. */ }
+      }
       try { await this.port.remove(id); } catch { this.message = '删除没有完成，请稍后再试。'; this.publish(); return current; }
     }
+    try { this.images?.remove(pictures); } catch { /* A picture that could not be deleted never blocks the conversation list. */ }
     this.list = this.list.filter((item: ConversationSummary): boolean => item.id !== id);
     this.message = ''; this.publish();
     return current;
@@ -264,11 +309,17 @@ export class AssistantConversations {
     return this.messages.map((item: StoredChatMessage, index: number): ChatMessage => {
       const message: ChatMessage = { id: prefix + index + '-' + item.id.slice(0, 40), isUser: item.isUser, text: item.text };
       if (item.voice !== undefined) message.voice = item.voice;
-      if (item.image === true) message.imageMissing = true;
+      const picture: string | undefined = item.imageFile === undefined ? undefined : this.pictureUri(item.imageFile);
+      if (picture !== undefined && item.imageFile !== undefined) { message.image = picture; message.imageFile = item.imageFile; }
+      else if (item.image === true) message.imageMissing = true;
       if (item.calendar !== undefined) message.calendar = item.calendar;
       if (!item.isUser) message.knowledgeSources = copyChatKnowledgeSnapshot(item.knowledgeSources);
       return message;
     });
+  }
+
+  private pictureUri(name: string): string | undefined {
+    try { return this.images?.uri(name); } catch { return undefined; }
   }
 
   private record(): ConversationRecord {

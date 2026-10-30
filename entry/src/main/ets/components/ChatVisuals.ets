@@ -10,7 +10,6 @@ interface DraftVisualOptions {
 }
 
 interface WelcomeOptions {
-  searchEnabled: boolean;
   realChat?: boolean;
 }
 
@@ -24,7 +23,7 @@ export function AssistantWelcome($$: WelcomeOptions) {
       .fontColor(Theme.ink).textAlign(TextAlign.Center).width('100%')
     Text('我是休比，让想法成为行动。').fontSize(13).fontColor(Theme.muted)
       .textAlign(TextAlign.Center).width('100%')
-    Text($$.realChat ? ($$.searchEnabled ? '输入公开关键词，发送后确认本次搜索' : '提问、发图片、安排日程或写文档') : '输入想安排的日程，体验草稿确认流程').fontSize(Theme.noteSize).fontColor(Theme.muted)
+    Text($$.realChat ? '提问、发图片、安排日程或写文档' : '输入想安排的日程，体验草稿确认流程').fontSize(Theme.noteSize).fontColor(Theme.muted)
       .textAlign(TextAlign.Center).margin({ top: 8 }).width('100%')
   }.width('100%').padding({ top: 24, bottom: 24, left: 12, right: 12 })
 }

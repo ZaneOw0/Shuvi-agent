@@ -18,6 +18,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { SourceLinkService } from '../services/SourceLinkService';
 import { SpeechService } from '../services/speech/SpeechService';
+import { ChatImageService } from '../services/conversation/ChatImageStore';
 import { McpConnectionCheckService } from '../services/McpConnectionCheckService';
 import { DirectModelCheckService } from '../services/model/DirectModelCheckService';
 import { ShuviRuntimeService } from '../services/model/ShuviRuntimeService';
@@ -41,6 +42,7 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     SourceLinkService.bind(this.context);
     SpeechService.bind(this.context);
+    ChatImageService.store.bind(this.context);
     CalendarProbeService.bind(this.context);
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
