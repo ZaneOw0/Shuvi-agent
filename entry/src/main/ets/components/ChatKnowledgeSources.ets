@@ -10,7 +10,7 @@ export class ChatKnowledgeReply {
 export function chatKnowledgeStoredReply(text: string, saved: ChatKnowledgeSnapshot | undefined): ChatKnowledgeReply {
   const reply: ChatKnowledgeReply = new ChatKnowledgeReply(); reply.text = text;
   const snapshot: ChatKnowledgeSnapshot | undefined = copyChatKnowledgeSnapshot(saved);
-  const footer: RegExpMatchArray | null = text.match(/\n\n个人知识库来源：((?:\[\d+\]\s*)+)$/);
+  const footer: RegExpMatchArray | null = text.match(/\n\n个人知识库来源：((?:\[\d+\]\s*)+)(?=$|\n\n(?:网页来源：|本轮搜索到的网页（回答未直接引用）：))/);
   if (snapshot === undefined || footer === null) { return reply; }
   const numbers: number[] = (footer[1].match(/\d+/g) ?? []).map((id: string): number => Number(id));
   const storedIds: number[] = [];
@@ -19,7 +19,7 @@ export function chatKnowledgeStoredReply(text: string, saved: ChatKnowledgeSnaps
   }
   if (numbers.length !== storedIds.length || new Set<number>(numbers).size !== numbers.length ||
     numbers.some((id: number): boolean => !storedIds.includes(id))) { return reply; }
-  reply.sources = snapshot.sources; reply.text = text.slice(0, text.length - footer[0].length);
+  reply.sources = snapshot.sources; reply.text = text.replace(footer[0], '');
   return reply;
 }
 
@@ -36,7 +36,7 @@ function chatKnowledgeFileType(citation: KnowledgeRuntimeCitation): string {
 
 export function chatKnowledgeReply(text: string, citations: KnowledgeRuntimeCitation[]): ChatKnowledgeReply {
   const reply: ChatKnowledgeReply = new ChatKnowledgeReply(); reply.text = text;
-  const footer: RegExpMatchArray | null = text.match(/\n\n个人知识库来源：((?:\[\d+\]\s*)+)$/);
+  const footer: RegExpMatchArray | null = text.match(/\n\n个人知识库来源：((?:\[\d+\]\s*)+)(?=$|\n\n(?:网页来源：|本轮搜索到的网页（回答未直接引用）：))/);
   if (footer === null) { return reply; }
   const numbers: string[] = footer[1].match(/\d+/g) ?? [];
   // Only replace the host's footer when every number has a real, bound source.
@@ -55,7 +55,7 @@ export function chatKnowledgeReply(text: string, citations: KnowledgeRuntimeCita
     source.title = citation.title; source.fileType = chatKnowledgeFileType(citation); source.citationIds = [citation.citationId];
     reply.sources.push(source);
   }
-  if (reply.sources.length > 0) { reply.text = text.slice(0, text.length - footer[0].length); }
+  if (reply.sources.length > 0) { reply.text = text.replace(footer[0], ''); }
   return reply;
 }
 

@@ -4324,3 +4324,4 @@ require('./tavily-direct-tests.cjs')({ load, root, services, digest, deferred, l
   setNativeFactory: factory => { nativeFactory = factory; }, loadDeepSeekKeyStore, ShuviRuntimeState,
   assistantHarness, fakeDocuments, toolCall, waitChat, assertValidToolHistory });
 require('./l2-tool-tests.cjs')({ load, root, services, writableRdb, assistantHarness, fakeDocuments, toolCall, waitChat, assertValidToolHistory });
+require('./chat-knowledge-sources-tests.cjs')({ load, root });
