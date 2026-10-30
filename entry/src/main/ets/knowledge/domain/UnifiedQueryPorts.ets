@@ -11,6 +11,7 @@ export interface UnifiedQueryNumericPort {
 }
 export interface UnifiedQueryHistoryPort {
   append(page: UnifiedSearchHistoryPage): Promise<void>;
+  clear?(): Promise<void>;
   list(offset: number, limit: number): Promise<UnifiedSearchHistoryPage[]>;
 }
 export interface UnifiedQueryEnginePort {

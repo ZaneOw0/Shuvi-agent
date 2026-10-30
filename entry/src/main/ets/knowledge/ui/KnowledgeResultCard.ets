@@ -11,6 +11,7 @@ interface KnowledgeResultCardOptions {
 }
 
 interface UnifiedKnowledgeResultCardOptions {
+  reasonRoute?: string;
   id: string;
   card: UnifiedSearchCard;
   onOpen: (card: UnifiedSearchCard) => void;
@@ -74,7 +75,7 @@ export function UnifiedKnowledgeResultCard($$: UnifiedKnowledgeResultCardOptions
   Column({ space: 7 }) {
     Text(`${$$.card.kind === 'Image' ? '图片' : '正文'} · ${$$.card.title}`).fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
     if (!$$.card.current) { Text('来源为旧版或已失效').fontColor(Theme.ink).fontSize(12).width('100%') }
-    ForEach($$.card.reasons, (r: UnifiedSearchReason): void => {
+    ForEach($$.card.reasons.filter((reason: UnifiedSearchReason): boolean => !$$.reasonRoute || reason.route === $$.reasonRoute), (r: UnifiedSearchReason): void => {
       Column({ space: 4 }) {
         Text(r.route === 'Keyword' ? (r.matchKind === 'Literal' ? '原文字面命中' : '分词关键词命中') : r.route === 'BodyDirect' ? '正文直接命中' : r.route === 'OcrDirect' ? 'OCR直接命中' : r.route === 'Tag' ? '本机标签' : r.route === 'Vector' ? '语义相关' : r.route).fontColor(Theme.muted).fontSize(12).width('100%')
         Text() {

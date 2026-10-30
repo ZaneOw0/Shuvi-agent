@@ -140,6 +140,8 @@ struct Index {
   @State knowledgeOpening: boolean = false;
   @State knowledgeMessage: string = '';
   private knowledgeLoad: Promise<void> | undefined = undefined;
+  @State knowledgePreparation: SettingsPreparationState = new SettingsPreparationState();
+  private knowledgePreparationTimer: number = -1;
   @State knowledgeReady: boolean = false;
   @State parsedDocumentId: string = '';
   @State parsedOpening: boolean = false;
@@ -320,6 +322,7 @@ struct Index {
   aboutToDisappear(): void {
     PdfJsRuntime.shared.closePreview();
     this.alive = false;
+    if (this.knowledgePreparationTimer !== -1) { clearTimeout(this.knowledgePreparationTimer); this.knowledgePreparationTimer = -1; }
     this.parsePreparationTask.dispose(); this.embeddingPreparationTask.dispose();
     RuntimeChatService.conversations.detach();
     SpeechService.session.detach();
@@ -477,10 +480,26 @@ struct Index {
     const pending: Promise<void> | undefined = this.knowledgeLoad;
     if (pending !== undefined) { return pending; }
     this.knowledgeOpening = true; this.knowledgeMessage = '';
+    const startedAt: number = Date.now();
+    this.updateKnowledgePreparation(SettingsPreparationPhase.Loading, startedAt, false);
+    this.knowledgePreparationTimer = setTimeout((): void => {
+      this.knowledgePreparationTimer = -1;
+      this.updateKnowledgePreparation(SettingsPreparationPhase.Loading, startedAt, true);
+    }, 3000);
     const operation: Promise<void> = this.loadKnowledge(); this.knowledgeLoad = operation;
     try { await operation; }
     catch (error) { this.knowledgeMessage = '资料库打开未完成，资料保留。原因：' + (error instanceof KnowledgeFailure || error instanceof DocxFailure ? error.category : 'LocalInitializationFailed'); }
-    finally { this.knowledgeLoad = undefined; this.knowledgeOpening = false; }
+    finally {
+      if (this.knowledgePreparationTimer !== -1) { clearTimeout(this.knowledgePreparationTimer); this.knowledgePreparationTimer = -1; }
+      this.knowledgeLoad = undefined; this.knowledgeOpening = false;
+      this.updateKnowledgePreparation(this.knowledgeReady ? SettingsPreparationPhase.Ready : SettingsPreparationPhase.Failed, startedAt, false);
+    }
+  }
+  private updateKnowledgePreparation(phase: SettingsPreparationPhase, startedAt: number, slow: boolean): void {
+    if (!this.alive) { return; }
+    const state: SettingsPreparationState = new SettingsPreparationState();
+    state.phase = phase; state.startedAt = startedAt; state.elapsedMs = Date.now() - startedAt; state.slow = slow;
+    this.knowledgePreparation = state;
   }
   private async loadKnowledge(): Promise<void> {
     if (this.knowledgeAssembly !== undefined) {
@@ -1948,17 +1967,16 @@ struct Index {
             }
            } else if (this.tab === 2) {
              if (this.knowledgeReady) {
-               UnifiedKnowledgeView({ session: this.sharedKnowledge?.querySession, history: this.sharedKnowledge?.unifiedHistory,
-                 onImport: (): void => { this.parsedDocumentId = ''; this.openParsed(true); },
+               UnifiedKnowledgeView({ session: this.sharedKnowledge?.querySession, availableHeight: this.contentHeight,
                  onDocuments: (): void => { this.parsedDocumentId = ''; this.openParsed(); },
                  onOpen: (card: UnifiedSearchCard): void => { this.openUnifiedCard(card); } })
             } else {
-              Column({ space: 12 }) {
-                Text(this.knowledgeMessage || '正在打开本机知识库…')
-                  .fontSize(15).fontColor(Theme.muted).width('100%')
-                Button(this.knowledgeOpening ? '正在打开…' : '重试打开', { type: ButtonType.Normal }).id('upd-open-retry').enabled(!this.knowledgeOpening).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 })
-                  .onClick((): void => { this.openKnowledge(); })
-              }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 20, bottom: 20 })
+              SettingsPreparationView({ title: '本机知识库', preparation: this.knowledgePreparation,
+                loadingTitle: '正在打开知识库', failedTitle: '暂时无法打开知识库',
+                loadingMessage: '正在恢复本机资料并准备搜索，请稍候…',
+                failedMessage: '本机知识库准备未完成，已有资料会保留。请稍后重试。',
+                returnLabel: '返回助手', retryLabel: '重试打开',
+                onBack: (): void => { this.changeTab(0); }, onRetry: (): void => { void this.openKnowledge(); } })
             }
            } else {
              ProfilePage({ floatingAssistantEnabled: this.floatingAssistantEnabled,

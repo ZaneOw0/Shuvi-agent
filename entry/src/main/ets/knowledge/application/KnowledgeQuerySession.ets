@@ -17,6 +17,7 @@ export class KnowledgeQuerySession {
   private listeners: Array<() => void>=[]; private historyRevision: number=0; private pendingHistory: UnifiedSearchHistoryPage[]=[]; private historyTail: Promise<void>=Promise.resolve();
   private pageInFlight: Set<string>=new Set<string>();
   private configBinding: string='';
+  private historySuppressed: boolean=false;
   private lexical?: KnowledgeLexicalSearchPort; private lexicalCursor: string=''; private lexicalMore: boolean=false; private lexicalRevision: string='';
   private workers: Array<Promise<void>>=[];
   private follow<T>(work: Promise<T>): Promise<T> { const settled: Promise<void>=work.then((): void=>{},(): void=>{}); this.workers.push(settled); settled.then((): void=> { this.workers=this.workers.filter((p: Promise<void>): boolean=>p!==settled); }); return work; }
@@ -31,7 +32,7 @@ export class KnowledgeQuerySession {
   }
   edit(question: string, archived: boolean=this.state.includeArchived): void { this.invalidate(); const epoch=this.state.epoch; this.state=new UnifiedSearchState(); this.state.epoch=epoch; this.state.question=question; this.state.includeArchived=archived; this.emit(); }
   async start(question: string, archived: boolean=false, upstream: ParsedCancellation | undefined=undefined): Promise<void> {
-    this.invalidate(); const epoch=this.state.epoch; this.state=new UnifiedSearchState(); this.state.epoch=epoch; this.state.session=this.identity.id(); this.state.historyId=this.identity.id(); this.state.question=prepareTextQuery(question).actualInput; this.state.includeArchived=archived; this.state.direct.id='Direct'; this.state.related.id='Related'; this.state.direct.busy=true; this.state.related.busy=true;
+    this.historySuppressed=false; this.invalidate(); const epoch=this.state.epoch; this.state=new UnifiedSearchState(); this.state.epoch=epoch; this.state.session=this.identity.id(); this.state.historyId=this.identity.id(); this.state.question=prepareTextQuery(question).actualInput; this.state.includeArchived=archived; this.state.direct.id='Direct'; this.state.related.id='Related'; this.state.direct.busy=true; this.state.related.busy=true;
     this.directCandidates=[]; this.relatedCandidates=[]; this.directImages.clear(); this.registry.clear(); this.positions=[0,0]; this.pages.clear(); this.semanticPromise=undefined; this.scope=undefined; this.historyRevision=0; this.lexicalCursor=''; this.lexicalMore=false; this.lexicalRevision='';
     this.configBinding=embeddingConfigBinding(this.config.currentConfig());
     const cancel: ParsedCancellation=upstream ?? new ParsedCancellation(); this.cancel=cancel; this.emit(); const local: Promise<void>=this.follow<void>(this.loadLocal(epoch,cancel)); this.local=local; await local;
@@ -114,11 +115,20 @@ export class KnowledgeQuerySession {
     } catch { if (this.current(epoch,cancel)) { this.state.semanticState='FailedOrUnknown'; this.state.semanticError='SemanticUnavailableNoAutomaticRetry'; this.state.related.exhausted=this.positions[1]>=this.relatedCandidates.length; this.saveHistory(); this.emit(); } }
   }
   private saveHistory(): void {
+    if (this.historySuppressed) { return; }
     const page: UnifiedSearchHistoryPage=new UnifiedSearchHistoryPage(); page.recordId=this.state.historyId; page.revision=++this.historyRevision; page.eventId='revision-'+page.revision; page.createdAt=Date.now(); page.question=this.state.question; page.scopeHash=this.scope?.hash ?? ''; page.direct=this.state.direct.cards.slice(); page.related=this.state.related.cards.slice(); page.semanticState=this.state.semanticState; page.unupgraded=this.state.unupgraded; page.directCursor=this.state.direct.cursor; page.relatedCursor=this.state.related.cursor;
     let snapshot: UnifiedSearchHistoryPage; try { snapshot=unifiedHistoryCopy(page); } catch { this.state.historyPending=true; return; }
     this.historyTail=this.historyTail.then(async (): Promise<void>=> { try { await this.history.append(snapshot); } catch { this.pendingHistory.push(snapshot); } this.state.historyPending=this.pendingHistory.length>0; this.emit(); });
   }
   async retryHistory(): Promise<void> { await this.historyTail; const pages=this.pendingHistory.slice(); this.pendingHistory=[]; for (const page of pages) { try { await this.history.append(page); } catch { this.pendingHistory.push(page); } } this.state.historyPending=this.pendingHistory.length>0; this.emit(); }
+  async clearHistory(): Promise<void> {
+    const history: UnifiedQueryHistoryPort=this.history;
+    if (history.clear===undefined) { throw new ParsedFailure('HistoryClearUnavailable','history'); }
+    const suppressed: boolean=this.historySuppressed; this.historySuppressed=true;
+    try {
+      await this.historyTail; await history.clear(); this.pendingHistory=[]; this.state.historyPending=false; this.emit();
+    } catch (error) { this.historySuppressed=suppressed; if (error instanceof Error) { throw error; } throw new ParsedFailure('HistoryClearFailed','history'); }
+  }
   async historyPage(offset: number): Promise<UnifiedSearchHistoryPage[]> { return this.history.list(offset,10); }
   async close(): Promise<void> { this.invalidate(); while (this.workers.length>0) { await Promise.all<void>(this.workers.slice()); } await this.historyTail; }
 }

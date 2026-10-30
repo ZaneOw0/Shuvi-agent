@@ -162,7 +162,7 @@ export struct KnowledgeView {
   build() {
     Column({ space: 14 }) {
       if (this.querySession!==undefined && !this.legacyOpen && this.textState.screen!==TextScreen.Detail) {
-        UnifiedKnowledgeView({session:this.querySession,history:this.unifiedHistory,onOpen:this.onOpenUnified})
+        UnifiedKnowledgeView({session:this.querySession,onOpen:this.onOpenUnified})
         Button('旧资料与旧检索兼容').id('upd-legacy-compat').onClick((): void=> { this.legacyOpen=true; })
       } else if (this.legacyOpen || this.textState.screen === TextScreen.Detail) {
         Button('返回统一知识库').constraintSize({ minHeight: 44 }).onClick((): void => { this.legacyOpen = false; })
