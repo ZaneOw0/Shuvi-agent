@@ -14,6 +14,9 @@
  */
 import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { Theme } from '../components/Theme';
+import { SettingsPreparationView } from '../components/SettingsPreparationView';
+import { SettingsPreparationPhase, SettingsPreparationState, SettingsPreparationTask } from '../components/SettingsPreparationModels';
+import { settingsInitializationTrace } from '../knowledge/infra/SettingsInitializationTrace';
 import { VoiceMessageBubble } from '../components/VoiceMessageBubble';
 import { VoiceClip, composeVoiceMessage } from '../services/speech/VoiceAudio';
 import { SpeechService } from '../services/speech/SpeechService';
@@ -181,8 +184,19 @@ struct Index {
   private parseService: DocumentParseService | undefined = undefined;
   @State parseOpen: boolean = false;
   @State parseSettings: boolean = false;
+  @State parsePreparation: SettingsPreparationState = new SettingsPreparationState();
+  @State embeddingPreparation: SettingsPreparationState = new SettingsPreparationState();
+  private parsePreparationTask: SettingsPreparationTask = new SettingsPreparationTask(
+    (): Promise<void> => this.loadParseService(), (state: SettingsPreparationState): void => {
+      if (this.alive) { this.parsePreparation = state; }
+      settingsInitializationTrace('parse-page', state.phase, state.startedAt);
+    });
+  private embeddingPreparationTask: SettingsPreparationTask = new SettingsPreparationTask(
+    (): Promise<void> => this.loadEmbeddingService(), (state: SettingsPreparationState): void => {
+      if (this.alive) { this.embeddingPreparation = state; }
+      settingsInitializationTrace('embedding-page', state.phase, state.startedAt);
+    });
   @State embeddingOpen: boolean = false;
-  @State embeddingOpening: boolean = false;
   @State pdfIngestionOpen: boolean = false;
   private pdfIngestionService: PdfIngestionService | undefined = undefined;
   private unifiedSearchService: KnowledgeSearchService | undefined = undefined;
@@ -306,6 +320,7 @@ struct Index {
   aboutToDisappear(): void {
     PdfJsRuntime.shared.closePreview();
     this.alive = false;
+    this.parsePreparationTask.dispose(); this.embeddingPreparationTask.dispose();
     RuntimeChatService.conversations.detach();
     SpeechService.session.detach();
     SpeechService.playback.detach();
@@ -319,6 +334,8 @@ struct Index {
     this.embeddingService?.pause(); this.closeKnowledgeSession().catch((): void => { this.parsedMessage='会话释放未确认；保留本机持有，可重试释放'; });
   }
   private async closeKnowledgeSession(): Promise<void> {
+    try { await this.embeddingPreparationTask.wait(); } catch { /* Failed preparation has no usable service. */ }
+    try { await this.parsePreparationTask.wait(); } catch { /* The failed assembly is closed below if still held. */ }
     await PdfJsRuntime.shared.closeAndWait();
     this.sharedKnowledge?.unsubscribe(this.knowledgeListener);
     await this.sharedKnowledge?.quiesceUnified();
@@ -415,9 +432,10 @@ struct Index {
     this.apiKeysReady = false; this.apiKeysOpen = true; this.scroller.scrollEdge(Edge.Top);
     // The SiliconFlow and MinerU cards need their services; open them without showing their own pages.
     try {
-      if (this.embeddingService === undefined) { await this.openEmbedding(); this.embeddingOpen = false; }
-      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
-    } finally { this.apiKeysReady = true; }
+      if (this.embeddingService === undefined) { await this.embeddingPreparationTask.prepare(); }
+      if (this.parseService === undefined) { await this.parsePreparationTask.prepare(); }
+    } catch { /* API Key management can show which local services are unavailable. */ }
+    finally { this.apiKeysReady = true; }
   }
   private sessionState(): ShuviRuntimeState {
     return this.searchEnabled ? this.runtimeSearch.lifecycle : this.runtimeChat.lifecycle;
@@ -522,7 +540,7 @@ struct Index {
       await this.openKnowledge(); const shared = this.sharedKnowledge;
       if (shared === undefined) { throw new Error('用户库尚未就绪'); }
       if (!shared.unified.ready()) { await shared.retryUnifiedInitialization(); }
-      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+      if (this.parseService === undefined) { await this.parsePreparationTask.prepare(); }
       this.parsedService = shared.unifiedIngestion; this.parsedImports = shared.unifiedImports; await this.parsedService.refresh();
       if (this.parseService === undefined) { this.parsedMessage = '解析准备不可用；TXT/MD与已发布内容可用，可重试打开'; }
     } catch (error) { this.parsedMessage = error instanceof Error ? error.message : '统一服务打开失败，资料保留'; }
@@ -542,7 +560,7 @@ struct Index {
   }
   private async openMigration(): Promise<void> { await this.openParsed(); this.parsedOpen=false; this.migrationOpen=true; }
   private async openLegacyImages(): Promise<void> {
-    await this.openKnowledge(); if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+    await this.openKnowledge(); if (this.parseService === undefined) { await this.parsePreparationTask.prepare(); }
     const context = this.getUIContext().getHostContext(); const shared = this.sharedKnowledge;
     if (context === undefined || shared === undefined || this.parseService === undefined || !shared.images.ready()) { this.knowledgeState.message = '图片准备区不可用，原件未修改'; return; }
     if (this.imageIngestionService === undefined) { this.imageIngestionService = new ImageIngestionService(this.parseService,shared.images,new ImageOriginalAdapter(context.filesDir),new ImageProcessingAdapter(),new KnowledgePlatformIdentity(),KnowledgeStorageScope.production()); const metadata = shared.vectorMetadata; if (metadata instanceof ImageVectorRepository) { this.imageIngestionService.attachVectorCleanup(async (id: string): Promise<void> => { const cleanup: Promise<void> = metadata.cleanupDeleted(id,shared.vectors); await cleanup; }); } await this.imageIngestionService.initialize(); }
@@ -558,7 +576,7 @@ struct Index {
     this.imageIngestionOpen = false; this.docxSourceOpen = false; this.scroller.scrollEdge(Edge.Top);
     try {
       await this.openKnowledge();
-      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+      if (this.parseService === undefined) { await this.parsePreparationTask.prepare(); }
       const shared = this.sharedKnowledge; const context = this.getUIContext().getHostContext(); const parse = this.parseService;
       if (shared === undefined || context === undefined || parse === undefined) { this.docxEntryMessage = '解析准备打开未完成。'+(this.parseState.message || this.knowledgeState.message || '本机服务暂不可用')+'；原件和已有资料保留，可重试。'; return; }
       await shared.ensureDocxReady();
@@ -595,16 +613,14 @@ struct Index {
   }
   private closeEmbedding(): void { this.embeddingClearEpoch++; this.embeddingService?.clearInput(); this.embeddingOpen = false; this.scroller.scrollEdge(Edge.Top); }
   private async openEmbedding(): Promise<void> {
-    if (this.embeddingOpening) { return; }
-    this.embeddingOpen = true; this.embeddingOpening = true; this.scroller.scrollEdge(Edge.Top);
-    try {
-      if (this.sharedKnowledge !== undefined) { this.embeddingService = this.sharedKnowledge.repository.ready() ? this.sharedKnowledge.embedding : undefined; return; }
-      const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
-      const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
-      await assembly.acquire(); this.embeddingService = assembly.repository.ready() ? assembly.embedding : undefined;
-    }
-    catch { this.sharedKnowledge = undefined; this.embeddingService = undefined; }
-    finally { this.embeddingOpening = false; }
+    this.embeddingOpen = true; this.parseOpen = false; this.scroller.scrollEdge(Edge.Top);
+    try { await this.embeddingPreparationTask.prepare(); } catch { /* The preparation card owns failure and explicit retry. */ }
+  }
+  private async loadEmbeddingService(): Promise<void> {
+    await this.openKnowledge();
+    const shared: KnowledgeAssembly | undefined = this.sharedKnowledge;
+    if (shared === undefined || !shared.repository.ready()) { throw new Error('EMBEDDING_SETTINGS_UNAVAILABLE'); }
+    this.embeddingService = shared.embedding;
   }
   private async preparePdf(resultId: string): Promise<void> {
     await this.consumeParsed(resultId);
@@ -616,16 +632,25 @@ struct Index {
     await this.pdfIngestionService.refreshJobs(); this.pdfIngestionOpen = true;
   }
   private async openParse(settings: boolean): Promise<void> {
-    this.parseSettings = settings; this.parseOpen = true; this.scroller.scrollEdge(Edge.Top);
-    if (this.parseAssembly !== undefined) { this.parseService?.clearInput(); return; }
+    this.parseSettings = settings; this.parseOpen = true; this.embeddingOpen = false; this.scroller.scrollEdge(Edge.Top);
+    this.parseService?.clearInput();
+    try { await this.parsePreparationTask.prepare(); } catch { /* The preparation card owns failure and explicit retry. */ }
+  }
+  private async loadParseService(): Promise<void> {
+    if (this.parseService !== undefined) { return; }
+    if (this.parseAssembly !== undefined) { await this.parseAssembly.close(); this.parseAssembly = undefined; }
     const context = this.getUIContext().getHostContext();
-    if (context === undefined) { this.parseState.message = '本机上下文不可用，解析准备未打开'; return; }
+    if (context === undefined) { throw new Error('PARSE_CONTEXT_UNAVAILABLE'); }
     const assembly: DocumentParseAssembly = new DocumentParseAssembly(context, (): void => {
       if (this.alive) { this.parseState = assembly.service.viewState(); }
     });
     this.parseAssembly = assembly;
-    try { await assembly.initialize(); this.parseService = assembly.service; this.parseState = assembly.service.viewState(); }
-    catch { await assembly.close(); this.parseAssembly = undefined; this.parseService = undefined; this.parseState = assembly.service.viewState(); }
+    try { await assembly.initialize(); this.parseService = assembly.service; if (this.alive) { this.parseState = assembly.service.viewState(); } }
+    catch {
+      this.parseService = undefined;
+      try { await assembly.close(); this.parseAssembly = undefined; } catch { /* Keep ownership for a later release attempt. */ }
+      throw new Error('PARSE_SETTINGS_UNAVAILABLE');
+    }
   }
 
   private resizeWindow(width: number): void {
@@ -1888,26 +1913,23 @@ struct Index {
                PdfIngestionView({ service: this.pdfIngestionService, lifecycle: this.derivedLifecycle, onBack: (): void => { this.pdfIngestionOpen = false; } })
              } else { Text('PDF 准备服务尚未就绪，原件和 ZIP 保留').width('100%') }
            } else if (this.embeddingOpen) {
-             if (this.embeddingService !== undefined) {
+             if (this.embeddingPreparation.phase === SettingsPreparationPhase.Ready && this.embeddingService !== undefined) {
                 EmbeddingSettingsView({ service: this.embeddingService, unifiedSettings:this.sharedKnowledge?.unifiedSettings, clearEpoch: this.embeddingClearEpoch, onBack: (): void => { this.closeEmbedding(); },
                   onKeys: (): void => { this.openApiKeys(); } })
              } else {
-               Text('本机配置服务尚未就绪或不可用，未发送请求').width('100%')
-               Button('返回').onClick((): void => { this.closeEmbedding(); })
+               SettingsPreparationView({ title: '嵌入模型', preparation: this.embeddingPreparation,
+                 onBack: (): void => { this.closeEmbedding(); }, onRetry: (): void => { void this.openEmbedding(); } })
              }
            } else if (this.parseOpen) {
-             if (this.parseService !== undefined) {
+             if (this.parsePreparation.phase === SettingsPreparationPhase.Ready && this.parseService !== undefined) {
                DocumentParseView({ parseState: this.parseState, service: this.parseService,
                  settingsMode: this.parseSettings, clearEpoch: this.parseState.inputEpoch,
                    onClose: (): void => { this.closeParse(); }, onPreparePdf: (resultId: string): void => { this.preparePdf(resultId); },
                     onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenImages: (): void => { this.closeParse(); this.openImages(); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); },
                     onKeys: (): void => { this.openApiKeys(); } })
              } else {
-               Column({ space: 12 }) {
-                 Text(this.parseState.message || '正在打开独立解析准备区…').fontSize(14).width('100%')
-                 Button('重试打开解析准备').onClick((): void => { this.openParse(this.parseSettings); })
-                 Button('返回').onClick((): void => { this.closeParse(); })
-               }.width('100%').padding(20)
+               SettingsPreparationView({ title: '解析引擎', preparation: this.parsePreparation,
+                 onBack: (): void => { this.closeParse(); }, onRetry: (): void => { void this.openParse(this.parseSettings); } })
              }
            } else if (this.tab === 0) {
             if (DEBUG) {
