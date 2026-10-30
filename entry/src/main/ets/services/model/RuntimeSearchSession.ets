@@ -16,7 +16,7 @@ const SEARCH_TIMEOUT_MS: number = 30000;
 /** A call needs at least this much of the turn left to be worth sending. */
 const MIN_CALL_MS: number = 8000;
 
-/** What the 搜索 panel shows. `preview` stays empty: searches are authorized once per conversation, not per call. */
+/** Search state mirrored to the page. `preview` stays empty: searches are authorized once per conversation, not per call. */
 export class RuntimeSearchView {
   lifecycle: ShuviRuntimeState = ShuviRuntimeState.IDLE;
   busy: boolean = false;

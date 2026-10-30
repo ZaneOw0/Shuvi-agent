@@ -5,6 +5,11 @@ import { SpeechEvents, SpeechHandle, SpeechPort } from './SpeechSession';
 import { VoiceClip, VoicePcmBuffer } from './VoiceAudio';
 import { VoiceArchive } from './VoiceArchive';
 
+/** Core Speech Kit rejected an audio packet ("Write audio failed because the start listening is failed"). */
+const WRITE_AUDIO_REJECTED: number = 1002200010;
+/** Feed ticks (20 ms each) to wait after the last audio packet before finish, so finish does not overtake it. */
+const FINISH_QUIET_TICKS: number = 3;
+
 class RecordedSpeechHandle implements SpeechHandle {
   private engine: speechRecognizer.SpeechRecognitionEngine;
   private id: string;
@@ -18,6 +23,7 @@ class RecordedSpeechHandle implements SpeechHandle {
   private cancelled: boolean = false;
   private finishing: boolean = false;
   private finishSent: boolean = false;
+  private quietTicks: number = 0;
   private ended: boolean = false;
   private engineClosed: boolean = false;
   private saved: VoiceClip | undefined = undefined;
@@ -42,7 +48,12 @@ class RecordedSpeechHandle implements SpeechHandle {
       },
       onComplete: (id: string, _message: string): void => { if (id === this.id) void this.complete(''); },
       onError: (id: string, code: number, _message: string): void => {
-        if (id === this.id) void this.complete(`录音已保留，但后台识别失败（${code}），本次未发送。`);
+        if (id !== this.id) return;
+        // After finish the engine can report a rejected packet (emulator: 1002200010 / 610 "write audio ignore with no
+        // preceding start listen") and still deliver the result and onComplete right after. Wait for those instead of
+        // dropping the recognition; SpeechSession's finish timeout still bounds the wait.
+        if (code === WRITE_AUDIO_REJECTED && this.finishSent) return;
+        void this.complete(`录音已保留，但后台识别失败（${code}），本次未发送。`);
       }
     };
     try { this.engine.setListener(listener); } catch (_) { this.initializationFailed = true; }
@@ -75,11 +86,13 @@ class RecordedSpeechHandle implements SpeechHandle {
   }
 
   private feed(): void {
-    if (this.cancelled || this.ended) return;
+    if (this.cancelled || this.ended || this.finishSent) return;
     try {
-      const packet = this.buffer.packet(this.finishing && this.stopping === undefined);
-      if (packet !== undefined) this.engine.writeAudio(this.id, packet);
-      if (this.finishing && this.stopping === undefined && this.buffer.drained() && !this.finishSent) {
+      const flushing = this.finishing && this.stopping === undefined;
+      const packet = this.buffer.packet(flushing);
+      if (packet !== undefined) { this.engine.writeAudio(this.id, packet); this.quietTicks = 0; } else { this.quietTicks++; }
+      // Finish a few ticks after the last packet, or at once when the feed timer is not running.
+      if (flushing && this.buffer.drained() && (this.quietTicks >= FINISH_QUIET_TICKS || this.timer === -1)) {
         this.finishSent = true; this.clearTimer(); this.engine.finish(this.id);
       }
     } catch (_) { void this.complete('录音已保留，但后台识别中断，本次未发送。'); }

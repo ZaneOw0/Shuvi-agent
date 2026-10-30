@@ -18,7 +18,6 @@ export struct ModeChip {
   build() {
     Button({ type: ButtonType.Normal }) {
       Row({ space: 4 }) {
-        if (this.on) { Text('✓').fontSize(13).fontColor(Theme.accent).accessibilityLevel('no') }
         AppIcon({ source: this.icon, size: 16 })
         Text(this.label).fontSize(13).fontColor(this.on ? Theme.accent : Theme.muted)
       }.padding({ left: 12, right: 12 })

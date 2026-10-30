@@ -37,9 +37,9 @@ async function waitFor(predicate) {
 (async () => {
   let recording = false;
   try {
-    click('voice-archive-toggle');
-    const before = new Set(layout().filter(n => String(n.id || n.key).startsWith('voice-play-')).map(n => n.id || n.key));
-    click('voice-archive-toggle');
+    // The saved-recordings list was removed from the composer (2026-10-30); the draft above the input box is checked instead.
+    // The test recording stays in the app's private storage; there is no in-app list to delete it from.
+    assert.equal(!!find(layout(), 'voice-archive-toggle'), false, 'The saved-recordings row should no longer be shown');
     click('chat-speech'); recording = true;
     await waitFor(nodes => !!find(nodes, 'speech-finish'));
     await pause(2500); click('speech-finish');
@@ -57,28 +57,19 @@ async function waitFor(predicate) {
     assert.equal(!!find(dismissed, 'voice-discard'), hadVoiceDraft);
     assert.equal(find(dismissed, 'chat-input').text || '', originalInput);
     console.log('PASS: closing the speech notice hides the banner and preserves the draft and text input.');
-    click('voice-archive-toggle');
-    const saved = layout().filter(n => String(n.id || n.key).startsWith('voice-play-') && !before.has(n.id || n.key));
-    const ids = [...new Set(saved.map(n => n.id || n.key))];
-    assert.equal(ids.length, 1, 'Exactly one new saved voice recording expected');
-    const playId = ids[0]; const recordingId = playId.slice('voice-play-'.length);
-    console.log('PASS: finishing created a playable saved recording without displaying transcript text.');
-    click(playId); await waitFor(nodes => nodes.some(n => n.text === '停止播放'));
-    console.log('PASS: native audio renderer started playback.');
-    await waitFor(nodes => !nodes.some(n => n.text === '停止播放'));
-    shell('aa', 'force-stop', 'com.example.shuvi');
-    shell('aa', 'start', '-b', 'com.example.shuvi', '-a', 'EntryAbility');
-    await waitFor(nodes => !!find(nodes, 'voice-archive-toggle')); click('voice-archive-toggle');
-    assert.ok(find(layout(), playId), 'Saved recording missing after process restart');
-    console.log('PASS: saved recording survives process restart.');
-    click('voice-delete-' + recordingId);
-    const dialog = await waitFor(nodes => nodes.some(n => n.text === '删除这条录音？'));
-    const button = dialog.find(n => n.text === '删除' && n.type === 'Text'); assert.ok(button, 'Delete confirmation missing');
-    const coords = String(button.bounds).match(/-?\d+/g).map(Number);
-    shell('uitest', 'uiInput', 'click', String(Math.round((coords[0] + coords[2]) / 2)), String(Math.round((coords[1] + coords[3]) / 2)));
-    await waitFor(nodes => !find(nodes, playId));
-    console.log('PASS: only this test recording was deleted after confirmation.');
-    click('voice-archive-toggle');
+    if (hadVoiceDraft) {
+      // Sent voice messages in the chat also have play buttons; the draft's is the one on the row of its remove button.
+      const nodes = layout(); const discard = find(nodes, 'voice-discard');
+      const middle = n => { const c = String(n.bounds).match(/-?\d+/g).map(Number); return (c[1] + c[3]) / 2; };
+      const plays = nodes.filter(n => String(n.id || n.key).startsWith('voice-play-'));
+      assert.ok(plays.length > 0, 'The voice draft above the input box should be playable');
+      const draft = plays.reduce((a, b) => Math.abs(middle(a) - middle(discard)) <= Math.abs(middle(b) - middle(discard)) ? a : b);
+      click(String(draft.id || draft.key)); await waitFor(next => next.some(n => n.text === '停止播放'));
+      console.log('PASS: the voice draft plays its original audio without displaying transcript text.');
+      await waitFor(nodes => !nodes.some(n => n.text === '停止播放'));
+      click('voice-discard'); await waitFor(nodes => !find(nodes, 'voice-discard'));
+      console.log('PASS: the voice draft can be removed from above the input box.');
+    }
   } finally {
     if (recording && find(layout(), 'speech-cancel')) click('speech-cancel');
     shell('rm', '-f', layoutPath);

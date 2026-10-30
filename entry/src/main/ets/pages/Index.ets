@@ -90,9 +90,9 @@ import { SEARCH_SAMPLE, SEARCH_SCENARIOS, SearchScenario, SearchSource, SearchSt
 import { SourceLinkService } from '../services/SourceLinkService';
 import { DEBUG } from 'BuildProfile';
 import { RuntimeChatService } from '../services/model/RuntimeChatService';
+import { ChatImageService } from '../services/conversation/ChatImageStore';
 import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { RuntimeSearchView } from '../services/model/RuntimeSearchSession';
-import { RuntimeSearchPanel } from '../components/RuntimeSearchPanel';
 import { RuntimeKnowledgePanel } from '../components/RuntimeKnowledgePanel';
 import { AssistantReplyBubble } from '../components/AssistantReplyBubble';
 import { ChatKnowledgeReply, chatKnowledgeReply, chatKnowledgeStoredReply } from '../components/ChatKnowledgeSources';
@@ -154,8 +154,6 @@ struct Index {
   private lastSpeechResult: number = 0;
   @State voiceDraft: VoiceClip | undefined = undefined;
   private voiceText: string = '';
-  @State voiceArchive: VoiceClip[] = [];
-  @State voiceArchiveOpen: boolean = false;
   @State voicePlayingId: string = '';
   @State voiceMessage: string = '';
   private hiddenVoiceQueries: Set<string> = new Set<string>();
@@ -165,6 +163,12 @@ struct Index {
   @State imageDraftUri: string = '';
   @State imagePreparing: boolean = false;
   private imageDraft: VisionChatImage | undefined = undefined;
+  /** With text in the box, the draft image and voice fold into one bar above it; true while that bar is opened. */
+  @State draftAttachmentsOpen: boolean = false;
+  /** Sent messages with text show their image and voice only after the user opens them. */
+  @State expandedMessages: string[] = [];
+  /** URI shown full screen by the image viewer; empty when the viewer is closed. */
+  @State viewerImage: string = '';
   // Real-chat messages are saved with the current conversation on every change (see messagesChanged).
   @State @Watch('messagesChanged') messages: ChatMessage[] = [];
   @State conversations: ConversationView = new ConversationView();
@@ -245,7 +249,6 @@ struct Index {
 
   aboutToAppear(): void {
     this.alive = true;
-    this.refreshVoiceArchive();
     SpeechService.playback.attach((id: string, message: string): void => {
       if (this.alive) { this.voicePlayingId = id; this.voiceMessage = message; }
     });
@@ -253,14 +256,12 @@ struct Index {
     SpeechService.session.attach((view: SpeechView): void => {
       if (!this.alive) return;
       this.speech = view;
-      if (view.clip !== undefined) this.refreshVoiceArchive();
       if (view.phase === SpeechPhase.Ready && view.resultId > this.lastSpeechResult) {
         this.lastSpeechResult = view.resultId;
         // The transcript is private dispatch data; never bind it to any text control or message bubble.
         if (this.tab === 0 && this.input.trim().length === 0) {
           this.voiceDraft = view.clip; this.voiceText = view.text;
         }
-        this.refreshVoiceArchive();
       }
     });
     RuntimeSearchService.session.attach((view: RuntimeSearchView): void => {
@@ -297,6 +298,7 @@ struct Index {
   private async openConversations(): Promise<void> {
     const context = this.getUIContext().getHostContext();
     if (context === undefined) return;
+    RuntimeChatService.conversations.useImages(ChatImageService.store);
     const restored: ChatMessage[] = await RuntimeChatService.conversations.open(
       new AssistantConversationRdb(new NativeAgentRdbOpen(context)));
     if (this.alive && this.realChatMode && this.messages.length === 0 && restored.length > 0) {
@@ -347,6 +349,7 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (this.viewerImage.length > 0) { this.viewerImage = ''; return true; }
     if (this.speech.busy) { SpeechService.session.cancel(); return true; }
     if (PdfJsRuntime.shared.expanded) { PdfJsRuntime.shared.closePreview(); return true; }
     if (this.drawerOpen) {
@@ -764,7 +767,9 @@ struct Index {
       if (context === undefined || key === undefined) { this.notice('联网搜索暂不可用', '没有读到 DeepSeek Key，请到「我的 → API Key 管理」检查。'); return; }
       const ready: boolean = await RuntimeAssistantCoordinator.enableSearch(context, DEBUG, key);
       if (!ready) { this.notice('联网搜索暂不可用', this.runtimeSearch.message); return; }
-      if (this.alive && this.tab === 0) { this.searchEnabled = true; }
+      if (!this.alive || this.tab !== 0) { return; }
+      this.searchEnabled = true;
+      if (this.runtimeSearch.message.startsWith('本机搜索记录已满')) { this.notice('联网搜索已开启', '本机搜索记录已满，已清空旧记录。'); }
     } catch { this.notice('切换没有完成', '请稍后重试；如果一直这样，请重启应用。'); }
     finally { this.runtimeSwitching = false; }
   }
@@ -804,12 +809,6 @@ struct Index {
     Column({ space: 10 }) {
       if (this.knowledgeEnabled) {
         RuntimeKnowledgePanel({ view: this.runtimeKnowledge, hideQuery: this.knowledgeVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeKnowledge.query), onDisable: (): void => { void this.toggleKnowledge(); } })
-      }
-      if (this.realChatMode && this.searchEnabled) {
-        RuntimeSearchPanel({ view: this.runtimeSearch, hideQuery: this.searchVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeSearch.query) ||
-          this.hiddenVoiceQueries.has(this.runtimeSearch.preview?.query ?? ''), keySaved: this.deepSeekStatus === DeepSeekKeyStatus.Saved,
-          connecting: this.connecting, onConnect: (): void => { void this.toggleSearch(); },
-          onKeys: (): void => { this.openApiKeys(); } })
       }
       if (this.deepSeekStatus === DeepSeekKeyStatus.Missing || this.deepSeekStatus === DeepSeekKeyStatus.Unavailable) {
         // No key yet: the only setup step left in the assistant. Keys are managed in 我的 → API Key 管理.
@@ -862,8 +861,7 @@ struct Index {
     return this.deepSeekStatus === DeepSeekKeyStatus.Missing ? '休比 · 未设置 Key' : '休比 · 未连接';
   }
   private composerHint(): string {
-    return this.realChatMode ? (this.knowledgeEnabled ? '已授权个人知识库 · 按需查询并展示来源' :
-      (this.searchEnabled ? '已允许联网搜索 · 助手按需搜索并列出来源' : '可提问、安排日程、写文档，也能发图片；日程创建前会让你确认')) :
+    return this.realChatMode ? (this.knowledgeEnabled ? '已授权个人知识库 · 按需查询并展示来源' : '') :
       (this.searchEnabled ? '演示模式 · 固定样例，未联网' : '演示模式 · 数据仅本次有效');
   }
 
@@ -1233,12 +1231,29 @@ struct Index {
         if (message.isUser) {
           Row() {
             Blank().width('8%')
-            if (message.image !== undefined || message.imageMissing === true) {
-              Column({ space: 6 }) {
+            // Text first; a message that also has an image or voice shows a small arrow that opens them.
+            Column({ space: 6 }) {
+              if (message.text.length > 0) {
+                Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
+                  .backgroundColor(Theme.bubble).borderRadius({ topLeft: 20, topRight: 20, bottomLeft: 20, bottomRight: 6 })
+                  .accessibilityText(`你：${message.text}`)
+              }
+              if (message.text.length > 0 && this.hasAttachments(message)) {
+                Row({ space: 4 }) {
+                  Text(this.attachmentLabel(message.image !== undefined, message.imageMissing === true, message.voice))
+                    .fontSize(12).fontColor(Theme.muted)
+                  Text(this.expandedMessages.includes(message.id) ? '▴' : '▾').fontSize(14).fontColor(Theme.accent)
+                }.constraintSize({ minHeight: 32 }).padding({ left: 8, right: 6 }).id(`message-attachments-${message.id}`)
+                  .accessibilityText(`${this.expandedMessages.includes(message.id) ? '收起' : '展开'}这条消息的` +
+                    this.attachmentLabel(message.image !== undefined, message.imageMissing === true, message.voice))
+                  .onClick((): void => this.toggleMessageAttachments(message.id))
+              }
+              if (message.text.length === 0 || this.expandedMessages.includes(message.id)) {
                 if (message.image !== undefined) {
                   Image(message.image).width(180).constraintSize({ maxHeight: 240 }).objectFit(ImageFit.Cover)
-                    .borderRadius(16).border({ width: 1, color: Theme.line }).accessibilityText('你发送的图片')
-                } else {
+                    .borderRadius(16).border({ width: 1, color: Theme.line }).accessibilityText('你发送的图片，点击放大')
+                    .id(`message-image-${message.id}`).onClick((): void => { this.viewerImage = message.image ?? ''; })
+                } else if (message.imageMissing === true) {
                   // Restored conversations never contain the picture itself.
                   Row({ space: 6 }) {
                     AppIcon({ source: $r('app.media.ui_image'), size: 18 })
@@ -1250,27 +1265,8 @@ struct Index {
                   VoiceMessageBubble({ recording: message.voice, playingId: this.voicePlayingId,
                     onPlay: (clip: VoiceClip): void => this.playVoice(clip) })
                 }
-                if (message.text.length > 0) {
-                  Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
-                    .backgroundColor(Theme.bubble).borderRadius({ topLeft: 20, topRight: 20, bottomLeft: 20, bottomRight: 6 })
-                    .accessibilityText(`你：${message.text}`)
-                }
-              }.constraintSize({ maxWidth: '92%' }).alignItems(HorizontalAlign.End)
-            } else if (message.voice !== undefined) {
-              Column({ space: 6 }) {
-                VoiceMessageBubble({ recording: message.voice, playingId: this.voicePlayingId,
-                  onPlay: (clip: VoiceClip): void => this.playVoice(clip) })
-                if (message.text.length > 0) {
-                  Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
-                    .backgroundColor(Theme.bubble).borderRadius(20).width('100%')
-                    .accessibilityText(`你补充的文字：${message.text}`)
-                }
-              }.constraintSize({ maxWidth: '92%' }).alignItems(HorizontalAlign.End)
-            } else {
-              Text(message.text).fontSize(15).fontColor(Theme.ink).padding(15)
-                .backgroundColor(Theme.bubble).borderRadius({ topLeft: 20, topRight: 20, bottomLeft: 20, bottomRight: 6 })
-                .constraintSize({ maxWidth: '92%' }).accessibilityText(`你：${message.text}`)
-            }
+              }
+            }.constraintSize({ maxWidth: '92%' }).alignItems(HorizontalAlign.End)
           }.width('100%').justifyContent(FlexAlign.End)
         } else if (message.searchId !== undefined) {
           Column({ space: 12 }) {
@@ -1479,26 +1475,26 @@ struct Index {
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ bottom: 20 })
   }
 
-  private refreshVoiceArchive(): void {
-    try { this.voiceArchive = SpeechService.archive.list(); } catch (_) { this.voiceMessage = '读取已保存录音失败，请重试。'; }
+  private hasAttachments(message: ChatMessage): boolean {
+    return message.image !== undefined || message.imageMissing === true || message.voice !== undefined;
+  }
+
+  /** Short label for an image and voice, e.g. 「图片 · 语音 3 秒」. */
+  private attachmentLabel(image: boolean, imageMissing: boolean, voice: VoiceClip | undefined): string {
+    const parts: string[] = [];
+    if (image) { parts.push('图片'); } else if (imageMissing) { parts.push('图片（原图未保存）'); }
+    if (voice !== undefined) { parts.push(`语音 ${Math.max(1, Math.ceil(voice.durationMs / 1000))} 秒`); }
+    return parts.join(' · ');
+  }
+
+  private toggleMessageAttachments(id: string): void {
+    this.expandedMessages = this.expandedMessages.includes(id) ?
+      this.expandedMessages.filter((item: string): boolean => item !== id) : this.expandedMessages.concat([id]);
   }
 
   private playVoice(clip: VoiceClip): void {
     if (this.speech.busy) return;
     void SpeechService.playback.play(clip).catch((): void => { this.voiceMessage = '录音播放或释放失败，请重试。'; });
-  }
-
-  private deleteVoice(clip: VoiceClip): void {
-    this.getUIContext().showAlertDialog({ title: '删除这条录音？', message: '只删除这条本机录音，删除后无法恢复。',
-      primaryButton: { value: '保留', action: (): void => {} },
-      secondaryButton: { value: '删除', action: (): void => {
-        void SpeechService.playback.stop().then((): void => {
-          SpeechService.archive.remove(clip);
-          if (this.voiceDraft?.id === clip.id) { this.voiceDraft = undefined; this.voiceText = ''; }
-          this.refreshVoiceArchive();
-        }).catch((): void => { this.voiceMessage = '录音删除失败，文件仍保留。'; });
-      } }
-    });
   }
 
   private composerLength(): number {
@@ -1520,8 +1516,9 @@ struct Index {
     }
     const message: ChatMessage = { id: this.service.nextId('message'), isUser: true, text: supplement.trim(), voice: clip };
     this.messages = this.messages.concat([message]); this.voiceDraft = undefined; this.voiceText = ''; this.input = '';
+    this.draftAttachmentsOpen = false;
     this.hiddenVoiceQueries.add(text);
-    // The transcript stays hidden; search keywords chosen from it are hidden in the 搜索 panel too.
+    // The transcript stays hidden; it is never shown as a bubble or search keyword.
     this.searchVoiceQuery = this.searchEnabled; this.knowledgeVoiceQuery = this.knowledgeEnabled;
     try {
       await RuntimeChatService.session.send(text);
@@ -1539,9 +1536,7 @@ struct Index {
 
   private async pickImage(fromFiles: boolean): Promise<void> {
     if (this.blocked()) return;
-    if (!this.realChatMode || this.searchEnabled || this.knowledgeEnabled) {
-      this.notice('图片只能在普通对话里发送', '请先关闭联网搜索或知识库，再添加图片。'); return;
-    }
+    if (!this.realChatMode) { this.notice('图片只能在真实对话里发送', '请先切换到真实功能模式，再添加图片。'); return; }
     this.inputController.stopEditing();
     let uri: string = '';
     try {
@@ -1564,15 +1559,29 @@ struct Index {
     this.imageDraft?.bytes.fill(0); this.imageDraft = undefined; this.imageDraftUri = '';
   }
 
-  /** Image + optional voice + optional text in one assistant turn; the transcript stays hidden as in sendVoice. */
+  /**
+   * Keeps a local copy of the sent picture so the conversation still shows it after switching or restarting. Display
+   * only: later turns never send it to the model again. Without a copy the picker URI shows it in this run only.
+   */
+  private keepChatImage(message: ChatMessage, image: VisionChatImage): void {
+    try {
+      const name: string = ChatImageService.store.save(image);
+      message.imageFile = name; message.image = ChatImageService.store.uri(name) ?? message.image;
+    } catch { /* A restored conversation then shows the 「原图未保存」 placeholder for this message. */ }
+  }
+
+  /**
+   * Image + optional voice + optional text in one assistant turn, with or without 搜索 / 知识库授权 (both are tools of
+   * the same assistant loop). The transcript stays hidden as in sendVoice.
+   */
   private async sendImage(): Promise<void> {
     const image: VisionChatImage | undefined = this.imageDraft; const uri: string = this.imageDraftUri;
     const clip: VoiceClip | undefined = this.voiceDraft; const transcript: string = this.voiceText; const supplement: string = this.input;
     if (image === undefined || this.blocked() || (clip !== undefined && transcript.trim().length === 0)) return;
     const spoken: string = clip === undefined ? supplement.trim() : composeVoiceMessage(transcript, supplement);
     if (spoken.length > 500) return;
-    if (!this.realChatMode || this.searchEnabled || this.knowledgeEnabled) {
-      this.notice('图片只能在普通对话里发送', '请先关闭联网搜索或知识库；图片和文字都还在输入框里。'); return;
+    if (!this.realChatMode) {
+      this.notice('图片只能在真实对话里发送', '请先切换到真实功能模式；图片和文字都还在输入框里。'); return;
     }
     if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
       this.notice('助手还没有连接', (this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再发送。' :
@@ -1582,46 +1591,90 @@ struct Index {
       this.notice('这段对话已经很长了', '请点右上角「开始新对话」继续。本次没有发送。'); return;
     }
     const message: ChatMessage = { id: this.service.nextId('message'), isUser: true, text: supplement.trim(), voice: clip, image: uri };
+    // Kept before sending: the session zeroes the bytes once it owns them.
+    this.keepChatImage(message, image);
     this.messages = this.messages.concat([message]);
     // The session takes ownership of the bytes (it zeroes them after the turn); the composer only forgets them.
     this.imageDraft = undefined; this.imageDraftUri = ''; this.voiceDraft = undefined; this.voiceText = ''; this.input = '';
+    this.draftAttachmentsOpen = false;
     this.inputController.stopEditing();
     if (clip !== undefined) { this.hiddenVoiceQueries.add(spoken); }
+    // As in sendVoice: search keywords or knowledge queries derived from a voice message stay hidden.
+    this.searchVoiceQuery = clip !== undefined && this.searchEnabled; this.knowledgeVoiceQuery = clip !== undefined && this.knowledgeEnabled;
     await RuntimeChatService.session.send(spoken.length > 0 ? spoken : ASSISTANT_IMAGE_DEFAULT_PROMPT, image);
     this.scroller.scrollEdge(Edge.Bottom);
   }
 
   @Builder
-  voiceArchivePanel() {
-    Column({ space: 8 }) {
-      // The saved-recordings row only appears once there is something to list.
-      if (this.voiceArchive.length > 0 || this.voiceArchiveOpen) {
-        Row() {
-          Button(this.voiceArchiveOpen ? '收起录音' : `已保存语音 · ${this.voiceArchive.length}`)
-            .height(44).fontSize(12).fontColor(Theme.accent).backgroundColor(Color.Transparent).id('voice-archive-toggle')
-            .enabled(!this.speech.busy).onClick((): void => { this.refreshVoiceArchive(); this.voiceArchiveOpen = !this.voiceArchiveOpen; })
-          Blank()
-          if (this.voiceArchiveOpen) { Text('仅本机保存').fontSize(11).fontColor(Theme.muted) }
-        }.width('100%')
-      }
-      if (this.voiceMessage.length > 0) { Text(this.voiceMessage).fontSize(12).fontColor(Theme.danger) }
-      if (this.voiceArchiveOpen) {
-        Scroll() {
-          Column({ space: 8 }) {
-            ForEach(this.voiceArchive, (clip: VoiceClip): void => {
-              Row({ space: 6 }) {
-                VoiceMessageBubble({ recording: clip, playingId: this.voicePlayingId,
-                  onPlay: (item: VoiceClip): void => this.playVoice(item) })
-                Blank()
-                Button('删除').height(44).fontSize(12).fontColor(Theme.danger).backgroundColor(Color.Transparent)
-                  .id(`voice-delete-${clip.id}`).onClick((): void => this.deleteVoice(clip))
-              }.width('100%')
-            }, (clip: VoiceClip): string => clip.id)
-            if (this.voiceArchive.length === 0) { Text('还没有保存的录音').fontSize(12).fontColor(Theme.muted) }
-          }.width('100%')
-        }.constraintSize({ maxHeight: 180 }).width('100%')
-      }
-    }.width('100%')
+  voiceNotice() {
+    if (this.voiceMessage.length > 0) { Text(this.voiceMessage).fontSize(12).fontColor(Theme.danger).width('100%') }
+  }
+
+  /** Draft image and voice sit above the input box; once there is text they fold into one bar that can be opened. */
+  @Builder
+  draftAttachments() {
+    if (this.imagePreparing || this.imageDraftUri.length > 0 || this.voiceDraft !== undefined) {
+      Column({ space: 8 }) {
+        if (this.input.trim().length > 0) {
+          Row({ space: 6 }) {
+            Text(this.attachmentLabel(this.imagePreparing || this.imageDraftUri.length > 0, false, this.voiceDraft))
+              .fontSize(12).fontColor(Theme.muted).layoutWeight(1)
+            Text(this.draftAttachmentsOpen ? '收起 ▴' : '展开 ▾').fontSize(12).fontColor(Theme.accent)
+          }.width('100%').constraintSize({ minHeight: 36 }).padding({ left: 12, right: 12 })
+            .backgroundColor(Theme.soft).borderRadius(18).id('chat-draft-attachments')
+            .accessibilityText(`${this.draftAttachmentsOpen ? '收起' : '展开'}待发送的` +
+              this.attachmentLabel(this.imagePreparing || this.imageDraftUri.length > 0, false, this.voiceDraft))
+            .onClick((): void => { this.draftAttachmentsOpen = !this.draftAttachmentsOpen; })
+        }
+        if (this.input.trim().length === 0 || this.draftAttachmentsOpen) {
+          Row({ space: 12 }) {
+            if (this.imagePreparing) {
+              Column() {
+                LoadingProgress().width(24).height(24).color(Theme.accent)
+              }.width(72).height(72).justifyContent(FlexAlign.Center).backgroundColor(Theme.soft).borderRadius(12)
+                .id('chat-image-preparing').accessibilityText('正在处理图片（去掉位置等信息并压缩）')
+            } else if (this.imageDraftUri.length > 0) {
+              Stack({ alignContent: Alignment.TopEnd }) {
+                Image(this.imageDraftUri).width(72).height(72).objectFit(ImageFit.Cover).borderRadius(12)
+                  .border({ width: 1, color: Theme.line }).id('chat-image-draft').accessibilityText('待发送的图片，点击放大')
+                  .onClick((): void => { this.viewerImage = this.imageDraftUri; })
+                Button({ type: ButtonType.Circle }) {
+                  AppIcon({ source: $r('app.media.ui_close'), size: 12 })
+                }.width(24).height(24).backgroundColor(Theme.surface).border({ width: 1, color: Theme.line })
+                  .margin({ top: 4, right: 4 }).responseRegion({ x: -10, y: -10, width: 44, height: 44 })
+                  .id('chat-image-remove').enabled(!this.blocked()).accessibilityText('移除待发送的图片')
+                  .onClick((): void => this.discardImage())
+              }
+            }
+            if (this.voiceDraft !== undefined) {
+              Row({ space: 2 }) {
+                VoiceMessageBubble({ recording: this.voiceDraft, playingId: this.voicePlayingId,
+                  onPlay: (clip: VoiceClip): void => this.playVoice(clip) })
+                Button({ type: ButtonType.Circle }) {
+                  AppIcon({ source: $r('app.media.ui_close'), size: 14 })
+                }.width(44).height(44).backgroundColor(Color.Transparent)
+                  .id('voice-discard').enabled(!this.blocked()).accessibilityText('移除语音草稿')
+                  .onClick((): void => { this.voiceDraft = undefined; this.voiceText = ''; void SpeechService.session.cancel(); })
+              }
+            }
+            Blank()
+          }.width('100%').alignItems(VerticalAlign.Center)
+        }
+      }.width('100%').padding({ left: 4, right: 4 })
+    }
+  }
+
+  /** Full-screen view of a picked or sent image; tap anywhere or press back to close. */
+  @Builder
+  imageViewer() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Image(this.viewerImage).width('100%').height('100%').objectFit(ImageFit.Contain).accessibilityText('放大的图片')
+      Button({ type: ButtonType.Circle }) {
+        AppIcon({ source: $r('app.media.ui_close'), size: 18 })
+      }.width(44).height(44).backgroundColor(Theme.surface).margin({ top: 16, right: 16 })
+        .id('image-viewer-close').accessibilityText('关闭大图').onClick((): void => { this.viewerImage = ''; })
+    }.width('100%').height('100%').backgroundColor('#E6000000').id('image-viewer')
+      .onClick((): void => { this.viewerImage = ''; })
   }
 
   private startSpeech(): void {
@@ -1669,36 +1722,9 @@ struct Index {
   composer() {
     Column({ space: 8 }) {
       this.speechPanel()
-      this.voiceArchivePanel()
+      this.voiceNotice()
+      this.draftAttachments()
       Column({ space: 6 }) {
-        if (this.imagePreparing) {
-          Row({ space: 8 }) {
-            LoadingProgress().width(20).height(20).color(Theme.accent)
-            Text('正在处理图片（去掉位置等信息并压缩）…').fontSize(12).fontColor(Theme.muted).layoutWeight(1)
-          }.width('100%').padding({ left: 6, right: 6 }).id('chat-image-preparing')
-        } else if (this.imageDraftUri.length > 0) {
-          Row({ space: 10 }) {
-            Image(this.imageDraftUri).width(56).height(56).objectFit(ImageFit.Cover).borderRadius(12)
-              .border({ width: 1, color: Theme.line }).accessibilityText('待发送的图片')
-            Column({ space: 2 }) {
-              Text('图片 · 发送时一起交给助手').fontSize(13).fontColor(Theme.ink)
-              Text('只发送压缩后的图片内容，不含文件名和位置信息').fontSize(11).fontColor(Theme.muted)
-            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-            Button('移除').height(44).fontSize(12).fontColor(Theme.muted).backgroundColor(Color.Transparent)
-              .id('chat-image-remove').enabled(!this.blocked()).accessibilityText('移除待发送的图片')
-              .onClick((): void => this.discardImage())
-          }.width('100%').padding({ left: 4 }).id('chat-image-draft')
-        }
-        if (this.voiceDraft !== undefined) {
-          Row({ space: 8 }) {
-            VoiceMessageBubble({ recording: this.voiceDraft, playingId: this.voicePlayingId,
-              onPlay: (clip: VoiceClip): void => this.playVoice(clip) })
-            Blank()
-            Button('移除草稿').height(44).fontSize(12).fontColor(Theme.muted).backgroundColor(Color.Transparent)
-              .id('voice-discard').enabled(!this.blocked())
-              .onClick((): void => { this.voiceDraft = undefined; this.voiceText = ''; void SpeechService.session.cancel(); })
-          }.width('100%')
-        }
         TextArea({ text: this.input, placeholder: this.voiceDraft !== undefined ? '补充文字（可选），和语音一起发送…' :
           (this.imageDraftUri.length > 0 ? '想让我看什么？也可以直接发送…' : '发消息，或说说你的想法…'), controller: this.inputController })
           .fontSize(Theme.bodySize).fontColor(Theme.ink).placeholderColor(Theme.muted).backgroundColor(Color.Transparent)
@@ -1752,8 +1778,10 @@ struct Index {
       if (this.composerLength() > 500) {
         Text(this.voiceDraft === undefined ? '最多 500 字，请缩短后发送。' : '语音与补充文字合计最多 500 字，请减少补充文字或分段录音。').fontSize(12).fontColor(Theme.danger).width('100%')
       }
-      Text(this.composerHint()).fontSize(11).fontColor(Theme.muted).textAlign(TextAlign.Center).width('100%')
-        .id('chat-composer-hint')
+      if (this.composerHint().length > 0) {
+        Text(this.composerHint()).fontSize(11).fontColor(Theme.muted).textAlign(TextAlign.Center).width('100%')
+          .id('chat-composer-hint')
+      }
     }.padding({ left: 12, right: 12, top: 8, bottom: 12 }).width('100%').constraintSize({ maxWidth: this.contentLimit() }).backgroundColor(Theme.surface)
   }
 
@@ -1947,9 +1975,8 @@ struct Index {
             if (DEBUG) {
               this.runtimeChatControls()
             }
-            if (this.messages.length === 0 && !(this.realChatMode && this.searchEnabled && this.runtimeSearch.query.length > 0) &&
-              !(this.realChatMode && this.knowledgeEnabled && this.runtimeKnowledge.query.length > 0)) {
-              AssistantWelcome({ searchEnabled: this.searchEnabled, realChat: this.realChatMode })
+            if (this.messages.length === 0 && !(this.realChatMode && this.knowledgeEnabled && this.runtimeKnowledge.query.length > 0)) {
+              AssistantWelcome({ realChat: this.realChatMode })
             } else {
               this.assistant()
             }
@@ -2028,6 +2055,9 @@ struct Index {
         .backgroundColor(Theme.paper)
       // One Web surface above BOTH navigation and content; responsive sidebar changes never recreate the engine.
       PdfJsSurface()
+      if (this.viewerImage.length > 0) {
+        this.imageViewer()
+      }
     }.width('100%').height('100%').id('responsive-shell')
       .onAreaChange((_oldArea: Area, area: Area): void => { this.resizeWindow(Number(area.width)); })
       .backgroundColor(Theme.paper)

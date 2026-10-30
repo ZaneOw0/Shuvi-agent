@@ -17,6 +17,7 @@
     "/data/storage/el2/database/rdb/shuvi_kb_vector_v1.db-wal",
     "/data/storage/el2/database/rdb/shuvi_kb_vector_v1.db-shm",
     "/data/storage/el2/database/rdb/shuvi_kb_vector_v1.db-journal",
-    "/data/storage/el2/base/files/voice_messages/"
+    "/data/storage/el2/base/files/voice_messages/",
+    "/data/storage/el2/base/files/chat_images/"
   ]
 }

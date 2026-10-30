@@ -41,9 +41,11 @@ export interface ChatMessage {
   text: string;
   searchId?: string;
   voice?: VoiceClip;
-  /** Picker URI of the image the user sent with this message; display only, never sent to the model. */
+  /** URI of the image the user sent with this message (kept copy, else picker URI); display only, never resent to the model. */
   image?: string;
-  /** A restored message that had an image; the picture itself is never saved, so a placeholder is shown. */
+  /** Name of the kept local copy of that image (ChatImageStore); saved with the conversation so it shows after a restart. */
+  imageFile?: string;
+  /** A restored message that had an image with no kept copy (sent before copies were kept, or deleted); shows a placeholder. */
   imageMissing?: boolean;
   /** Present only on the reply that reports a verified calendar creation; rendered as a card. */
   calendar?: CalendarCreatedSummary;

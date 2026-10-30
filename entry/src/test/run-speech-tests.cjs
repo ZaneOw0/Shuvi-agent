@@ -330,10 +330,10 @@ test('WAV decoding rejects corrupted audio headers', () => {
 });
 
 test('real adapter streams capture packets and archives the exact original PCM before delivering a voice result', async () => {
-  let listener, params; const packets = [];
+  let listener, params, finishedAfter; const packets = [];
   const engine = { setListener(value) { listener = value; }, startListening(value) { params = value; listener.onStart(value.sessionId, 'ok'); },
     writeAudio(id, bytes) { packets.push(bytes); },
-    finish(id) { listener.onResult(id, { result: '后台理解用', isFinal: true, isLast: true }); listener.onComplete(id, 'done'); },
+    finish(id) { finishedAfter = packets.length; listener.onResult(id, { result: '后台理解用', isFinal: true, isLast: true }); listener.onComplete(id, 'done'); },
     cancel() {}, shutdown() {} };
   const h = harness({ createEngine: async () => engine });
   const { SpeechSession } = h.load('SpeechSession'); const { HarmonySpeechPort } = h.load('HarmonySpeechPort');
@@ -342,10 +342,64 @@ test('real adapter streams capture packets and archives the exact original PCM b
   const original = new Uint8Array(960).fill(9); h.capture.emit(original.buffer);
   h.advance(20); await flush(); assert.equal(packets.length, 1);
   session.finish(); await flush(); h.advance(20); await flush();
-  assert.equal(packets.length, 2); assert.equal(packets[1][319], 9); assert.equal(packets[1][320], 0);
+  // finish waits a few feed ticks after the last packet so the engine cannot see it ahead of that packet.
+  assert.equal(packets.length, 2); assert.equal(finishedAfter, undefined);
+  h.advance(20); await flush(); h.advance(20); await flush(); assert.equal(finishedAfter, 2);
+  assert.equal(packets[1][319], 9); assert.equal(packets[1][320], 0);
   assert.equal(session.snapshot().phase, h.SpeechPhase.Ready);
   assert.ok(session.snapshot().clip); assert.deepEqual(h.archive.read(session.snapshot().clip), original);
   assert.equal(h.capture.state, 4);
+});
+
+function rejectedPacketEngine(onFinish) {
+  const engine = { listener: undefined, sessionId: '', finished: false, writesAfterFinish: 0,
+    setListener(value) { engine.listener = value; },
+    startListening(value) { engine.sessionId = value.sessionId; engine.listener.onStart(value.sessionId, 'ok'); },
+    writeAudio() { if (engine.finished) engine.writesAfterFinish++; },
+    finish(id) { engine.finished = true; onFinish(engine.listener, id); },
+    cancel() {}, shutdown() {} };
+  return engine;
+}
+const REJECTED = [1002200010, 'Write audio failed because the start listening is failed.'];
+
+test('a rejected-packet error reported after finish still delivers the recognition result', async () => {
+  const engine = rejectedPacketEngine((listener, id) => {
+    listener.onError(id, ...REJECTED);
+    listener.onResult(id, { result: '你好。', isFinal: true, isLast: true }); listener.onComplete(id, 'done');
+  });
+  const h = harness({ createEngine: async () => engine });
+  const { SpeechSession } = h.load('SpeechSession'); const { HarmonySpeechPort } = h.load('HarmonySpeechPort');
+  const port = new HarmonySpeechPort(h.archive); port.bind({}); const session = new SpeechSession(port);
+  await session.start(); await flush(); h.capture.emit(new Uint8Array(1000).fill(5).buffer);
+  session.finish(); await flush();
+  for (let i = 0; i < 6; i++) { h.advance(20); await flush(); }
+  assert.equal(engine.finished, true); assert.equal(engine.writesAfterFinish, 0);
+  assert.equal(session.snapshot().phase, h.SpeechPhase.Ready); assert.equal(session.snapshot().text, '你好。');
+  assert.ok(session.snapshot().clip); assert.equal(h.archive.read(session.snapshot().clip).length, 1000);
+});
+
+test('the same error before finish still fails and keeps the recording', async () => {
+  const engine = rejectedPacketEngine(() => {});
+  const h = harness({ createEngine: async () => engine });
+  const { SpeechSession } = h.load('SpeechSession'); const { HarmonySpeechPort } = h.load('HarmonySpeechPort');
+  const port = new HarmonySpeechPort(h.archive); port.bind({}); const session = new SpeechSession(port);
+  await session.start(); await flush(); h.capture.emit(new Uint8Array(640).buffer); h.advance(20); await flush();
+  engine.listener.onError(engine.sessionId, ...REJECTED); await flush();
+  assert.equal(session.snapshot().phase, h.SpeechPhase.Error); assert.match(session.snapshot().message, /1002200010/);
+  assert.equal(h.archive.list().length, 1);
+});
+
+test('a rejected-packet error after finish with no result still ends at the finish timeout', async () => {
+  const engine = rejectedPacketEngine((listener, id) => { listener.onError(id, ...REJECTED); });
+  const h = harness({ createEngine: async () => engine });
+  const { SpeechSession } = h.load('SpeechSession'); const { HarmonySpeechPort } = h.load('HarmonySpeechPort');
+  const port = new HarmonySpeechPort(h.archive); port.bind({}); const session = new SpeechSession(port);
+  await session.start(); await flush(); h.capture.emit(new Uint8Array(640).buffer);
+  session.finish(); await flush();
+  for (let i = 0; i < 4; i++) { h.advance(20); await flush(); }
+  assert.equal(engine.finished, true); assert.equal(session.snapshot().phase, h.SpeechPhase.Finishing);
+  h.advance(5000); await flush();
+  assert.equal(session.snapshot().phase, h.SpeechPhase.Error); assert.ok(session.snapshot().clip);
 });
 
 test('cancelled recording is released without creating a saved audio file', async () => {
@@ -374,7 +428,8 @@ test('voice UI excludes transcript preview and input binding; saved audio is exc
   const page = fs.readFileSync(path.join(entry, 'pages/Index.ets'), 'utf8');
   assert.equal(page.includes('Text(this.speech.preview)'), false);
   assert.equal(page.includes('this.input = view.text'), false);
-  assert.ok(page.includes('this.hiddenVoiceQueries.has(this.runtimeSearch.query)'));
+  // The page has no search panel, so search keywords (which may come from a voice message) are not shown at all.
+  assert.equal(/RuntimeSearchPanel|runtimeSearch\.(query|sources)/.test(page), false);
   assert.ok(page.includes('this.hiddenVoiceQueries.has(this.runtimeKnowledge.query'));
   const bubble = fs.readFileSync(path.join(entry, 'components/VoiceMessageBubble.ets'), 'utf8');
   assert.equal(/transcript|\.text\b|voiceText/.test(bubble), false);
@@ -576,7 +631,9 @@ test('page back cancels active speech before closing PDF and preserves normal dr
   const code=ts.transpileModule('class BackFixture {\n'+method[0]+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.None}}).outputText;
   const calls=[],pdf={shared:{expanded:true,closePreview(){calls.push('pdf');}}};
   const fixture=new Function('SpeechService','PdfJsRuntime',code+';return new BackFixture();')({session:{cancel(){calls.push('speech');}}},pdf);
-  fixture.speech={busy:true};assert.equal(fixture.onBackPress(),true);assert.deepEqual(calls,['speech']);
+  fixture.viewerImage='file://picked';fixture.speech={busy:true};assert.equal(fixture.onBackPress(),true);
+  assert.equal(fixture.viewerImage,'');assert.deepEqual(calls,[]); // an open image viewer closes first
+  assert.equal(fixture.onBackPress(),true);assert.deepEqual(calls,['speech']);
   fixture.speech.busy=false;assert.equal(fixture.onBackPress(),true);assert.deepEqual(calls,['speech','pdf']);
   pdf.shared.expanded=false;fixture.drawerOpen=true;assert.equal(fixture.onBackPress(),true);assert.equal(fixture.drawerOpen,false);
 });
@@ -585,18 +642,23 @@ test('PR26 voice plus image dispatches both through the page and keeps the trans
   const page=fs.readFileSync(path.resolve(root,'../../pages/Index.ets'),'utf8');
   const method=page.match(/  private async sendImage\(\): Promise<void> \{[\s\S]*?\n  \}/);assert.ok(method);
   const code=ts.transpileModule('class ImageSendFixture {\n'+method[0]+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.None}}).outputText;
-  for (const authorized of [false,true]) {
-    const {fixture,calls,clip}=voiceSendFixture();const image={bytes:new Uint8Array([1,2,3])};
+  // Since 2026-10-30 a picture can be sent with 搜索 or 知识库授权 on as well (both are tools of the same assistant loop).
+  for (const mode of ['chat','search','knowledge']) {
+    const {fixture,calls,clip}=voiceSendFixture(mode);const image={bytes:new Uint8Array([1,2,3])};const order=[];
     const impl=new Function('composeVoiceMessage','ShuviRuntimeState','RuntimeChatService','ASSISTANT_IMAGE_DEFAULT_PROMPT','Edge',code+';return new ImageSendFixture();')(
       harness().load('VoiceAudio').composeVoiceMessage,{READY:'ready'},
-      {session:{async send(text,attached){calls.push({text,attached});}}},'请看看这张图片。',{Bottom:1});
+      {session:{async send(text,attached){order.push('send');calls.push({text,attached});}}},'请看看这张图片。',{Bottom:1});
+    const kept='chat-image-00000000-0000-4000-8000-000000000000.jpg';
+    fixture.keepChatImage=(message,picture)=>{order.push('keep');assert.equal(picture,image);message.imageFile=kept;message.image='file://kept/'+kept;};
     fixture.sendImage=impl.sendImage;fixture.imageDraft=image;fixture.imageDraftUri='file://chosen-image';
-    fixture.inputController={stopEditing(){}};fixture.knowledgeEnabled=authorized;
+    fixture.inputController={stopEditing(){}};
     await fixture.sendVoice();
-    if(authorized){assert.equal(calls.length,0);assert.equal(fixture.imageDraft,image);assert.equal(fixture.voiceDraft,clip);continue;}
-    assert.equal(calls.length,1);assert.equal(calls[0].attached,image);assert.equal(calls[0].text,'语音里的要求\n\n另外请列成三点');
-    assert.equal(fixture.messages[0].voice,clip);assert.equal(fixture.messages[0].image,'file://chosen-image');
+    assert.equal(calls.length,1,mode);assert.equal(calls[0].attached,image);assert.equal(calls[0].text,'语音里的要求\n\n另外请列成三点');
+    assert.deepEqual(order,['keep','send'],'the copy is kept before the session takes (and zeroes) the bytes');
+    assert.equal(fixture.messages[0].voice,clip);assert.equal(fixture.messages[0].image,'file://kept/'+kept);
+    assert.equal(fixture.messages[0].imageFile,kept);
     assert.equal(fixture.messages[0].text,'另外请列成三点');assert(fixture.hiddenVoiceQueries.has(calls[0].text));
+    assert.equal(fixture.searchVoiceQuery,mode==='search');assert.equal(fixture.knowledgeVoiceQuery,mode==='knowledge');
     assert.equal(fixture.imageDraft,undefined);assert.equal(fixture.voiceDraft,undefined);
   }
 });

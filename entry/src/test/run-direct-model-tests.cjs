@@ -4262,6 +4262,47 @@ test('conversation store keeps working in memory when the local store cannot ope
   await store.flush(); assert.equal(memory.turns().length, 1);
 });
 
+test('conversation store keeps sent pictures as named local copies: restored, missing, damaged and deleted', async () => {
+  const { AssistantMemory } = load(path.join(services, '../conversation/AssistantMemory.ets'));
+  const { AssistantConversations, validChatImageName } = load(path.join(services, '../conversation/AssistantConversations.ets'));
+  const rows = new Map();
+  const port = { async open() {}, async close() {},
+    async list() { return [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+      .map(r => ({ id: r.id, title: r.title, createdAt: r.createdAt, updatedAt: r.updatedAt })); },
+    async load(id) { const row = rows.get(id); return row === undefined ? undefined : { ...row }; },
+    async save(record) { rows.set(record.id, { ...record }); }, async remove(id) { rows.delete(id); } };
+  const a = 'chat-image-11111111-1111-4111-8111-111111111111.jpg'; const b = 'chat-image-22222222-2222-4222-8222-222222222222.png';
+  const files = new Set([a, b]); const removed = []; const asked = [];
+  const images = { uri(name) { asked.push(name); return files.has(name) ? 'file://app/chat_images/' + name : undefined; },
+    remove(names) { for (const name of names) { removed.push(name); files.delete(name); } } };
+  assert.equal(validChatImageName(a), true); assert.equal(validChatImageName('../' + a), false);
+  assert.equal(validChatImageName('chat-image-x.jpg'), false); assert.equal(validChatImageName(a + '.tmp'), false);
+  let now = 1; let n = 0;
+  const memory = new AssistantMemory(); const store = new AssistantConversations(memory, () => ++now, () => 'conv-' + (++n));
+  store.useImages(images); await store.open(port);
+  store.saveMessages([{ id: 'm1', isUser: true, text: '看图', image: 'file://app/chat_images/' + a, imageFile: a },
+    { id: 'm2', isUser: true, text: '', image: 'file://media/Photo/9/IMG_9.jpg' }]);
+  await store.flush();
+  const json = rows.get('conv-1').messagesJson;
+  assert.ok(json.includes(a)); assert.doesNotMatch(json, /file:\/\/|IMG_9/, 'only the kept file name is stored, never a URI');
+  store.startNew(); store.saveMessages([{ id: 'x', isUser: true, text: '另一段', image: 'file://app/chat_images/' + b, imageFile: b }]);
+  await store.flush();
+  const back = await store.switchTo('conv-1');
+  assert.equal(back[0].image, 'file://app/chat_images/' + a); assert.equal(back[0].imageFile, a); assert.equal(back[0].imageMissing, undefined);
+  assert.equal(back[1].imageMissing, true, 'a picture sent without a kept copy keeps the placeholder'); assert.equal(back[1].image, undefined);
+  files.delete(a); await store.switchTo('conv-2');
+  const gone = await store.switchTo('conv-1');
+  assert.equal(gone[0].imageMissing, true, 'a kept copy that is gone shows the placeholder'); assert.equal(gone[0].image, undefined);
+  rows.set('conv-3', { id: 'conv-3', title: '坏记录', createdAt: 1, updatedAt: 0, memoryJson: '',
+    messagesJson: JSON.stringify([{ id: 'd', isUser: true, text: '', image: true, imageFile: '../../evil.jpg' }]) });
+  const damaged = await store.switchTo('conv-3');
+  assert.equal(damaged[0].imageMissing, true); assert.equal(asked.includes('../../evil.jpg'), false, 'a damaged name is never resolved');
+  await store.switchTo('conv-1');
+  assert.equal(await store.remove('conv-2'), false); assert.deepEqual(removed, [b], 'deleting another conversation deletes its picture');
+  assert.equal(await store.remove('conv-1'), true); assert.deepEqual(removed, [b, a], 'deleting the current conversation deletes its picture');
+  assert.equal(rows.has('conv-1') || rows.has('conv-2'), false);
+});
+
 test('chat journal keeps accepting turns past 128 records by retiring the oldest finished records', async () => {
   const turns = 135;
   const h = toolHarness(Array.from({ length: turns }, (_, i) => ({ content: '答' + i })), { });
