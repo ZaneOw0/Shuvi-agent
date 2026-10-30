@@ -18,13 +18,13 @@ interface WelcomeOptions {
 export function AssistantWelcome($$: WelcomeOptions) {
   Column({ space: 12 }) {
     BrandAvatar({ size: 80 })
-    Text('Shuvi').fontSize(36).fontWeight(FontWeight.Medium).fontColor(Theme.accent)
+    Text('休比').fontSize(36).fontWeight(FontWeight.Medium).fontColor(Theme.accent)
       .margin({ bottom: 6 }).textAlign(TextAlign.Center)
     Text('嗨，今天想做些什么？').fontSize(22).fontWeight(FontWeight.Medium)
       .fontColor(Theme.ink).textAlign(TextAlign.Center).width('100%')
     Text('我是休比，让想法成为行动。').fontSize(13).fontColor(Theme.muted)
       .textAlign(TextAlign.Center).width('100%')
-    Text($$.realChat ? ($$.searchEnabled ? '已允许联网搜索：直接提问，助手需要时会自己搜索' : '提问、发图片、安排日程或写文档，或点下方「试试」') : '点下方「试试」开始体验').fontSize(Theme.noteSize).fontColor(Theme.muted)
+    Text($$.realChat ? ($$.searchEnabled ? '已允许联网搜索：直接提问，助手需要时会自己搜索' : '提问、发图片、安排日程或写文档') : '输入想安排的日程，体验草稿确认流程').fontSize(Theme.noteSize).fontColor(Theme.muted)
       .textAlign(TextAlign.Center).margin({ top: 8 }).width('100%')
   }.width('100%').padding({ top: 24, bottom: 24, left: 12, right: 12 })
 }

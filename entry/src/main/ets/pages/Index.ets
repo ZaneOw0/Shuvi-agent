@@ -14,6 +14,9 @@
  */
 import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { Theme } from '../components/Theme';
+import { SettingsPreparationView } from '../components/SettingsPreparationView';
+import { SettingsPreparationPhase, SettingsPreparationState, SettingsPreparationTask } from '../components/SettingsPreparationModels';
+import { settingsInitializationTrace } from '../knowledge/infra/SettingsInitializationTrace';
 import { VoiceMessageBubble } from '../components/VoiceMessageBubble';
 import { VoiceClip, composeVoiceMessage } from '../services/speech/VoiceAudio';
 import { SpeechService } from '../services/speech/SpeechService';
@@ -91,6 +94,9 @@ import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { RuntimeSearchView } from '../services/model/RuntimeSearchSession';
 import { RuntimeSearchPanel } from '../components/RuntimeSearchPanel';
 import { RuntimeKnowledgePanel } from '../components/RuntimeKnowledgePanel';
+import { AssistantReplyBubble } from '../components/AssistantReplyBubble';
+import { ChatKnowledgeReply, chatKnowledgeReply, chatKnowledgeStoredReply } from '../components/ChatKnowledgeSources';
+import { ChatKnowledgeSource, ChatKnowledgeSnapshot } from '../model/ChatKnowledgeModels';
 import { NativeAgentRdbOpen } from '../services/model/AgentRdbResources';
 import { AssistantView } from '../services/calendar/AssistantRuntimeSession';
 import { RuntimeCalendarCard } from '../components/RuntimeCalendarCard';
@@ -132,6 +138,8 @@ struct Index {
   @State knowledgeOpening: boolean = false;
   @State knowledgeMessage: string = '';
   private knowledgeLoad: Promise<void> | undefined = undefined;
+  @State knowledgePreparation: SettingsPreparationState = new SettingsPreparationState();
+  private knowledgePreparationTimer: number = -1;
   @State knowledgeReady: boolean = false;
   @State parsedDocumentId: string = '';
   @State parsedOpening: boolean = false;
@@ -176,8 +184,19 @@ struct Index {
   private parseService: DocumentParseService | undefined = undefined;
   @State parseOpen: boolean = false;
   @State parseSettings: boolean = false;
+  @State parsePreparation: SettingsPreparationState = new SettingsPreparationState();
+  @State embeddingPreparation: SettingsPreparationState = new SettingsPreparationState();
+  private parsePreparationTask: SettingsPreparationTask = new SettingsPreparationTask(
+    (): Promise<void> => this.loadParseService(), (state: SettingsPreparationState): void => {
+      if (this.alive) { this.parsePreparation = state; }
+      settingsInitializationTrace('parse-page', state.phase, state.startedAt);
+    });
+  private embeddingPreparationTask: SettingsPreparationTask = new SettingsPreparationTask(
+    (): Promise<void> => this.loadEmbeddingService(), (state: SettingsPreparationState): void => {
+      if (this.alive) { this.embeddingPreparation = state; }
+      settingsInitializationTrace('embedding-page', state.phase, state.startedAt);
+    });
   @State embeddingOpen: boolean = false;
-  @State embeddingOpening: boolean = false;
   @State pdfIngestionOpen: boolean = false;
   private pdfIngestionService: PdfIngestionService | undefined = undefined;
   private unifiedSearchService: KnowledgeSearchService | undefined = undefined;
@@ -303,6 +322,8 @@ struct Index {
   aboutToDisappear(): void {
     PdfJsRuntime.shared.closePreview();
     this.alive = false;
+    if (this.knowledgePreparationTimer !== -1) { clearTimeout(this.knowledgePreparationTimer); this.knowledgePreparationTimer = -1; }
+    this.parsePreparationTask.dispose(); this.embeddingPreparationTask.dispose();
     RuntimeChatService.conversations.detach();
     SpeechService.session.detach();
     SpeechService.playback.detach();
@@ -316,6 +337,8 @@ struct Index {
     this.embeddingService?.pause(); this.closeKnowledgeSession().catch((): void => { this.parsedMessage='会话释放未确认；保留本机持有，可重试释放'; });
   }
   private async closeKnowledgeSession(): Promise<void> {
+    try { await this.embeddingPreparationTask.wait(); } catch { /* Failed preparation has no usable service. */ }
+    try { await this.parsePreparationTask.wait(); } catch { /* The failed assembly is closed below if still held. */ }
     await PdfJsRuntime.shared.closeAndWait();
     this.sharedKnowledge?.unsubscribe(this.knowledgeListener);
     await this.sharedKnowledge?.quiesceUnified();
@@ -412,9 +435,10 @@ struct Index {
     this.apiKeysReady = false; this.apiKeysOpen = true; this.scroller.scrollEdge(Edge.Top);
     // The SiliconFlow and MinerU cards need their services; open them without showing their own pages.
     try {
-      if (this.embeddingService === undefined) { await this.openEmbedding(); this.embeddingOpen = false; }
-      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
-    } finally { this.apiKeysReady = true; }
+      if (this.embeddingService === undefined) { await this.embeddingPreparationTask.prepare(); }
+      if (this.parseService === undefined) { await this.parsePreparationTask.prepare(); }
+    } catch { /* API Key management can show which local services are unavailable. */ }
+    finally { this.apiKeysReady = true; }
   }
   private sessionState(): ShuviRuntimeState {
     return this.runtimeChat.lifecycle;
@@ -456,10 +480,26 @@ struct Index {
     const pending: Promise<void> | undefined = this.knowledgeLoad;
     if (pending !== undefined) { return pending; }
     this.knowledgeOpening = true; this.knowledgeMessage = '';
+    const startedAt: number = Date.now();
+    this.updateKnowledgePreparation(SettingsPreparationPhase.Loading, startedAt, false);
+    this.knowledgePreparationTimer = setTimeout((): void => {
+      this.knowledgePreparationTimer = -1;
+      this.updateKnowledgePreparation(SettingsPreparationPhase.Loading, startedAt, true);
+    }, 3000);
     const operation: Promise<void> = this.loadKnowledge(); this.knowledgeLoad = operation;
     try { await operation; }
     catch (error) { this.knowledgeMessage = '资料库打开未完成，资料保留。原因：' + (error instanceof KnowledgeFailure || error instanceof DocxFailure ? error.category : 'LocalInitializationFailed'); }
-    finally { this.knowledgeLoad = undefined; this.knowledgeOpening = false; }
+    finally {
+      if (this.knowledgePreparationTimer !== -1) { clearTimeout(this.knowledgePreparationTimer); this.knowledgePreparationTimer = -1; }
+      this.knowledgeLoad = undefined; this.knowledgeOpening = false;
+      this.updateKnowledgePreparation(this.knowledgeReady ? SettingsPreparationPhase.Ready : SettingsPreparationPhase.Failed, startedAt, false);
+    }
+  }
+  private updateKnowledgePreparation(phase: SettingsPreparationPhase, startedAt: number, slow: boolean): void {
+    if (!this.alive) { return; }
+    const state: SettingsPreparationState = new SettingsPreparationState();
+    state.phase = phase; state.startedAt = startedAt; state.elapsedMs = Date.now() - startedAt; state.slow = slow;
+    this.knowledgePreparation = state;
   }
   private async loadKnowledge(): Promise<void> {
     if (this.knowledgeAssembly !== undefined) {
@@ -511,7 +551,6 @@ struct Index {
   private closeParse(): void {
     this.parseService?.clearInput(); this.parseOpen = false; this.scroller.scrollEdge(Edge.Top);
   }
-  private async openImages(): Promise<void> { await this.openParsed(); }
   private async openParsed(importNow: boolean = false): Promise<void> {
     this.parsedImportOpen = importNow;
     if (this.parsedOpening) { return; } this.parsedOpen = true; this.parsedOpening = true; this.parsedMessage = ''; this.scroller.scrollEdge(Edge.Top);
@@ -519,7 +558,7 @@ struct Index {
       await this.openKnowledge(); const shared = this.sharedKnowledge;
       if (shared === undefined) { throw new Error('用户库尚未就绪'); }
       if (!shared.unified.ready()) { await shared.retryUnifiedInitialization(); }
-      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+      if (this.parseService === undefined) { await this.parsePreparationTask.prepare(); }
       this.parsedService = shared.unifiedIngestion; this.parsedImports = shared.unifiedImports; await this.parsedService.refresh();
       if (this.parseService === undefined) { this.parsedMessage = '解析准备不可用；TXT/MD与已发布内容可用，可重试打开'; }
     } catch (error) { this.parsedMessage = error instanceof Error ? error.message : '统一服务打开失败，资料保留'; }
@@ -539,7 +578,7 @@ struct Index {
   }
   private async openMigration(): Promise<void> { await this.openParsed(); this.parsedOpen=false; this.migrationOpen=true; }
   private async openLegacyImages(): Promise<void> {
-    await this.openKnowledge(); if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+    await this.openKnowledge(); if (this.parseService === undefined) { await this.parsePreparationTask.prepare(); }
     const context = this.getUIContext().getHostContext(); const shared = this.sharedKnowledge;
     if (context === undefined || shared === undefined || this.parseService === undefined || !shared.images.ready()) { this.knowledgeState.message = '图片准备区不可用，原件未修改'; return; }
     if (this.imageIngestionService === undefined) { this.imageIngestionService = new ImageIngestionService(this.parseService,shared.images,new ImageOriginalAdapter(context.filesDir),new ImageProcessingAdapter(),new KnowledgePlatformIdentity(),KnowledgeStorageScope.production()); const metadata = shared.vectorMetadata; if (metadata instanceof ImageVectorRepository) { this.imageIngestionService.attachVectorCleanup(async (id: string): Promise<void> => { const cleanup: Promise<void> = metadata.cleanupDeleted(id,shared.vectors); await cleanup; }); } await this.imageIngestionService.initialize(); }
@@ -555,7 +594,7 @@ struct Index {
     this.imageIngestionOpen = false; this.docxSourceOpen = false; this.scroller.scrollEdge(Edge.Top);
     try {
       await this.openKnowledge();
-      if (this.parseService === undefined) { await this.openParse(false); this.parseOpen = false; }
+      if (this.parseService === undefined) { await this.parsePreparationTask.prepare(); }
       const shared = this.sharedKnowledge; const context = this.getUIContext().getHostContext(); const parse = this.parseService;
       if (shared === undefined || context === undefined || parse === undefined) { this.docxEntryMessage = '解析准备打开未完成。'+(this.parseState.message || this.knowledgeState.message || '本机服务暂不可用')+'；原件和已有资料保留，可重试。'; return; }
       await shared.ensureDocxReady();
@@ -582,29 +621,16 @@ struct Index {
     if (this.sharedKnowledge === undefined) { return; } this.imageSourceOpen = true;
     try { await this.sharedKnowledge.imageSources.open(document); } catch { this.knowledgeState.message = '图片来源核验或释放未完成'; }
   }
-  private async prepareImage(resultId: string): Promise<void> {
-    await this.consumeParsed(resultId);
-  }
-  private async consumeParsed(id: string): Promise<void> {
-    this.closeParse(); await this.openParsed();
-    try { if (this.parseService !== undefined && this.parsedImports !== undefined) { await this.parsedImports.consume(this.parseService,id); } }
-    catch (error) { this.parsedMessage = error instanceof Error ? error.message : '统一产物未完成，原件/ZIP保留'; }
-  }
   private closeEmbedding(): void { this.embeddingClearEpoch++; this.embeddingService?.clearInput(); this.embeddingOpen = false; this.scroller.scrollEdge(Edge.Top); }
   private async openEmbedding(): Promise<void> {
-    if (this.embeddingOpening) { return; }
-    this.embeddingOpen = true; this.embeddingOpening = true; this.scroller.scrollEdge(Edge.Top);
-    try {
-      if (this.sharedKnowledge !== undefined) { this.embeddingService = this.sharedKnowledge.repository.ready() ? this.sharedKnowledge.embedding : undefined; return; }
-      const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
-      const assembly: KnowledgeAssembly = KnowledgeAssembly.forContext(context); this.sharedKnowledge = assembly;
-      await assembly.acquire(); this.embeddingService = assembly.repository.ready() ? assembly.embedding : undefined;
-    }
-    catch { this.sharedKnowledge = undefined; this.embeddingService = undefined; }
-    finally { this.embeddingOpening = false; }
+    this.embeddingOpen = true; this.parseOpen = false; this.scroller.scrollEdge(Edge.Top);
+    try { await this.embeddingPreparationTask.prepare(); } catch { /* The preparation card owns failure and explicit retry. */ }
   }
-  private async preparePdf(resultId: string): Promise<void> {
-    await this.consumeParsed(resultId);
+  private async loadEmbeddingService(): Promise<void> {
+    await this.openKnowledge();
+    const shared: KnowledgeAssembly | undefined = this.sharedKnowledge;
+    if (shared === undefined || !shared.repository.ready()) { throw new Error('EMBEDDING_SETTINGS_UNAVAILABLE'); }
+    this.embeddingService = shared.embedding;
   }
   private async openPdfJobs(): Promise<void> {
     const context = this.getUIContext().getHostContext(); if (context === undefined) { return; }
@@ -613,16 +639,25 @@ struct Index {
     await this.pdfIngestionService.refreshJobs(); this.pdfIngestionOpen = true;
   }
   private async openParse(settings: boolean): Promise<void> {
-    this.parseSettings = settings; this.parseOpen = true; this.scroller.scrollEdge(Edge.Top);
-    if (this.parseAssembly !== undefined) { this.parseService?.clearInput(); return; }
+    this.parseSettings = settings; this.parseOpen = true; this.embeddingOpen = false; this.scroller.scrollEdge(Edge.Top);
+    this.parseService?.clearInput();
+    try { await this.parsePreparationTask.prepare(); } catch { /* The preparation card owns failure and explicit retry. */ }
+  }
+  private async loadParseService(): Promise<void> {
+    if (this.parseService !== undefined) { return; }
+    if (this.parseAssembly !== undefined) { await this.parseAssembly.close(); this.parseAssembly = undefined; }
     const context = this.getUIContext().getHostContext();
-    if (context === undefined) { this.parseState.message = '本机上下文不可用，解析准备未打开'; return; }
+    if (context === undefined) { throw new Error('PARSE_CONTEXT_UNAVAILABLE'); }
     const assembly: DocumentParseAssembly = new DocumentParseAssembly(context, (): void => {
       if (this.alive) { this.parseState = assembly.service.viewState(); }
     });
     this.parseAssembly = assembly;
-    try { await assembly.initialize(); this.parseService = assembly.service; this.parseState = assembly.service.viewState(); }
-    catch { await assembly.close(); this.parseAssembly = undefined; this.parseService = undefined; this.parseState = assembly.service.viewState(); }
+    try { await assembly.initialize(); this.parseService = assembly.service; if (this.alive) { this.parseState = assembly.service.viewState(); } }
+    catch {
+      this.parseService = undefined;
+      try { await assembly.close(); this.parseAssembly = undefined; } catch { /* Keep ownership for a later release attempt. */ }
+      throw new Error('PARSE_SETTINGS_UNAVAILABLE');
+    }
   }
 
   private resizeWindow(width: number): void {
@@ -643,7 +678,34 @@ struct Index {
 
   private addMessage(text: string, isUser: boolean = false, calendar?: CalendarCreatedSummary): void {
     const message: ChatMessage = { id: this.service.nextId('message'), isUser: isUser, text: text, calendar: calendar };
+    if (!isUser) {
+      const reply: ChatKnowledgeReply = chatKnowledgeReply(text, RuntimeKnowledgeService.session.snapshot().citations);
+      if (reply.sources.length > 0) {
+        const snapshot: ChatKnowledgeSnapshot = new ChatKnowledgeSnapshot(); snapshot.sources = reply.sources;
+        message.knowledgeSources = snapshot;
+      }
+    }
     this.messages = this.messages.concat([message]);
+  }
+
+  private assistantReply(message: ChatMessage): ChatKnowledgeReply {
+    return chatKnowledgeStoredReply(message.text, message.knowledgeSources);
+  }
+
+  private async openChatKnowledgeSource(source: ChatKnowledgeSource): Promise<void> {
+    try {
+      await this.openKnowledge();
+      const shared = this.sharedKnowledge;
+      if (shared === undefined) { throw new Error('KnowledgeUnavailable'); }
+      const document = await shared.unified.get(source.documentId);
+      if (document === undefined || document.tombstone || document.archived || document.activeGeneration !== source.generation) {
+        this.notice('来源已变化', '这份来源已换版、归档或删除，无法打开当时的版本。回答中的来源编号仍保留供核对。'); return;
+      }
+      this.parsedDocumentId = source.documentId;
+      await this.openParsed();
+    } catch {
+      this.notice('暂时无法打开来源', '文件详情读取失败，请稍后重试。回答与来源仍保留。');
+    }
   }
   private openCalendarRecords(): void {
     // Leaving the assistant tab ends the chat session as before; the 日程 tab lists the verified native records.
@@ -790,18 +852,6 @@ struct Index {
       this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STARTING || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STOPPING;
   }
 
-  private useSample(): void {
-    if (this.blocked()) {
-      return;
-    }
-    this.input = this.sampleText();
-    this.scroller.scrollEdge(Edge.Bottom);
-  }
-  private sampleText(): string {
-    return this.realChatMode ? (this.knowledgeEnabled ? '知识库中的 Agent Runtime 是如何设计的？' :
-      (this.searchEnabled ? '帮我查一下 HarmonyOS ArkUI 官方开发文档从哪里开始看' : '明天下午 3 点到 4 点开项目评审会，提前 10 分钟提醒')) :
-      (this.searchEnabled ? SEARCH_SAMPLE : this.service.sampleText);
-  }
   private headerConnected(): boolean {
     return this.realChatMode && (this.runtimeChat.lifecycle === ShuviRuntimeState.READY ||
       this.runtimeSearch.lifecycle === ShuviRuntimeState.READY || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.READY);
@@ -1253,10 +1303,8 @@ struct Index {
           Row({ space: 8 }) {
             BrandAvatar({ size: 28 })
             Column() {
-              Text(message.text).fontSize(Theme.bodySize).fontColor(Theme.ink).lineHeight(22)
-                .padding({ left: 14, right: 14, top: 10, bottom: 10 }).backgroundColor(Theme.surface)
-                .borderRadius({ topLeft: 6, topRight: 20, bottomLeft: 20, bottomRight: 20 })
-                .border({ width: 1, color: Theme.line }).accessibilityText(`休比：${message.text}`)
+              AssistantReplyBubble({ reply: this.assistantReply(message),
+                onOpenSource: (source: ChatKnowledgeSource): void => { void this.openChatKnowledgeSource(source); } })
             }.layoutWeight(1).alignItems(HorizontalAlign.Start).padding({ right: '8%' })
           }.width('100%').alignItems(VerticalAlign.Top)
         }
@@ -1298,11 +1346,10 @@ struct Index {
         Button('重试生成').fontColor(Theme.accent).backgroundColor(Theme.soft).onClick(() => this.send())
       }
       if (!this.blocked() && this.requestState === RequestState.Clarification) {
-        Button('取消澄清，使用完整样例').fontColor(Theme.accent).backgroundColor(Theme.soft)
+        Button('取消澄清').fontColor(Theme.accent).backgroundColor(Theme.soft)
           .onClick(() => {
             this.requestState = RequestState.Cancelled;
-            this.addMessage('已取消本次澄清，请重新发送完整样例。');
-            this.useSample();
+            this.addMessage('已取消本次澄清，请重新输入完整需求。');
           })
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 14, bottom: 20 })
@@ -1377,13 +1424,12 @@ struct Index {
       if (this.records.length === 0) {
         Column({ space: 16 }) {
           Text('还没有安排').fontSize(20).fontColor(Theme.ink)
-          Text('从一条样例开始，体验日程确认流程。').fontSize(13).fontColor(Theme.muted)
+          Text('在助手中描述日程，确认后查看安排。').fontSize(13).fontColor(Theme.muted)
           Button('去助手创建').backgroundColor(Theme.accent).fontColor(Color.White)
             .onClick(() => {
               this.changeTab(0);
               if (!this.blocked()) {
                 this.searchEnabled = false;
-                this.useSample();
               }
             })
         }.width('100%').padding({ top: 48, bottom: 48 })
@@ -1624,14 +1670,6 @@ struct Index {
     Column({ space: 8 }) {
       this.speechPanel()
       this.voiceArchivePanel()
-      if (this.input.length === 0 && this.voiceDraft === undefined && this.imageDraftUri.length === 0 && !this.blocked()) {
-        Row({ space: 6 }) {
-          Text('试试').fontSize(Theme.noteSize).fontColor(Theme.muted)
-          Text(this.sampleText()).fontSize(13).fontColor(Theme.accent).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-        }.width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 }).backgroundColor(Theme.soft).borderRadius(18)
-          .id('chat-sample').accessibilityText(`填入示例：${this.sampleText()}`).onClick(() => this.useSample())
-      }
       Column({ space: 6 }) {
         if (this.imagePreparing) {
           Row({ space: 8 }) {
@@ -1759,7 +1797,7 @@ struct Index {
     Column() {
       Row({ space: 8 }) {
         Column({ space: 6 }) {
-          Text('Shuvi 休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
+          Text('休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
           Text('个人助理').fontSize(12).fontColor(Theme.muted)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Button({ type: ButtonType.Circle }) {
@@ -1788,8 +1826,6 @@ struct Index {
           }
         }.width('100%')
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
-      Text('资料和 API Key 只保存在本机').fontSize(11).fontColor(Theme.muted)
-        .width('100%').padding({ top: 16 })
     }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
       .backgroundColor(Theme.inputSurface).borderRadius({ topRight: this.wideLayout ? 0 : 26, bottomRight: this.wideLayout ? 0 : 26 })
   }
@@ -1891,26 +1927,21 @@ struct Index {
                PdfIngestionView({ service: this.pdfIngestionService, lifecycle: this.derivedLifecycle, onBack: (): void => { this.pdfIngestionOpen = false; } })
              } else { Text('PDF 准备服务尚未就绪，原件和 ZIP 保留').width('100%') }
            } else if (this.embeddingOpen) {
-             if (this.embeddingService !== undefined) {
+             if (this.embeddingPreparation.phase === SettingsPreparationPhase.Ready && this.embeddingService !== undefined) {
                 EmbeddingSettingsView({ service: this.embeddingService, unifiedSettings:this.sharedKnowledge?.unifiedSettings, clearEpoch: this.embeddingClearEpoch, onBack: (): void => { this.closeEmbedding(); },
                   onKeys: (): void => { this.openApiKeys(); } })
              } else {
-               Text('本机配置服务尚未就绪或不可用，未发送请求').width('100%')
-               Button('返回').onClick((): void => { this.closeEmbedding(); })
+               SettingsPreparationView({ title: '嵌入模型', preparation: this.embeddingPreparation,
+                 onBack: (): void => { this.closeEmbedding(); }, onRetry: (): void => { void this.openEmbedding(); } })
              }
            } else if (this.parseOpen) {
-             if (this.parseService !== undefined) {
+             if (this.parsePreparation.phase === SettingsPreparationPhase.Ready && this.parseService !== undefined) {
                DocumentParseView({ parseState: this.parseState, service: this.parseService,
                  settingsMode: this.parseSettings, clearEpoch: this.parseState.inputEpoch,
-                   onClose: (): void => { this.closeParse(); }, onPreparePdf: (resultId: string): void => { this.preparePdf(resultId); },
-                    onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenImages: (): void => { this.closeParse(); this.openImages(); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); },
-                    onKeys: (): void => { this.openApiKeys(); } })
+                 onClose: (): void => { this.closeParse(); }, onKeys: (): void => { this.openApiKeys(); } })
              } else {
-               Column({ space: 12 }) {
-                 Text(this.parseState.message || '正在打开独立解析准备区…').fontSize(14).width('100%')
-                 Button('重试打开解析准备').onClick((): void => { this.openParse(this.parseSettings); })
-                 Button('返回').onClick((): void => { this.closeParse(); })
-               }.width('100%').padding(20)
+               SettingsPreparationView({ title: '解析引擎', preparation: this.parsePreparation,
+                 onBack: (): void => { this.closeParse(); }, onRetry: (): void => { void this.openParse(this.parseSettings); } })
              }
            } else if (this.tab === 0) {
             if (DEBUG) {
@@ -1930,17 +1961,16 @@ struct Index {
             }
            } else if (this.tab === 2) {
              if (this.knowledgeReady) {
-               UnifiedKnowledgeView({ session: this.sharedKnowledge?.querySession, history: this.sharedKnowledge?.unifiedHistory,
-                 onImport: (): void => { this.parsedDocumentId = ''; this.openParsed(true); },
+               UnifiedKnowledgeView({ session: this.sharedKnowledge?.querySession, availableHeight: this.contentHeight,
                  onDocuments: (): void => { this.parsedDocumentId = ''; this.openParsed(); },
                  onOpen: (card: UnifiedSearchCard): void => { this.openUnifiedCard(card); } })
             } else {
-              Column({ space: 12 }) {
-                Text(this.knowledgeMessage || '正在打开本机知识库…')
-                  .fontSize(15).fontColor(Theme.muted).width('100%')
-                Button(this.knowledgeOpening ? '正在打开…' : '重试打开', { type: ButtonType.Normal }).id('upd-open-retry').enabled(!this.knowledgeOpening).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 })
-                  .onClick((): void => { this.openKnowledge(); })
-              }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 20, bottom: 20 })
+              SettingsPreparationView({ title: '本机知识库', preparation: this.knowledgePreparation,
+                loadingTitle: '正在打开知识库', failedTitle: '暂时无法打开知识库',
+                loadingMessage: '正在恢复本机资料并准备搜索，请稍候…',
+                failedMessage: '本机知识库准备未完成，已有资料会保留。请稍后重试。',
+                returnLabel: '返回助手', retryLabel: '重试打开',
+                onBack: (): void => { this.changeTab(0); }, onRetry: (): void => { void this.openKnowledge(); } })
             }
            } else {
              ProfilePage({ floatingAssistantEnabled: this.floatingAssistantEnabled,

@@ -44,6 +44,7 @@ export class UnifiedKnowledgeHistoryRepository implements UnifiedQueryHistoryPor
       for (const card of page.direct.concat(page.related)) { card.current=await this.scope.visible(card,true); } pages.push(page);
     } return pages;
   }
+  async clear(): Promise<void> { await this.repository.clearUnifiedHistory(); }
   async legacyPage(cursor: KnowledgeHistoryCursor, limit: number): Promise<UnifiedSearchHistoryPage[]> {
     if (this.legacy===undefined) { return []; } const old=await this.legacy.historyPage(cursor,limit); const pages: UnifiedSearchHistoryPage[]=[];
     for (const saved of old.records) { const page: UnifiedSearchHistoryPage=new UnifiedSearchHistoryPage(); page.wire='LegacyReadOnly'; page.recordId=saved.id; page.question=saved.result.input.actualInput; page.createdAt=saved.createdAt;
