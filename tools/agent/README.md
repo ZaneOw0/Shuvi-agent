@@ -1,7 +1,6 @@
 # Agent 测试辅助工具
 
 > 状态：已实现待验收（仅迁入 MCP fixture；设备编排及发布工具待适配）。
-> 更新日期：2026-10-23。
 
 `fixture/` 来自 Harmony_agent 固定提交 `f177176`，三个原始文件及哈希见 [UPSTREAM.json](UPSTREAM.json)。Node.js 标准库实现，无 npm 第三方依赖。它模拟协议响应、会话与故障，只用于测试，不作为真实搜索或模型服务。
 

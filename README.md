@@ -1,99 +1,61 @@
 # Shuvi（休比）
 
-> 当前阶段：真实能力整合与验收。状态截至 2026-10-28：`main` 已合入检索优先 RAG（PR #20）与助手日程真实链路（PR #21）。集成分支 `feat/assistant-tools` 合入后台文档工具（PR #22）并把助手改为统一工具循环：模型按对话自主选择直接回答、调用文档 create/read/update（保存到系统文件管理器 Download/com.example.shuvi/，回执显示真实保存位置），或调用 `calendar_propose` 生成待确认日程草稿，用户确认后才由原生日历工具写入并读回；MCP 增加受控写入、幂等与结果不确定保护。联网搜索与知识库 RAG 仍为显式开关。知识库 RAG 已在模拟器上用真实 Provider 跑通（未完整落盘设备日志，不计正式验收）。签名安装、完整 CI 与 OpenHarmony 真机验收尚未完成；本分支的验收记录见 [spec 01](specs/01-创建日程并提醒.md) 与 [08](docs/08-项目进度与验收.md)，文档工具见 [后台本地文档工具](docs/integration/agent/后台本地文档工具.md)。
+休比是面向 HarmonyOS 手机和平板的智能个人助理，使用 ArkTS / ArkUI 开发。当前处于真实能力整合与验收阶段，完整发布、目标 OpenHarmony 兼容性和真机矩阵尚待完成。
 
-> 本轮新增：[应用内悬浮助手入口](specs/02-应用内悬浮助手入口.md) v0.3 已实现拖动与左右吸边，本轮模拟器验收范围见第 6.7 节；v0.2 的历史反馈见第 6.6 节。可从其他页面返回当前对话，在「我的」关闭入口。位置与开关仅本次运行有效，重启恢复开启并回到右下角；未覆盖窗口场景、无障碍朗读与真机待验证。
+## 当前能力
 
-> 知识库已接入统一资料导入、正文/OCR、本机标签与语义检索；当前产品链路固定先做本机正文/标签匹配和问题向量 KNN，再把最多 5 条片段交给 DeepSeek 生成带引用回答。助手聊天（含日程草稿）与 RAG 共用一次输入的 DeepSeek Key，但使用彼此独立的会话、规划器与执行库；现有知识库开关直接切换 RAG。边界见 [交接契约](docs/integration/知识库回答UI交接契约.md)。
+- **主助手**：设备直连 DeepSeek，支持文字、图片、普通话语音与补充文字；模型在统一工具循环中选择回答、文档操作或日程提议。
+- **日程**：生成可编辑草稿，经用户确认写入系统日历并读回；工作台支持手动填写、列表与操作核查。
+- **联网搜索**：手机直连 Tavily，用户开启本对话授权后，模型按需搜索并列出网页来源。
+- **知识库**：TXT/MD、PDF、图片与 DOCX 的分阶段处理，统一 L0 关键词、L1 语义检索和主助手 L2 引用回答；资料、图片、来源预览与处理任务分页。
+- **历史对话**：本机保存普通模型记忆、消息与图片副本；知识库上下文按授权会话隔离。
+- **响应式界面**：同一 HAP 适配手机与平板，支持抽屉/常驻侧栏、窗口变化与应用内浮动入口。
 
-## 项目简介
+知识库解析、图片理解、向量化和回答分别按授权联网。独立搜索 MCP 与 Windows 网关源码保留在仓库，当前手机主链路直接连接供应商。演示模式与真实模式分别标识。
 
-联网搜索：2026-10-30 起是助手可以自己调用的工具（`web_search`），由手机直接调用 Tavily，Key 在「我的 → API Key 管理」保存，不再需要电脑上的服务。打开助手页「搜索」即授权本对话自动搜索，回答末尾列出网页来源，关闭或新对话即撤销；不再限制只能搜一次，本机执行记录记满（约 30–60 次）后自动清空，账单核对尚未实现，详见 [03 联网搜索 §6.12–6.13](specs/03-联网搜索.md)。原 [联网搜索 MCP Server](services/search-mcp/README.md) 保留，应用已不使用。
-
-日程和搜索 Mock 继续作为独立演示模式保留，不调用真实供应商。真实模式不会失败后自动回退成 Mock；普通对话、真实搜索与演示的范围分别记录，不能混用验收证据。
-
-Agent 八模块已迁至 `modules/harmony_agent/`，来源固定为 `f177176`，后续适配登记在 `LOCAL_CHANGES.json`；产品引用原六个 HAR 及新增的 `native_tools`，`agent_testkit` 仅用于独立测试宿主。应用服务已装配生产 Runtime，当前开放 debug 助手（模型自主选择回答、文档工具或待确认日程）与显式关键词搜索；自主多 Agent 协作尚未完成产品验收。连接检查仍只做 MCP 握手与工具发现。统一进度与证据见 [08 项目进度与验收](docs/08-项目进度与验收.md)。
-
-休比（Shuvi）是面向开源鸿蒙社区竞赛开发的智能个人助理，使用 ArkTS / ArkUI 开发。产品目标、需求层级与架构建议见 [00 项目总览](docs/00-项目总览.md)。
-
-## 功能特性
-
-功能范围与优先级由团队维护，见 [00 项目总览](docs/00-项目总览.md) 第 2 节。需求未冻结，具体行为、平台约束与验收标准在对应功能 spec 中逐步明确。
-
-## 项目结构
-
-| 路径 | 说明 |
-|---|---|
-| `entry/` | 应用入口 HAP：页面、日程/搜索演示、Runtime 对话与搜索应用服务、独立知识库及宿主逻辑测试 |
-| `AppScope/` | 应用级配置（`app.json5`：bundleName、版本、图标与名称） |
-| `services/search-mcp/` | 独立 Node.js 搜索 MCP Server，不进入 HAP；单独安装、构建与测试 |
-| `services/local-ai-gateway/` | 独立 Windows/.NET 模型网关，固定源码已导入，自包含自动测试 588/588 通过；不进入 HAP，远端 CI 与完整运行包验收待完成 |
-| `modules/harmony_agent/` | 八个 Agent HAR 源码模块及测试；原六模块和 native_tools 供产品依赖，agent_testkit 仅接入测试工程 |
-| `tests/agent-host/` | 独立 Agent 测试工程，复用八模块；本机 Hypium 380/380 通过，设备测试待执行 |
-| `tools/agent/fixture/` | 固定样例 MCP 测试服务，不是生产搜索服务 |
-| `scripts/` | 本地一键启动脚本：设备/模拟器 → 签名 → 构建 → 安装运行 |
-| `specs/` | 按用户闭环划分的功能契约，三条开发线的唯一对齐点 |
-| `docs/` | 项目文档，见下方文档索引 |
-
-早期建议的 `assistant_core` 与 `platform_adapter` 职责现由六个 Agent 模块及 entry 中的应用服务承接，未建立这两个同名目录。建议职责与实际模块的对应见 [00 项目总览](docs/00-项目总览.md) 第 3 节。
+产品目标与未实现范围见 [项目总览](docs/00-项目总览.md)，验收等级与限制见 [项目进度](docs/08-项目进度与验收.md)。
 
 ## 快速开始
 
-日程 Mock 的历史范围与真实能力分别见 [01 创建日程并提醒](specs/01-创建日程并提醒.md)。工作台保留手动填写、模型草稿、多条记录与原操作核查；迁移、第二条创建及开启系统日历通知后的提醒送达已获用户人工反馈。新增助手真实模式可从聊天安排日程：模型提议草稿，用户确认后 Runtime 调用 `shuvi.calendar.create` 原生工具，复用工作台的日历、稳定操作 ID 与防重复账本。同一助手会话内不重复输入 Key。聊天接入的自动化证据与待验收范围见 spec 第 7.12 节，旧设备反馈不代替新入口验收。真实对话/搜索会按授权访问外部服务并持久化执行记录；知识库保存本机资料。新构建的未签名 HAP 仍需通过已有本机签名运行配置安装。
+准备 [平台基线](docs/02-平台基线.md) 对应的 DevEco Studio、SDK 与 `devecocli`。账号登录、模拟器协议和镜像准备由用户在本机完成，凭据与签名材料不入库。
 
-普通对话的启用和限制见 [09 Runtime 普通对话](specs/09-Runtime普通对话接入.md)。当前模型路径为设备直连 DeepSeek，不必运行 Windows 网关；真实搜索也由设备直连 Tavily，仍只在 debug 包启用。
-
-前置：DevEco Studio 与命令行 `devecocli`；首次使用需 `devecocli auth login`。
-
-```bash
-scripts/dev-run.sh                 # 自动选设备/模拟器，签名、构建、安装运行
-scripts/dev-run.sh --force-sign    # 强制重新生成本机签名材料
-scripts\dev-run.cmd                # Windows 入口，转发到 dev-run.sh
+```powershell
+# Windows：重新构建、覆盖安装并启动到正在运行的唯一设备/模拟器
+.\scripts\dev-run.cmd --no-emulator
 ```
 
-签名材料生成在本机 `~/.ohos/config/`，不写入仓库；不要提交 `build-profile.json5` 中的 `signingConfigs` / `signingConfig` 改动。
+```bash
+# Git Bash：明确指定当前设备
+scripts/dev-run.sh --device '<serial>' --no-emulator --product default
+# macOS 使用独立入口
+scripts/dev-run-mac.sh --device '<serial>' --product default
+```
 
-## 架构设计
+脚本复用本机签名缓存并恢复工程模板，不卸载或清用户资料。命令、签名、设备选择和日志规则见 [脚本说明](scripts/README.md)。
 
-架构建议、模块边界与依赖约定见 [00 项目总览](docs/00-项目总览.md) 第 3 节；工程配置、SDK 与工具版本见 [02 平台基线](docs/02-平台基线.md)。
+## 仓库结构
 
-## 智能体编排
-
-已引入 Runtime 并接入普通对话和授权搜索。当前使用确定性单轮/单工具计划；搜索与随后回答是两个 Runtime 任务，不是跨任务自动恢复事务。多 Agent 协作、模型自主分解复杂任务尚无产品闭环验收。架构与执行边界见 [Agent 运行时架构](docs/architecture/Agent运行时架构.md)。
-
-## RAG 知识库
-
-已实现 TXT/MD、PDF、独立图片、DOCX 的统一处理及本机正文/OCR、标签与语义检索，包含来源预览和中断恢复；已有部分真实服务的模拟器验收记录。云解析、图片理解与嵌入按各自授权配置运行，不能称所有处理均离线。debug 首页已接入检索优先 RAG：点击知识库后检查当前 Embedding Provider 和向量空间，发送时执行问题向量化与本机 KNN，再由独立 PERSONAL DeepSeek 会话整理引用；普通 PUBLIC 对话不承载知识库片段。2026-10-27 已在模拟器上用真实 SiliconFlow / DeepSeek 跑通 RAG（spec 09 §8.4，日志未完整落盘、部分项仅用户确认）；PPTX/XLSX、跨设备同步、断网重试的设备验证与真机验收未完成。详见 [02 个人知识库问答](specs/02-个人知识库问答.md) 与 [09 Runtime 普通对话接入](specs/09-Runtime普通对话接入.md)。
-
-## 文档索引
-
-| 文档 | 内容 |
+| 路径 | 职责 |
 |---|---|
-| [00 项目总览](docs/00-项目总览.md) | 产品目标、需求范围、架构建议、Agent 与执行原则、质量目标 |
-| [01 协作与工程约定](docs/01-协作与工程约定.md) | 分工与分支、Git 与提交规范、ArkTS 边界、测试与发布 |
-| [02 平台基线](docs/02-平台基线.md) | 工程配置、SDK 与工具版本、验证状态、待确认项 |
-| [03 鸿蒙核心概念速览](docs/03-鸿蒙核心概念速览.md) | HAP、HAR、HSP、Stage 模型等概念与仓库现状对照 |
-| [04 图标素材库](docs/04-图标素材库.md) | 23 个图标的用途、ArkUI 复用方式与维护规则；[本地预览页](docs/assets/icons/index.html) |
-| [05 品牌配色与 Logo](docs/05-品牌配色与Logo.md) | 角色形象、莓紫与奶油白配色、应用图标配置；[本地预览页](docs/assets/brand/index.html) |
-| [06 Agent 模块接入](docs/06-Agent模块接入.md) | 六模块固定源码快照、依赖配置、构建证据与后续接入边界 |
-| [07 仓库整合与文档迁移方案](docs/07-仓库整合与文档迁移方案.md) | 来源版本、授权记录、迁移范围与执行进度 |
-| [08 项目进度与验收](docs/08-项目进度与验收.md) | 当前整合成果、本机验证、设备与产品接入待办 |
-| [文档导航](docs/README.md) | 当前文档、子项目架构与部署入口；历史说明的适用边界 |
+| `entry/`、`AppScope/` | HAP、页面、应用服务、平台适配与应用配置 |
+| `modules/harmony_agent/` | 八个 Agent HAR；产品使用原六模块及 native_tools，agent_testkit 用于独立测试 |
+| `services/` | 独立搜索 MCP 与 Windows 模型网关，不进入 HAP |
+| `tests/agent-host/`、`tools/agent/` | Agent 测试宿主与固定样例工具 |
+| `scripts/` | 启动、日志、来源核验与 CI 入口 |
+| `specs/` | 当前功能契约及模板 |
+| `docs/` | 规则、架构、接口、操作指南、诊断与验收记录 |
 
-## 构建与签名
+## 开发与验证
 
-- 构建：`devecocli build`，或使用 DevEco Studio
-- 签名：本机自动生成，材料保存在 `~/.ohos/config/`，不入库
-- 运行：`devecocli run`，或使用 `scripts/dev-run.sh`
-- 构建、模拟器与真机结果分别记录、不互相替代，见 [02 平台基线](docs/02-平台基线.md) 第 4 节
-- CI 门禁：来源核验、Node 搜索测试、鸿蒙检查与构建、Agent 宿主/Hypium、Windows 网关测试；runner 前提及尚未完成的远端验证见 [持续集成](docs/deployment/持续集成.md)
+按 [协作约定](docs/01-协作与工程约定.md) 开发：先读相关契约，保持依赖方向，修改 ArkTS 后执行检查与构建。测试逐次落盘，构建、host、模拟器与真机分别记录。
 
-## 贡献指南
+当前工作分支 `fix/patch` 用于发布前小 bug、补丁和仓库规范工作。Git 提交、推送、合并与分支清理遵守用户授权及 PR 规则。
 
-协作规则、分支与提交格式、PR 与评审要求见 [01 协作与工程约定](docs/01-协作与工程约定.md)。
+- [功能索引](specs/README.md)
+- [文档导航](docs/README.md)
+- [Agent 架构](docs/architecture/Agent运行时架构.md)
+- [持续集成](docs/deployment/持续集成.md)
 
-## License
+## 许可
 
-本项目采用 MIT 许可，见 [LICENSE](LICENSE)。
-`modules/harmony_agent/` 的上游模块声明使用 Apache-2.0，许可说明与标准文本保留在该目录。
-`services/local-ai-gateway/` 保留其原 LICENSE 和第三方声明，不适用根目录 MIT；用户已确认取得本次整合与发布范围的书面授权，记录见该子项目 `UPSTREAM.json`。
+主项目采用 [MIT](LICENSE)。Agent 模块保留其 Apache-2.0 声明与来源清单；Windows 网关保留自身许可证、第三方声明和来源授权记录。许可范围见各子项目 README。

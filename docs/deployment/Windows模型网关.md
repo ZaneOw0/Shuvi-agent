@@ -1,20 +1,10 @@
-# Windows 模型网关部署与验证
+# Windows 模型网关部署
 
-> 状态：已实现待验收（源码迁移）。
-> 更新日期：2026-10-23。
-> 适用目录：`services/local-ai-gateway/`；来源提交 `21017a1e91a1067119f4772762295c3e343cef40`。
+> 范围：独立 Windows x64 网关源码与验证；当前手机主链路直接连接供应商。
 
-## 1. 当前交付
+## 1. 环境与构建
 
-主仓库已导入网关源码、自动测试、PowerShell 脚本、运行时清单、许可证及历史文档。没有复制已安装网关、凭据、用户配置、依赖缓存、私有 Python 运行包或安装 ZIP。
-
-该网关运行在 Windows x64，和手机 HAP 分别构建。手机的 `127.0.0.1` 不代表电脑；此前搜索服务 8787 的转发不覆盖模型网关 4000 端口。
-
-## 2. 构建和自动测试
-
-工具要求由子项目配置管理：.NET SDK `10.0.302`（允许同特性带补丁滚动）、目标框架 `net10.0-windows`。涉及上游 PowerShell 脚本时使用 PowerShell 7；本机便携工具只是环境便利，不是仓库硬编码依赖。
-
-在主仓库根目录打开 PowerShell，执行：
+工具版本由子项目 global.json 和工程配置管理；当前目标为 .NET 10 / net10.0-windows，SDK 10.0.302 允许同特性带补丁滚动。需要上游 PowerShell 脚本时使用 PowerShell 7。
 
 ```powershell
 Set-Location services/local-ai-gateway
@@ -22,44 +12,18 @@ dotnet --version
 dotnet test LocalAIGateway.slnx -c Release -r win-x64 -p:SelfContained=true
 ```
 
-使用自包含测试可避免本机多套 .NET 或便携 SDK 导致隔离子进程找不到运行时。测试不以真实模型供应商作为上游；不得将该测试结果写成模型调用或手机验收通过。
+自动测试使用假服务，不请求真实模型。主仓库 `scripts/ci-gateway.ps1` 验证构建和新 TRX，排除非测试辅助项目，具体 runner 环境见 [CI](持续集成.md)。
 
-模式扫描（不会输出匹配的秘密值，但只覆盖已知模式）：
+## 2. 运行包与安装
 
-```powershell
-pwsh -NoProfile -File scripts/scan-sensitive-data.ps1 -Paths . -ExcludeGenerated
-```
+完整运行包需按 runtime-manifests 准备并校验依赖，再使用子项目装配/验证/打包脚本；源码构建不自动下载私有 Python 运行时或安装软件。
 
-## 3. 运行包与安装
+安装、升级、卸载和自动启动涉及当前用户 Local AppData、凭据管理和进程状态，按用户授权执行。供应商 Key 与客户端令牌在受控本机入口管理，不通过仓库、消息或命令行参数传递。
 
-源码构建不包含完整私有运行时。组装需要按 `runtime-manifests/` 清单准备并校验下载物，再使用 `scripts/assemble-m3b-runtime.ps1`、验证脚本和打包脚本。具体参数见各脚本参数声明；首次组装会下载依赖、占用空间，构建验证不会自动执行该步骤。
+手机回环地址指手机自身，开发转发和正式部署分别配置；改变监听地址不能替代服务认证与平台适配。
 
-安装会涉及当前用户 Local AppData、Windows Credential Manager 等状态。源码放在 E 盘不表示安装路径也是 E 盘。当前导入没有运行安装、升级、卸载、自动启动注册或客户端配置改写脚本。
+## 3. 来源、验证与限制
 
-API Key 仅由用户在受控本机入口输入，不通过消息、仓库文件、命令参数或日志传递。客户端令牌与供应商 Key 分别管理；不要把开发环境中的凭据复制到新目录。
+源码来源和哈希在 [UPSTREAM.json](../../services/local-ai-gateway/UPSTREAM.json)，保留 [LICENSE](../../services/local-ai-gateway/LICENSE) 与 [第三方声明](../../services/local-ai-gateway/THIRD-PARTY-NOTICES.md)。来源授权由团队保管，不扩大原许可。
 
-## 4. 已有证据与本次复验
-
-| 检查 | 结果与边界 |
-|---|---|
-| 固定提交导入 | 281 个上游文件，源码从 Git 对象提取；五份历史文档增加说明，原 README 改名保留；清单记录原始与导入哈希 |
-| 2026-10-20 原仓库构建和测试 | 既有记录为编译通过、自包含测试 588/588；属于原目录历史证据 |
-| 2026-10-21 电脑真实模型探针 | 已安装的 `f1de4b0` 网关经独立 launcher 调用 DeepSeek 成功；不是本次迁移版本或手机验收 |
-| 本次主仓库构建与自动测试 | 2026-10-23，在新目录执行自包含 Release 构建及测试，退出码 0；8 个测试项目共 588/588 通过，失败 0；281 文件哈希校验及模式扫描通过（284 个文件） |
-| 主仓库 CI | 尚未增加网关检查；现有鸿蒙门禁不能替代 .NET 构建与测试 |
-| 手机模型链路、OpenHarmony 目标设备 | 未完成 |
-
-本轮本机日志与测试结果位于 `.local/repository-integration/`；不入库。共享文档记录摘要，不引用历史报告充当本轮通过证据。
-
-## 5. 已知限制与下一阶段
-
-- 已安装网关此前 `aigw start/run` 出现内部错误，直接启动 Runtime 和独立 launcher 可以完成探针；该问题未因源码迁移被修复。
-- Agent 当前请求与成功的 Node 探针存在思考模式/结构化输出差异，仍需专门验证。
-- 暂未修改网关监听策略、接口、模型供应商或网络认证方式。
-- 尚未将上游工作流合并到主仓库 CI；这不是可直接发布的完整安装包验收。
-
-## 6. 授权与维护
-
-用户已确认作者书面授权覆盖本次源码、文档整合及按主仓库可见范围发布。授权书由团队保管；本记录不替代原文，不扩大授权范围。保留 [LICENSE](../../services/local-ai-gateway/LICENSE) 和 [第三方声明](../../services/local-ai-gateway/THIRD-PARTY-NOTICES.md)，主仓库 MIT 不覆盖该子项目。
-
-迁移目录和状态以 [整合方案](../07-仓库整合与文档迁移方案.md) 为准；历史 HANDOFF 中的原作者机器处理步骤不得直接执行。
+主仓库已有源码导入和自动测试记录，见 [宿主迁移](../verification/agent/测试宿主迁移.md) 与 [CI 复核](../verification/agent/整合CI门禁复核.md)。历史电脑探针不作为当前手机验收，完整运行包、正式安装、实际模型、账单与 OpenHarmony 部署均需对应版本证据。

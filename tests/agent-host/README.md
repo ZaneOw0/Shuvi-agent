@@ -1,14 +1,13 @@
 # Agent 独立测试宿主
 
 > 状态：已实现待验收（构建与本机测试见验证记录；设备运行待验收）。
-> 更新日期：2026-10-23。
 
 本工程承载 Agent 设备测试，不是 Shuvi 产品入口。使用固定来源 `f1771764f129193725a8bccb5da2be6c3604e998` 的 `test_host`、资源与测试，源码来源及三处适配见 [UPSTREAM.json](UPSTREAM.json)。包名改为 `com.example.shuvi.agenttest`，与产品 `com.example.shuvi` 和上游 `com.harmony.agent` 分离；生命周期测试中的启动目标同步更新。
 
 ## 1. 工程边界
 
 - 通过相对路径引用 `../../modules/harmony_agent/` 的八个模块，不复制第二份核心代码。
-- 产品仍只注册原六模块；`native_tools` 和 `agent_testkit` 本轮仅注册到测试工程，没有加入产品 entry 依赖。
+- 产品注册原六模块与 `native_tools`；`agent_testkit` 仅供独立测试。
 - `test_host` 是唯一 entry HAP；`test_host_test` 是 ohosTest feature HAP。测试 UIAbility 没有页面内容，打开它不会出现 Shuvi 聊天界面。
 - 根 SDK、Hypium `1.0.25`、Hamock `1.0.0` 与主仓库一致，不沿用上游的 Hypium `1.0.28`。锁文件由 OHPM 生成。
 - 宿主声明 INTERNET 供网络测试使用；没有修改产品权限。`signingConfigs` 为空，自动构建产物未签名。
@@ -62,4 +61,4 @@ node scripts/test-agent-fixture.cjs
 
 ## 4. 验证记录
 
-本轮结果见 [Agent 测试迁移验证](../../docs/verification/agent/测试宿主迁移.md)。当前 HarmonyOS API 26 的编译与本机测试，不替代目标 OpenHarmony 真机验收。
+具体版本的结果见 [Agent 测试迁移验证](../../docs/verification/agent/测试宿主迁移.md)。当前 HarmonyOS API 26 的编译与本机测试，不替代目标 OpenHarmony 真机验收。
