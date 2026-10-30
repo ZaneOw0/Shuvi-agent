@@ -808,18 +808,6 @@ struct Index {
       this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STARTING || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.STOPPING;
   }
 
-  private useSample(): void {
-    if (this.blocked()) {
-      return;
-    }
-    this.input = this.sampleText();
-    this.scroller.scrollEdge(Edge.Bottom);
-  }
-  private sampleText(): string {
-    return this.realChatMode ? (this.knowledgeEnabled ? '知识库中的 Agent Runtime 是如何设计的？' :
-      (this.searchEnabled ? 'HarmonyOS ArkUI 官方开发文档' : '明天下午 3 点到 4 点开项目评审会，提前 10 分钟提醒')) :
-      (this.searchEnabled ? SEARCH_SAMPLE : this.service.sampleText);
-  }
   private headerConnected(): boolean {
     return this.realChatMode && (this.runtimeChat.lifecycle === ShuviRuntimeState.READY ||
       this.runtimeSearch.lifecycle === ShuviRuntimeState.READY || this.runtimeKnowledge.lifecycle === ShuviRuntimeState.READY);
@@ -1316,11 +1304,10 @@ struct Index {
         Button('重试生成').fontColor(Theme.accent).backgroundColor(Theme.soft).onClick(() => this.send())
       }
       if (!this.blocked() && this.requestState === RequestState.Clarification) {
-        Button('取消澄清，使用完整样例').fontColor(Theme.accent).backgroundColor(Theme.soft)
+        Button('取消澄清').fontColor(Theme.accent).backgroundColor(Theme.soft)
           .onClick(() => {
             this.requestState = RequestState.Cancelled;
-            this.addMessage('已取消本次澄清，请重新发送完整样例。');
-            this.useSample();
+            this.addMessage('已取消本次澄清，请重新输入完整需求。');
           })
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 14, bottom: 20 })
@@ -1395,13 +1382,12 @@ struct Index {
       if (this.records.length === 0) {
         Column({ space: 16 }) {
           Text('还没有安排').fontSize(20).fontColor(Theme.ink)
-          Text('从一条样例开始，体验日程确认流程。').fontSize(13).fontColor(Theme.muted)
+          Text('在助手中描述日程，确认后查看安排。').fontSize(13).fontColor(Theme.muted)
           Button('去助手创建').backgroundColor(Theme.accent).fontColor(Color.White)
             .onClick(() => {
               this.changeTab(0);
               if (!this.blocked()) {
                 this.searchEnabled = false;
-                this.useSample();
               }
             })
         }.width('100%').padding({ top: 48, bottom: 48 })
@@ -1645,14 +1631,6 @@ struct Index {
     Column({ space: 8 }) {
       this.speechPanel()
       this.voiceArchivePanel()
-      if (this.input.length === 0 && this.voiceDraft === undefined && this.imageDraftUri.length === 0 && !this.blocked()) {
-        Row({ space: 6 }) {
-          Text('试试').fontSize(Theme.noteSize).fontColor(Theme.muted)
-          Text(this.sampleText()).fontSize(13).fontColor(Theme.accent).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-        }.width('100%').padding({ left: 14, right: 14, top: 8, bottom: 8 }).backgroundColor(Theme.soft).borderRadius(18)
-          .id('chat-sample').accessibilityText(`填入示例：${this.sampleText()}`).onClick(() => this.useSample())
-      }
       Column({ space: 6 }) {
         if (this.imagePreparing) {
           Row({ space: 8 }) {
@@ -1780,7 +1758,7 @@ struct Index {
     Column() {
       Row({ space: 8 }) {
         Column({ space: 6 }) {
-          Text('Shuvi 休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
+          Text('休比').fontSize(22).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
           Text('个人助理').fontSize(12).fontColor(Theme.muted)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Button({ type: ButtonType.Circle }) {
@@ -1809,8 +1787,6 @@ struct Index {
           }
         }.width('100%')
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Auto)
-      Text('资料和 API Key 只保存在本机').fontSize(11).fontColor(Theme.muted)
-        .width('100%').padding({ top: 16 })
     }.width('100%').height('100%').padding({ left: 18, right: 18, top: 28, bottom: 24 })
       .backgroundColor(Theme.inputSurface).borderRadius({ topRight: this.wideLayout ? 0 : 26, bottomRight: this.wideLayout ? 0 : 26 })
   }

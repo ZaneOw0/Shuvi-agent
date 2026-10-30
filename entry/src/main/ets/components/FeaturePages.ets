@@ -67,9 +67,6 @@ export function ProfilePage($$: ProfilePageOptions) {
     FeatureRow({ title: '解析引擎', description: 'PDF、Word 与图片的文字识别', icon: $r('app.media.ui_document'), onOpen: $$.onParseSettings })
     FeatureRow({ title: '图片理解', description: '图片描述、标签与自动处理', icon: $r('app.media.chat_book'), id: 'upd-profile-vision', onOpen: $$.onVisionSettings })
     FeatureRow({ title: '嵌入模型', description: '让资料支持按意思搜索', icon: $r('app.media.ui_search'), onOpen: $$.onEmbeddingSettings })
-    FeatureRow({ title: '跨设备协同', description: '让任务在设备间流转 · 即将上线', icon: $r('app.media.ui_devices'),
-      id: 'profile-cross-device',
-      onOpen: () => $$.onNotice('跨设备协同 · 即将上线', '之后可以把手机上没做完的事接到平板或电脑上继续。当前不会连接或搜索其他设备。') })
     FeatureRow({ title: '关于 Shuvi', description: '让想法，成为行动', icon: $r('app.media.chat_info'),
       onOpen: () => $$.onNotice('关于 Shuvi', '休比是运行在鸿蒙上的个人助理：可以直接对话、安排日程、读写文档，也能依据你导入的资料回答。日程写入系统日历前都会请你确认；资料和 Key 只保存在本机。') })
   }.width('100%').padding({ bottom: 24 })
