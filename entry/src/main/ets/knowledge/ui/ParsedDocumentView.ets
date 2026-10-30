@@ -45,6 +45,8 @@ export struct ParsedDocumentView {
   onNavigate: () => void = (): void => {};
   private filterController: TextInputController = new TextInputController();
   @State processingExpanded: boolean=false;
+  @State processingPage: number=0;
+  @State retryAllConfirm: boolean=false;
   @State processingJobs: UnifiedProcessingJob[]=[];
   @State retryJobId: string='';
   @State processingBusy: boolean=false;
@@ -370,7 +372,7 @@ export struct ParsedDocumentView {
   private clearContent(): void { this.blocks=[]; this.images=[]; this.occurrences=[]; this.blockCount=0; this.imageCount=0; this.occurrenceCount=0; this.previewPath=''; this.previewId=''; this.contentGeneration=''; this.imagePreviews=[]; this.fullscreenPaths=[]; }
   private async open(id: string): Promise<void> {
     const sequence: number=++this.openSequence; this.contentLoading=true; this.clearContent(); this.page=0; this.imagePage=0; this.occurrencePage=0;
-    this.directText=''; this.question=''; this.message=''; this.retryJobId=''; this.processingExpanded=false; this.selectedDocument=id; this.title=this.selectedRecord()?.title ?? '';
+    this.directText=''; this.question=''; this.message=''; this.retryJobId=''; this.retryAllConfirm=false; this.processingExpanded=false; this.processingPage=0; this.selectedDocument=id; this.title=this.selectedRecord()?.title ?? '';
     try {
       await this.service?.open(id); if (sequence!==this.openSequence) { return; }
       if (this.service?.state.document.documentKey!==id) { throw new Error('SelectedDocumentChanged'); }
@@ -380,8 +382,28 @@ export struct ParsedDocumentView {
     } catch { if (sequence===this.openSequence) { this.clearContent(); this.message='当前文件内容读取失败，原件保留，请重试打开内容'; } }
     finally { if (sequence===this.openSequence) { this.contentLoading=false; } }
   }
-  private selectedJobs(): UnifiedProcessingJob[] { const record=this.selectedRecord(); const jobs=record===undefined?[]:processingCurrentJobs(this.processingJobs,record); return this.processingExpanded?jobs:jobs.filter((j: UnifiedProcessingJob): boolean=>j.state!=='Complete').slice(0,3); }
+  private selectedJobs(): UnifiedProcessingJob[] { const record=this.selectedRecord(); const jobs=record===undefined?[]:processingCurrentJobs(this.processingJobs,record); const page: number=Math.min(this.processingPage,this.processingPageCount()-1); return this.processingExpanded?jobs.slice(page*5,page*5+5):jobs.filter((j: UnifiedProcessingJob): boolean=>j.state!=='Complete').slice(0,3); }
   private selectedJobCount(): number { const record=this.selectedRecord(); return record===undefined?0:processingCurrentJobs(this.processingJobs,record).length; }
+  private processingPageCount(): number { return Math.max(1,Math.ceil(this.selectedJobCount()/5)); }
+  private selectedUnfinishedCount(): number { const record=this.selectedRecord(); return record===undefined?0:processingCurrentJobs(this.processingJobs,record).filter((j: UnifiedProcessingJob): boolean=>processingCanRetry(j) || j.state==='Pending' || j.state==='AwaitingConfig').length; }
+  private changeProcessingPage(delta: number): void { this.processingPage=Math.max(0,Math.min(Math.min(this.processingPage,this.processingPageCount()-1)+delta,this.processingPageCount()-1)); this.retryJobId=''; }
+  private async retryUnfinishedProcessing(): Promise<void> {
+    const queue=this.queue; const record=this.selectedRecord();
+    if (this.processingBusy || queue===undefined || record===undefined || !this.retryAllConfirm) { return; }
+    this.processingBusy=true; this.retryAllConfirm=false; this.retryJobId='';
+    let queued: number=0; let failed: number=0;
+    try {
+      const jobs: UnifiedProcessingJob[]=processingCurrentJobs(await queue.jobs(),record);
+      for (const job of jobs) {
+        if (!processingCanRetry(job)) { continue; }
+        try { await queue.retry(job.id,true); queued++; } catch { failed++; }
+      }
+      queue.kick();
+      this.message=`${queued} 项已重新排队`+(failed>0?`，${failed} 项未能排队，可重试`:'，已启动处理；设置未就绪或处理已暂停的任务继续等待');
+      await this.refreshResources();
+    } catch { this.message=`${queued} 项已重新排队，处理状态读取未完成，请重试`; }
+    finally { this.processingBusy=false; }
+  }
   private selectedProcessingStatus(): string { const record=this.selectedRecord(); return record===undefined?'':processingDocumentStatus(this.processingJobs,record); }
   private async retryProcessingJob(): Promise<void> {
     if (this.processingBusy || this.queue===undefined) { return; }
@@ -768,21 +790,42 @@ export struct ParsedDocumentView {
           Text('处理状态').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
           Text(this.selectedProcessingStatus()).fontSize(12).fontColor(Theme.muted).lineHeight(19).width('100%')
           Text(this.selectedOriginal.length>0 && this.parsedEngine!=='MinerU' && this.blocks.length===0?'原图已保存，还没有可检索的文字。图片描述与检索准备可在下方任务中查看。':'正文和图片文字已可搜索；完成检索准备后，还能按意思找到相关内容。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-          ForEach(this.selectedJobs(),(job: UnifiedProcessingJob)=> {
-            Column({space:6}) {
-              Text(`${processingStageName(job.stage)} · ${processingJobStateName(job)} · ${job.completed}/${job.expected}`).fontColor(Theme.ink).fontSize(13).width('100%')
-              if (processingFailureText(job).length>0) { Text(processingFailureText(job)).fontColor(Theme.amber).fontSize(12).lineHeight(20).width('100%') }
-              if (processingCanRetry(job)) { Button('重试' + processingStageName(job.stage)).fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).id('upd-retry-job-'+job.id).enabled(!this.processingBusy).onClick((): void=> { this.retryJobId=job.id; }) }
-              if (this.retryJobId===job.id) {
-                Text('仅重新排队这一项任务，已成功的进度会复用。结果未知的请求可能重复计费。').fontColor(Theme.ink).fontSize(12).lineHeight(20).width('100%')
-                Row({ space: 10 }) {
-                  Button('取消').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).layoutWeight(1).onClick((): void=> { this.retryJobId=''; })
-                  Button('接受可能费用，重试').fontSize(13).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(12).constraintSize({ minHeight: 44 }).layoutWeight(1).id('upd-retry-job-confirm').enabled(!this.processingBusy).onClick((): void=> { this.retryProcessingJob(); })
-                }.width('100%')
-              }
-            }.width('100%').padding(14).backgroundColor(Theme.inputSurface).borderRadius(14).border({ width: 1, color: Theme.line })
-          },(job: UnifiedProcessingJob): string=>job.id+'|'+job.state+'|'+String(job.completed)+'|'+job.failure)
-          if (this.selectedJobCount()>0 && (this.processingExpanded || this.selectedJobCount()>this.selectedJobs().length)) { Button(this.processingExpanded?'收起处理任务':`查看全部处理任务（${this.selectedJobCount()}）`).fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).id('upd-processing-expand').onClick((): void=> { this.processingExpanded=!this.processingExpanded; }) }
+          Button(`重试未完成（${this.selectedUnfinishedCount()}）`).fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('upd-retry-unfinished').enabled(!this.processingBusy && this.selectedUnfinishedCount()>0).onClick((): void=> { this.retryAllConfirm=true; this.retryJobId=''; })
+          if (this.retryAllConfirm) {
+            Text('将当前资料所有分页中可重试的任务重新排队，并启动等待中的任务；已成功的进度会复用。结果未知的请求可能重复计费，设置未就绪的任务继续等待。').fontColor(Theme.ink).fontSize(12).lineHeight(20).width('100%')
+            Row({ space: 10 }) {
+              Button('取消').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 }).layoutWeight(1).onClick((): void=> { this.retryAllConfirm=false; })
+              Button('接受可能费用，重试').fontSize(13).fontColor(Color.White).backgroundColor(Theme.accent).constraintSize({ minHeight: 44 }).layoutWeight(1).id('upd-retry-unfinished-confirm').enabled(!this.processingBusy).onClick((): void=> { this.retryUnfinishedProcessing(); })
+            }.width('100%')
+          }
+          if (this.selectedJobs().length>0) {
+            Scroll() {
+              Column({ space: 12 }) {
+                ForEach(this.selectedJobs(),(job: UnifiedProcessingJob)=> {
+                  Column({space:6}) {
+                    Text(`${processingStageName(job.stage)} · ${processingJobStateName(job)} · ${job.completed}/${job.expected}`).fontColor(Theme.ink).fontSize(13).width('100%')
+                    if (processingFailureText(job).length>0) { Text(processingFailureText(job)).fontColor(Theme.amber).fontSize(12).lineHeight(20).width('100%') }
+                    if (processingCanRetry(job)) { Button('重试' + processingStageName(job.stage)).fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).id('upd-retry-job-'+job.id).enabled(!this.processingBusy).onClick((): void=> { this.retryJobId=job.id; this.retryAllConfirm=false; }) }
+                    if (this.retryJobId===job.id) {
+                      Text('仅重新排队这一项任务，已成功的进度会复用。结果未知的请求可能重复计费。').fontColor(Theme.ink).fontSize(12).lineHeight(20).width('100%')
+                      Row({ space: 10 }) {
+                        Button('取消').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).layoutWeight(1).onClick((): void=> { this.retryJobId=''; })
+                        Button('接受可能费用，重试').fontSize(13).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(12).constraintSize({ minHeight: 44 }).layoutWeight(1).id('upd-retry-job-confirm').enabled(!this.processingBusy).onClick((): void=> { this.retryProcessingJob(); })
+                      }.width('100%')
+                    }
+                  }.width('100%').padding(14).backgroundColor(Theme.inputSurface).borderRadius(14).border({ width: 1, color: Theme.line })
+                },(job: UnifiedProcessingJob): string=>job.id+'|'+job.state+'|'+String(job.completed)+'|'+job.failure)
+              }.width('100%')
+            }.width('100%').height(this.processingExpanded?320:180).align(Alignment.Top).scrollBar(BarState.Auto).id('upd-processing-list')
+          }
+          if (this.processingExpanded && this.processingPageCount()>1) {
+            Row({ space: 10 }) {
+              Button('上一页').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 }).layoutWeight(1).enabled(this.processingPage>0).id('upd-processing-prev').onClick((): void=> { this.changeProcessingPage(-1); })
+              Text(`${Math.min(this.processingPage+1,this.processingPageCount())} / ${this.processingPageCount()}`).fontSize(12).fontColor(Theme.muted)
+              Button('下一页').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).constraintSize({ minHeight: 44 }).layoutWeight(1).enabled(this.processingPage+1<this.processingPageCount()).id('upd-processing-next').onClick((): void=> { this.changeProcessingPage(1); })
+            }.width('100%')
+          }
+          if (this.selectedJobCount()>0 && (this.processingExpanded || this.selectedJobCount()>this.selectedJobs().length)) { Button(this.processingExpanded?'收起处理任务':`查看全部处理任务（${this.selectedJobCount()}）`).fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).id('upd-processing-expand').onClick((): void=> { this.processingExpanded=!this.processingExpanded; this.processingPage=0; this.retryJobId=''; }) }
         }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
       }
       Column({ space: 12 }) {
