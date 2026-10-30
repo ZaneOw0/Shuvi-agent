@@ -22,7 +22,6 @@ export struct DocumentParseView {
   onClose: () => void = (): void => {};
   onPreparePdf: (resultId: string) => void = (_resultId: string): void => {};
   onPrepareImage: (resultId: string) => void = (_resultId: string): void => {};
-  onOpenImages: () => void = (): void => {};
   onOpenDocx: () => void = (): void => {};
   /** The MinerU token is saved and changed in 我的 → API Key 管理. */
   onKeys: () => void = (): void => {};
@@ -55,8 +54,17 @@ export struct DocumentParseView {
     if (this.service === undefined) { this.credentialFeedback = '解析服务暂不可用，请稍后重新打开本页'; }
   }
   private credentialText(): string {
-    return this.parseState.credential === DocumentCredentialStatus.Configured ? 'Token 已保存' :
-      (this.parseState.credential === DocumentCredentialStatus.Missing ? '未保存 Token' : '暂不可用');
+    return this.parseState.credential === DocumentCredentialStatus.Configured ? '已配置' :
+      (this.parseState.credential === DocumentCredentialStatus.Missing ? '待配置' : '暂不可用');
+  }
+  private statusMessage(): string {
+    switch (this.parseState.message) {
+      case '仅启用门禁；仍须逐文件确认': return '';
+      case '解析关闭；远端任务可能继续': return '已关闭云端解析，已提交的任务可能仍在处理。';
+      case '配置持久化失败，后续外发阻止': return '设置未能保存，云端解析保持关闭，请重试。';
+      case '结果已接收，待结构校验；不能检索或预览高亮': return '解析结果已下载，可以打开文件整理内容。';
+      default: return this.parseState.message;
+    }
   }
   aboutToDisappear(): void { this.clearSecret(); this.service?.clearInput(); }
   updateTaskRows(): void {
@@ -196,7 +204,9 @@ export struct DocumentParseView {
           .backgroundColor(this.copyManager ? Theme.accent : Theme.soft).fontColor(this.copyManager ? Color.White : Theme.accent)
           .onClick((): void=> { this.clearSecret(); this.showSettings=false; this.copyManager=true; })
       }.width('100%')
-      Text(this.parseState.message).fontColor(Theme.muted).fontSize(13).lineHeight(21).width('100%')
+      if (this.statusMessage().length > 0) {
+        Text(this.statusMessage()).fontColor(Theme.muted).fontSize(13).lineHeight(21).width('100%')
+      }
       if (this.credentialFeedback.length > 0) {
         Text(this.credentialFeedback).fontColor(Theme.amber).fontSize(13).lineHeight(21).width('100%')
       }
@@ -204,13 +214,12 @@ export struct DocumentParseView {
         Column({ space: 12 }) {
           Row({ space: 10 }) {
             Column({ space: 4 }) {
-              Text('MinerU 精准解析').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
-              Text('用于文字、表格与版式的识别，识别结果会保存在本机。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+              Text('MinerU 文档解析').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
+              Text('识别 PDF、Word 和图片中的文字与表格。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
             Text(this.credentialText()).fontSize(11).fontColor(this.parseState.credential === DocumentCredentialStatus.Configured ? Theme.accent : Theme.muted)
               .padding({ left: 9, right: 9, top: 4, bottom: 4 }).backgroundColor(Theme.soft).borderRadius(10)
           }.width('100%')
-          Text('Token 在「API Key 管理」中保存和修改。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
           Button('管理 API Key').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%')
             .id('parse-open-keys').onClick((): void => { this.onKeys(); })
           Row({ space: 10 }) {
@@ -218,27 +227,19 @@ export struct DocumentParseView {
             Toggle({ type: ToggleType.Switch, isOn: this.parseState.snapshot.config.enabled }).selectedColor(Theme.accent)
               .onChange((isOn: boolean): void => { this.service?.setEnabled(isOn); })
           }.width('100%')
-          Text('保存 Token 不会上传任何文件。PDF、DOCX 与图片会在「我的资料」逐份确认后发送。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-        }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
-        Column({ space: 10 }) {
-          Row({ space: 10 }) {
-            Text('文件与处理').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).layoutWeight(1)
-          }.width('100%')
-          Text('导入和管理资料、查看图片处理，都在「我的资料」中完成。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-          Button('导入与管理资料').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('parse-open-docx').onClick(this.onOpenDocx)
-          Button('图片解析与入库').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('parse-open-images').enabled(!this.parseState.busy).onClick(this.onOpenImages)
+          Text('开启后，仍需在知识库中选择文件并确认解析，才会将文件发送至 MinerU。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
         }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
         Column({ space: 10 }) {
           Button({ type: ButtonType.Normal }) {
             Row({ space: 10 }) {
-              Text('服务能力说明').fontColor(Theme.ink).fontSize(15).fontWeight(FontWeight.Medium).layoutWeight(1)
+              Text('使用说明').fontColor(Theme.ink).fontSize(15).fontWeight(FontWeight.Medium).layoutWeight(1)
               Text(this.capabilityOpen ? '收起' : '查看').fontSize(12).fontColor(Theme.accent)
             }.width('100%')
           }.width('100%').backgroundColor(Color.Transparent).id('parse-capability-details').onClick((): void => { this.capabilityOpen = !this.capabilityOpen; })
           if (this.capabilityOpen) {
-            Text('云端只负责文字与版式识别；图片理解、描述与检索准备在「我的 → 图片理解 / 嵌入模型」中单独开启。').fontSize(12).fontColor(Theme.muted).lineHeight(20).width('100%')
-            Text(this.parseState.limitation).fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-            Text(this.service?.capabilitySummary() ?? '解析能力暂不可用').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+            Text('先配置 MinerU API Key 并开启云端解析，再到知识库选择文件、确认处理。完成后可在知识库查看已保存的内容。').fontSize(12).fontColor(Theme.muted).lineHeight(20).width('100%')
+            Text('此页面用于设置服务和查看任务，不提供完整 PDF 阅读与原文高亮。识别结果可能有误，请以原文件为准。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+            Text('如需图片描述或按意思搜索资料，可在「我的」中分别开启「图片理解」和「嵌入模型」。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
           }
         }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
       }
@@ -291,10 +292,10 @@ export struct DocumentParseView {
           if (this.parseState.busy) {
             Row({ space: 8 }) {
               LoadingProgress().width(20).height(20).color(Theme.accent)
-              Text(this.parseState.message).fontColor(Theme.muted).fontSize(13).layoutWeight(1)
+              Text(this.statusMessage()).fontColor(Theme.muted).fontSize(13).layoutWeight(1)
             }.width('100%')
           }
-          Button('暂停本机动作').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').onClick((): void => { this.clearSecret(); this.service?.pause(); })
+          Button('暂停处理').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').onClick((): void => { this.clearSecret(); this.service?.pause(); })
           if (this.parseState.snapshot.occupancy.taskId.length > 0 && !this.parseState.snapshot.occupancy.terminalObserved) {
             Text(this.parseState.snapshot.occupancy.retired ? '已停止跟踪先前云端任务；这不代表云端删除或取消。' : '有一个云端任务还没有结束。暂停或删除本机内容不会解除云端任务。').fontColor(this.parseState.snapshot.occupancy.retired ? Theme.muted : Theme.amber).fontSize(12).lineHeight(20).width('100%')
             Button('核对原云端任务').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').onClick((): void => { this.slotConfirm = true; })
@@ -316,24 +317,23 @@ export struct DocumentParseView {
               })
             }.width('100%')
           }
-          if (this.parseState.snapshot.results.length > 0) { Button(this.resultDetailsOpen ? '收起技术信息' : '查看技术信息').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('parse-result-details').onClick((): void => { this.resultDetailsOpen = !this.resultDetailsOpen; }) }
+          if (this.parseState.snapshot.results.length > 0) { Button(this.resultDetailsOpen ? '收起结果信息' : '查看结果信息').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('parse-result-details').onClick((): void => { this.resultDetailsOpen = !this.resultDetailsOpen; }) }
           ForEach(this.visibleResults(), (result: DocumentParseResultEnvelope) => {
             Column({ space: 8 }) {
               Text('解析服务已完成，结果已保存在本机').fontColor(Theme.ink).fontWeight(FontWeight.Medium).width('100%')
               if (this.resultDetailsOpen) {
                 Text(`接收于 ${new Date(result.receivedAt).toLocaleString()} · ${this.sizeText(result.bytes)}`).fontColor(Theme.muted).fontSize(12).lineHeight(19).width('100%')
-                Text('内容待结构校验').fontColor(Theme.muted).fontSize(12).width('100%')
-                Text(this.parseState.resultDirectory).fontColor(Theme.muted).fontSize(11).width('100%').wordBreak(WordBreak.BREAK_ALL)
+                Text('内容尚待整理，可打开文件继续处理。').fontColor(Theme.muted).fontSize(12).width('100%')
               }
               if (this.isPdfResult(result)) {
-                Button('校验并准备入库').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(!this.parseState.busy)
+                Button('查看并整理内容').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(!this.parseState.busy)
                   .onClick((): void => { this.onPreparePdf(result.assetId); })
               }
               if (this.isImageResult(result)) {
-                Button('校验图片并查看正文').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('image-result-review-'+result.assetId).enabled(!this.parseState.busy)
+                Button('查看图片文字').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('image-result-review-'+result.assetId).enabled(!this.parseState.busy)
                   .onClick((): void => { this.onPrepareImage(result.assetId); })
               }
-              if (this.isDocxResult(result)) { Button('打开 Word 原生内容').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('docx-result-open-'+result.assetId).enabled(!this.parseState.busy).onClick(this.onOpenDocx) }
+              if (this.isDocxResult(result)) { Button('查看 Word 内容').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('docx-result-open-'+result.assetId).enabled(!this.parseState.busy).onClick(this.onOpenDocx) }
             }.width('100%').padding(14).backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
           }, (result: DocumentParseResultEnvelope): string => result.assetId)
           if (this.parseState.snapshot.results.length > 3) {

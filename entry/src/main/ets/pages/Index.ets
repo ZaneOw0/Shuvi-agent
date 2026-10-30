@@ -532,7 +532,6 @@ struct Index {
   private closeParse(): void {
     this.parseService?.clearInput(); this.parseOpen = false; this.scroller.scrollEdge(Edge.Top);
   }
-  private async openImages(): Promise<void> { await this.openParsed(); }
   private async openParsed(importNow: boolean = false): Promise<void> {
     this.parsedImportOpen = importNow;
     if (this.parsedOpening) { return; } this.parsedOpen = true; this.parsedOpening = true; this.parsedMessage = ''; this.scroller.scrollEdge(Edge.Top);
@@ -1925,7 +1924,7 @@ struct Index {
                DocumentParseView({ parseState: this.parseState, service: this.parseService,
                  settingsMode: this.parseSettings, clearEpoch: this.parseState.inputEpoch,
                    onClose: (): void => { this.closeParse(); }, onPreparePdf: (resultId: string): void => { this.preparePdf(resultId); },
-                    onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenImages: (): void => { this.closeParse(); this.openImages(); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); },
+                    onPrepareImage: (resultId: string): void => { this.prepareImage(resultId); }, onOpenDocx: (): void => { this.closeParse(); this.openDocx(); },
                     onKeys: (): void => { this.openApiKeys(); } })
              } else {
                SettingsPreparationView({ title: '解析引擎', preparation: this.parsePreparation,
