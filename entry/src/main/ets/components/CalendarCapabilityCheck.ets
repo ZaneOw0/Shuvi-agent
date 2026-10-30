@@ -197,7 +197,7 @@ export struct CalendarCapabilityCheck {
       Row({ space: 8 }) {
         Column({ space: 2 }) {
           Text('日历日程').fontSize(20).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
-          Text('写入系统日历中的 Shuvi 专用日历，创建前都会请你确认').fontSize(Theme.noteSize).fontColor(Theme.muted)
+          Text('写入系统日历中的休比专用日历，创建前都会请你确认').fontSize(Theme.noteSize).fontColor(Theme.muted)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         if (this.newVisible()) {
           Button('＋ 新建').fontSize(14).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(Theme.radius)
@@ -286,7 +286,7 @@ export struct CalendarCapabilityCheck {
           Text(this.result.draft === undefined ? '' : calendarWhenText(this.result.draft)).fontSize(Theme.bodySize)
             .fontColor(Theme.ink).width('100%')
           Text(calendarReminderText(this.result.draft?.reminderMinutes ?? 0)).fontSize(13).fontColor(Theme.muted)
-          Text('确认后将申请日历权限，并写入 Shuvi 专用日历。').fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
+          Text('确认后将申请日历权限，并写入休比专用日历。').fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
           Button('确认并创建').width('100%').constraintSize({ minHeight: Theme.controlHeight }).borderRadius(Theme.radius)
             .backgroundColor(Theme.accent).fontColor(Color.White)
             .onClick((): void => { this.lastAction = 'create'; void CalendarProbeService.session.confirm(); }).id('calendar-probe-confirm')

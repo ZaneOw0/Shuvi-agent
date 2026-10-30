@@ -1,4 +1,5 @@
 import { KnowledgeLexicalRepository } from './KnowledgeLexicalRepository';
+import { settingsInitializationTrace } from './SettingsInitializationTrace';
 import { common } from '@kit.AbilityKit';
 import { KnowledgePlatformIdentity } from './KnowledgeIdentity';
 import { KnowledgeAgentSearchAdapter } from '../application/KnowledgeAgentSearchAdapter';
@@ -276,7 +277,9 @@ export class KnowledgeAssembly {
     const lease: KnowledgeReadLease = new KnowledgeReadLease(); lease.id = new KnowledgePlatformIdentity().id(); lease.sourceId = sourceId; lease.generation = generation; lease.sessionId = this.sessionId; return lease;
   }
   private async start(readOnly: boolean = false): Promise<void> {
+    const started: number = Date.now(); settingsInitializationTrace('knowledge', 'text-start', started);
     await this.text.initialize(true);
+    settingsInitializationTrace('knowledge', 'text-ready', started);
     this.extensionMessage = this.unifiedMessage;
     try { await this.repository.open(); await this.images.open(); }
     catch (error) { this.extensionMessage = '资料扩展打开未完成：'+this.localFailure(error); }
@@ -285,25 +288,31 @@ export class KnowledgeAssembly {
       catch (error) { this.extensionMessage = 'DOCX扩展打开未完成：'+this.localFailure(error); }
     }
     if (!readOnly && this.unified.ready() && this.unifiedMessage.length === 0) {
+      settingsInitializationTrace('knowledge', 'local-recovery-start', started);
       try { await this.text.service.recoverLocal(); }
       catch { this.extensionMessage = '旧正文恢复未完成，原件与已存正文保留'; }
     }
     if (this.repository.ready() && this.images.ready()) {
+      settingsInitializationTrace('knowledge', 'vector-metadata-start', started);
       try { await this.vectorMetadata.bootstrap(); if (!readOnly) { await this.repository.reconcile(this.sessionId); await this.assets.reconcile(); await this.ingestion.refreshJobs(); } }
       catch (error) { this.extensionMessage = '本机任务恢复待核，原件导入仍可使用：'+this.localFailure(error); }
       try { await this.embedding.initialize(); }
       catch (error) { this.extensionMessage = '嵌入设置初始化未完成，文件解析仍可使用：'+this.localFailure(error); }
     }
+    settingsInitializationTrace('knowledge', 'vector-restore-start', started);
     if (this.repository.ready()) { for (const document of await this.repository.list()) { if (!document.tombstone && document.activeVectorGeneration.length > 0) { try { await this.workflow.restoreActive(document.id); } catch { this.extensionMessage = '关键词可用；活动向量读回或镜像恢复未确认，向量路保持降级'; } } } }
     if (this.images.ready()) { for (const document of await this.images.list()) { if (!document.tombstone && document.chunkCount > 0) { try { await this.workflow.restoreActive(document.id); } catch { this.extensionMessage = '图片关键词保留；图片向量读回未确认'; } } } }
     if (this.docx.ready()) { for (const document of await this.docx.list()) { if (!document.tombstone && document.chunkCount > 0) { try { await this.workflow.restoreActive(document.id); } catch { this.extensionMessage = 'DOCX关键词保留；向量镜像读回未确认'; } } } }
     if (this.unified.ready() && !readOnly) { await this.startProcessing(); }
+    settingsInitializationTrace('knowledge', 'ready', started);
   }
   private async startProcessing(): Promise<void> {
     if (this.processingReady) { return; }
+    const started: number = Date.now(); settingsInitializationTrace('processing', 'start', started);
     try { await this.unifiedSettings.reconcileEmbeddingConfig(); await this.unifiedLifecycle.sync(); await this.unifiedQueue.initialize(); this.processingReady = true; }
     catch { this.unifiedMessage = '增强队列恢复失败；正文保留，可重试'; }
     try { await this.unifiedHistory.recoverPending(); } catch { this.unifiedMessage += '；历史回执恢复待重试，检索不受阻'; }
+    settingsInitializationTrace('processing', 'ready', started);
   }
   private localFailure(error: Object): string {
     if (error instanceof DocxFailure || error instanceof KnowledgeFailure || error instanceof ImageKnowledgeFailure) {

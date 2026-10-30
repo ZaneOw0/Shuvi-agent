@@ -1,6 +1,7 @@
 // Frontend prototype types only; the shared Agent/platform contract is still pending.
 import { VoiceClip } from '../services/speech/VoiceAudio';
 import { CalendarCreatedSummary } from '../services/calendar/CalendarPresentation';
+import { ChatKnowledgeSnapshot } from './ChatKnowledgeModels';
 
 export enum DemoScenario {
   Normal = '正常流程',
@@ -46,6 +47,8 @@ export interface ChatMessage {
   imageMissing?: boolean;
   /** Present only on the reply that reports a verified calendar creation; rendered as a card. */
   calendar?: CalendarCreatedSummary;
+  /** Persisted display snapshot only; never reused as knowledge authorization or model context. */
+  knowledgeSources?: ChatKnowledgeSnapshot;
 }
 
 export interface CalendarDraft {

@@ -3,6 +3,7 @@ import { ChatMessage } from '../../model/AssistantModels';
 import { CalendarCreatedSummary } from '../calendar/CalendarPresentation';
 import { VoiceClip } from '../speech/VoiceAudio';
 import { AssistantMemory, AssistantMemoryState, parseAssistantMemory } from './AssistantMemory';
+import { ChatKnowledgeSnapshot, copyChatKnowledgeSnapshot } from '../../model/ChatKnowledgeModels';
 
 /** One row of the conversation list (newest first). */
 export class ConversationSummary {
@@ -46,6 +47,7 @@ class StoredChatMessage {
   voice?: VoiceClip;
   image?: boolean;
   calendar?: CalendarCreatedSummary;
+  knowledgeSources?: ChatKnowledgeSnapshot;
 }
 
 const MAX_TITLE: number = 24;
@@ -62,6 +64,7 @@ function storedMessage(message: ChatMessage): StoredChatMessage | undefined {
   }
   if (message.image !== undefined || message.imageMissing === true) stored.image = true;
   if (message.calendar !== undefined) stored.calendar = JSON.parse(JSON.stringify(message.calendar)) as CalendarCreatedSummary;
+  if (!message.isUser) stored.knowledgeSources = copyChatKnowledgeSnapshot(message.knowledgeSources);
   return stored;
 }
 
@@ -87,6 +90,7 @@ function parseMessages(json: string): StoredChatMessage[] {
         clip.durationMs = voice.durationMs; clip.createdAt = voice.createdAt; message.voice = clip;
       }
       if (item.image === true) message.image = true;
+      if (!item.isUser) message.knowledgeSources = copyChatKnowledgeSnapshot(item.knowledgeSources);
       const calendar: CalendarCreatedSummary | undefined = item.calendar;
       if (calendar !== undefined && objectValue(calendar) && typeof calendar.title === 'string' &&
         typeof calendar.when === 'string' && typeof calendar.reminder === 'string' && typeof calendar.eventId === 'number' &&
@@ -262,6 +266,7 @@ export class AssistantConversations {
       if (item.voice !== undefined) message.voice = item.voice;
       if (item.image === true) message.imageMissing = true;
       if (item.calendar !== undefined) message.calendar = item.calendar;
+      if (!item.isUser) message.knowledgeSources = copyChatKnowledgeSnapshot(item.knowledgeSources);
       return message;
     });
   }

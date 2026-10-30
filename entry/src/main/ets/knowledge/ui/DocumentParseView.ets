@@ -1,5 +1,5 @@
 import { Theme } from '../../components/Theme';
-import { DocumentParseViewState, DocumentCredentialStatus, DocumentOriginal, DocumentTestAcknowledgement, DocumentParseTask, DocumentParseResultEnvelope, DocumentParseStage, DocumentParseFormat } from '../domain/DocumentParseModels';
+import { DocumentParseViewState, DocumentCredentialStatus, DocumentOriginal, DocumentParseTask, DocumentParseStage, DocumentParseFormat } from '../domain/DocumentParseModels';
 import { DocumentParseService } from '../application/DocumentParseService';
 import { parseFailureSummary } from '../pipeline/ParseFailurePolicy';
 import { documentIsImage } from '../pipeline/DocumentParsePolicy';
@@ -15,15 +15,10 @@ class ParseTaskGroup {
 @Component
 export struct DocumentParseView {
   @State capabilityOpen: boolean = false;
-  @State resultDetailsOpen: boolean = false;
   @Link @Watch('updateTaskRows') parseState: DocumentParseViewState;
   @Prop settingsMode: boolean = true;
   service: DocumentParseService | undefined = undefined;
   onClose: () => void = (): void => {};
-  onPreparePdf: (resultId: string) => void = (_resultId: string): void => {};
-  onPrepareImage: (resultId: string) => void = (_resultId: string): void => {};
-  onOpenImages: () => void = (): void => {};
-  onOpenDocx: () => void = (): void => {};
   /** The MinerU token is saved and changed in 我的 → API Key 管理. */
   onKeys: () => void = (): void => {};
   @Prop @Watch('clearSecret') clearEpoch: number = 0;
@@ -42,7 +37,6 @@ export struct DocumentParseView {
   @State private taskView: string = 'list';
   @State private taskFolder: string = '';
   @State private taskPage: number = 0;
-  @State private resultPage: number = 0;
   @State private copySort: string = 'time';
   @State private copyView: string = 'list';
   @State private copyFolder: string = '';
@@ -55,8 +49,17 @@ export struct DocumentParseView {
     if (this.service === undefined) { this.credentialFeedback = '解析服务暂不可用，请稍后重新打开本页'; }
   }
   private credentialText(): string {
-    return this.parseState.credential === DocumentCredentialStatus.Configured ? 'Token 已保存' :
-      (this.parseState.credential === DocumentCredentialStatus.Missing ? '未保存 Token' : '暂不可用');
+    return this.parseState.credential === DocumentCredentialStatus.Configured ? '已配置' :
+      (this.parseState.credential === DocumentCredentialStatus.Missing ? '待配置' : '暂不可用');
+  }
+  private statusMessage(): string {
+    switch (this.parseState.message) {
+      case '仅启用门禁；仍须逐文件确认': return '';
+      case '解析关闭；远端任务可能继续': return '已关闭云端解析，已提交的任务可能仍在处理。';
+      case '配置持久化失败，后续外发阻止': return '设置未能保存，云端解析保持关闭，请重试。';
+      case '结果已接收，待结构校验；不能检索或预览高亮': return '解析结果已下载，可以打开文件整理内容。';
+      default: return this.parseState.message;
+    }
   }
   aboutToDisappear(): void { this.clearSecret(); this.service?.clearInput(); }
   updateTaskRows(): void {
@@ -69,7 +72,6 @@ export struct DocumentParseView {
     }
     this.taskRows = next;
     if (this.taskPage * 6 >= this.taskRowsForView().length) { this.taskPage = Math.max(0, Math.ceil(this.taskRowsForView().length / 6) - 1); }
-    if (this.resultPage * 3 >= this.parseState.snapshot.results.length) { this.resultPage = Math.max(0, Math.ceil(this.parseState.snapshot.results.length / 3) - 1); }
     if (this.copyPage * 8 >= this.copyRows().length) { this.copyPage = Math.max(0, Math.ceil(this.copyRows().length / 8) - 1); }
   }
   private taskGroupKey(stage: DocumentParseStage): string {
@@ -94,11 +96,6 @@ export struct DocumentParseView {
     }
     return groups;
   }
-  private visibleResults(): DocumentParseResultEnvelope[] {
-    const rows: DocumentParseResultEnvelope[] = this.parseState.snapshot.results;
-    return rows.slice(this.resultPage * 3, this.resultPage * 3 + 3);
-  }
-  private resultPageCount(): number { return Math.max(1, Math.ceil(this.parseState.snapshot.results.length / 3)); }
   private copyRows(): DocumentOriginal[] {
     const rows: DocumentOriginal[] = this.parseState.snapshot.originals.filter((o: DocumentOriginal): boolean => o.title.toLowerCase().includes(this.copyFilter.trim().toLowerCase()));
     const filtered: DocumentOriginal[] = this.copyFolder.length === 0 ? rows : rows.filter((o: DocumentOriginal): boolean => this.copyCategory(o) === this.copyFolder);
@@ -162,18 +159,6 @@ export struct DocumentParseView {
     } catch { this.deleteFeedback='本机副本删除未确认，原记录保留，请重试。'; }
     finally { this.deletingCopy=false; this.updateTaskRows(); }
   }
-  private isPdfResult(result: DocumentParseResultEnvelope): boolean {
-    const task: DocumentParseTask | undefined = this.parseState.snapshot.tasks.find((item: DocumentParseTask): boolean => item.id === result.taskId);
-    return this.parseState.snapshot.originals.some((original: DocumentOriginal): boolean => original.id === task?.originalId && original.format === DocumentParseFormat.Pdf);
-  }
-  private isImageResult(result: DocumentParseResultEnvelope): boolean {
-    const task = this.parseState.snapshot.tasks.find((item: DocumentParseTask): boolean => item.id === result.taskId);
-    return this.parseState.snapshot.originals.some((original: DocumentOriginal): boolean => original.id === task?.originalId && documentIsImage(original.format));
-  }
-  private isDocxResult(result: DocumentParseResultEnvelope): boolean {
-    const task: DocumentParseTask | undefined = this.parseState.snapshot.tasks.find((t: DocumentParseTask): boolean => t.id === result.taskId);
-    return this.parseState.snapshot.originals.some((o: DocumentOriginal): boolean => o.id === task?.originalId && o.format === DocumentParseFormat.Docx);
-  }
   build() {
     Column({ space: 14 }) {
       Row({ space: 12 }) {
@@ -196,7 +181,9 @@ export struct DocumentParseView {
           .backgroundColor(this.copyManager ? Theme.accent : Theme.soft).fontColor(this.copyManager ? Color.White : Theme.accent)
           .onClick((): void=> { this.clearSecret(); this.showSettings=false; this.copyManager=true; })
       }.width('100%')
-      Text(this.parseState.message).fontColor(Theme.muted).fontSize(13).lineHeight(21).width('100%')
+      if (this.statusMessage().length > 0) {
+        Text(this.statusMessage()).fontColor(Theme.muted).fontSize(13).lineHeight(21).width('100%')
+      }
       if (this.credentialFeedback.length > 0) {
         Text(this.credentialFeedback).fontColor(Theme.amber).fontSize(13).lineHeight(21).width('100%')
       }
@@ -204,13 +191,12 @@ export struct DocumentParseView {
         Column({ space: 12 }) {
           Row({ space: 10 }) {
             Column({ space: 4 }) {
-              Text('MinerU 精准解析').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
-              Text('用于文字、表格与版式的识别，识别结果会保存在本机。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+              Text('MinerU 文档解析').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).width('100%')
+              Text('识别 PDF、Word 和图片中的文字与表格。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
             Text(this.credentialText()).fontSize(11).fontColor(this.parseState.credential === DocumentCredentialStatus.Configured ? Theme.accent : Theme.muted)
               .padding({ left: 9, right: 9, top: 4, bottom: 4 }).backgroundColor(Theme.soft).borderRadius(10)
           }.width('100%')
-          Text('Token 在「API Key 管理」中保存和修改。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
           Button('管理 API Key').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%')
             .id('parse-open-keys').onClick((): void => { this.onKeys(); })
           Row({ space: 10 }) {
@@ -218,27 +204,19 @@ export struct DocumentParseView {
             Toggle({ type: ToggleType.Switch, isOn: this.parseState.snapshot.config.enabled }).selectedColor(Theme.accent)
               .onChange((isOn: boolean): void => { this.service?.setEnabled(isOn); })
           }.width('100%')
-          Text('保存 Token 不会上传任何文件。PDF、DOCX 与图片会在「我的资料」逐份确认后发送。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-        }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
-        Column({ space: 10 }) {
-          Row({ space: 10 }) {
-            Text('文件与处理').fontColor(Theme.ink).fontSize(17).fontWeight(FontWeight.Medium).layoutWeight(1)
-          }.width('100%')
-          Text('导入和管理资料、查看图片处理，都在「我的资料」中完成。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-          Button('导入与管理资料').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('parse-open-docx').onClick(this.onOpenDocx)
-          Button('图片解析与入库').fontSize(14).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('parse-open-images').enabled(!this.parseState.busy).onClick(this.onOpenImages)
+          Text('开启后，仍需在知识库中选择文件并确认解析，才会将文件发送至 MinerU。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
         }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
         Column({ space: 10 }) {
           Button({ type: ButtonType.Normal }) {
             Row({ space: 10 }) {
-              Text('服务能力说明').fontColor(Theme.ink).fontSize(15).fontWeight(FontWeight.Medium).layoutWeight(1)
+              Text('使用说明').fontColor(Theme.ink).fontSize(15).fontWeight(FontWeight.Medium).layoutWeight(1)
               Text(this.capabilityOpen ? '收起' : '查看').fontSize(12).fontColor(Theme.accent)
             }.width('100%')
           }.width('100%').backgroundColor(Color.Transparent).id('parse-capability-details').onClick((): void => { this.capabilityOpen = !this.capabilityOpen; })
           if (this.capabilityOpen) {
-            Text('云端只负责文字与版式识别；图片理解、描述与检索准备在「我的 → 图片理解 / 嵌入模型」中单独开启。').fontSize(12).fontColor(Theme.muted).lineHeight(20).width('100%')
-            Text(this.parseState.limitation).fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-            Text(this.service?.capabilitySummary() ?? '解析能力暂不可用').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+            Text('先配置 MinerU API Key 并开启云端解析，再到知识库选择文件、确认处理。完成后可在知识库查看已保存的内容。').fontSize(12).fontColor(Theme.muted).lineHeight(20).width('100%')
+            Text('此页面用于设置服务和查看任务，不提供完整 PDF 阅读与原文高亮。识别结果可能有误，请以原文件为准。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
+            Text('如需图片描述或按意思搜索资料，可在「我的」中分别开启「图片理解」和「嵌入模型」。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
           }
         }.width('100%').padding(18).backgroundColor(Theme.surface).borderRadius(18).border({ width: 1, color: Theme.line })
       }
@@ -291,10 +269,10 @@ export struct DocumentParseView {
           if (this.parseState.busy) {
             Row({ space: 8 }) {
               LoadingProgress().width(20).height(20).color(Theme.accent)
-              Text(this.parseState.message).fontColor(Theme.muted).fontSize(13).layoutWeight(1)
+              Text(this.statusMessage()).fontColor(Theme.muted).fontSize(13).layoutWeight(1)
             }.width('100%')
           }
-          Button('暂停本机动作').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').onClick((): void => { this.clearSecret(); this.service?.pause(); })
+          Button('暂停处理').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').onClick((): void => { this.clearSecret(); this.service?.pause(); })
           if (this.parseState.snapshot.occupancy.taskId.length > 0 && !this.parseState.snapshot.occupancy.terminalObserved) {
             Text(this.parseState.snapshot.occupancy.retired ? '已停止跟踪先前云端任务；这不代表云端删除或取消。' : '有一个云端任务还没有结束。暂停或删除本机内容不会解除云端任务。').fontColor(this.parseState.snapshot.occupancy.retired ? Theme.muted : Theme.amber).fontSize(12).lineHeight(20).width('100%')
             Button('核对原云端任务').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').onClick((): void => { this.slotConfirm = true; })
@@ -316,40 +294,6 @@ export struct DocumentParseView {
               })
             }.width('100%')
           }
-          if (this.parseState.snapshot.results.length > 0) { Button(this.resultDetailsOpen ? '收起技术信息' : '查看技术信息').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('parse-result-details').onClick((): void => { this.resultDetailsOpen = !this.resultDetailsOpen; }) }
-          ForEach(this.visibleResults(), (result: DocumentParseResultEnvelope) => {
-            Column({ space: 8 }) {
-              Text('解析服务已完成，结果已保存在本机').fontColor(Theme.ink).fontWeight(FontWeight.Medium).width('100%')
-              if (this.resultDetailsOpen) {
-                Text(`接收于 ${new Date(result.receivedAt).toLocaleString()} · ${this.sizeText(result.bytes)}`).fontColor(Theme.muted).fontSize(12).lineHeight(19).width('100%')
-                Text('内容待结构校验').fontColor(Theme.muted).fontSize(12).width('100%')
-                Text(this.parseState.resultDirectory).fontColor(Theme.muted).fontSize(11).width('100%').wordBreak(WordBreak.BREAK_ALL)
-              }
-              if (this.isPdfResult(result)) {
-                Button('校验并准备入库').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(!this.parseState.busy)
-                  .onClick((): void => { this.onPreparePdf(result.assetId); })
-              }
-              if (this.isImageResult(result)) {
-                Button('校验图片并查看正文').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('image-result-review-'+result.assetId).enabled(!this.parseState.busy)
-                  .onClick((): void => { this.onPrepareImage(result.assetId); })
-              }
-              if (this.isDocxResult(result)) { Button('打开 Word 原生内容').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').id('docx-result-open-'+result.assetId).enabled(!this.parseState.busy).onClick(this.onOpenDocx) }
-            }.width('100%').padding(14).backgroundColor(Theme.surface).borderRadius(16).border({ width: 1, color: Theme.line })
-          }, (result: DocumentParseResultEnvelope): string => result.assetId)
-          if (this.parseState.snapshot.results.length > 3) {
-            Row({ space: 10 }) {
-              Button('上一页').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14 }).enabled(this.resultPage > 0).onClick((): void => { this.resultPage--; })
-              Text(`${this.resultPage + 1} / ${this.resultPageCount()}`).fontSize(13).fontColor(Theme.ink).layoutWeight(1).textAlign(TextAlign.Center)
-              Button('下一页').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).padding({ left: 14, right: 14 }).enabled(this.resultPage + 1 < this.resultPageCount()).onClick((): void => { this.resultPage++; })
-            }.width('100%')
-          }
-          Button('选择文件，仅保存原件').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(!this.parseState.busy).onClick((): void => { this.service?.prepare(); })
-          ForEach(this.parseState.snapshot.originals, (original: DocumentOriginal) => {
-            if (!documentIsImage(original.format) && original.format !== DocumentParseFormat.Docx) {
-              DocumentParseOriginalRow({ original: original, service: this.service, refreshEpoch: this.parseState.inputEpoch,
-                submitBlockReason: this.service?.submitReason(original) ?? '解析能力不可用' })
-            }
-          }, (original: DocumentOriginal): string => original.id)
         }.width('100%')
       }
       if (this.copyManager) {
@@ -518,57 +462,6 @@ struct DocumentParseTaskRow {
         }.width('100%').padding(12).backgroundColor(Theme.inputSurface).borderRadius(12)
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 12, bottom: 12 })
-      .border({ width: { bottom: 1 }, color: Theme.line })
-  }
-}
-
-@Component
-struct DocumentParseOriginalRow {
-  @Prop original: DocumentOriginal = new DocumentOriginal();
-  service: DocumentParseService | undefined = undefined;
-  @Prop refreshEpoch: number = 0;
-  @Prop submitBlockReason: string = '解析能力不可用';
-  @State private whole: boolean = false;
-  @State private images: boolean = false;
-  @State private nonSensitive: boolean = false;
-  @State private unknownPrivacy: boolean = false;
-  @State private free: boolean = false;
-  @State private open: boolean = false;
-  private confirmFile(): void {
-    const a: DocumentTestAcknowledgement = new DocumentTestAcknowledgement();
-    a.fullFile = this.whole; a.embeddedImages = this.images; a.nonSensitive = this.nonSensitive; a.privacyUnknown = this.unknownPrivacy; a.freeEligible = this.free;
-    this.service?.confirm(this.original.id, a);
-    this.whole = false; this.images = false; this.nonSensitive = false; this.unknownPrivacy = false; this.free = false;
-  }
-  private sizeText(bytes: number): string {
-    if (bytes <= 0) { return '大小未知'; }
-    if (bytes >= 1024 * 1024) { return `${(bytes / (1024 * 1024)).toFixed(1)} MB`; }
-    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  }
-  build() {
-    Column({ space: 10 }) {
-      Row({ space: 10 }) {
-        Column({ space: 4 }) {
-          Text(this.original.title).fontColor(Theme.ink).fontSize(15).fontWeight(FontWeight.Medium).width('100%').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(`${this.original.format} · ${this.sizeText(this.original.bytes)}${this.original.pages > 0 ? ' · ' + String(this.original.pages) + ' 页' : ''}`).fontColor(Theme.muted).fontSize(11).width('100%')
-        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        Button(this.open ? '收起' : '开始解析').fontSize(12).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(10).constraintSize({ minHeight: 44 }).onClick((): void => { this.open = !this.open; })
-      }.width('100%')
-      if (this.open) {
-        Text((this.original.format === DocumentParseFormat.Pdf ? '' : this.original.preflightReason) || '发送前需要确认以下内容。').fontColor(Theme.muted).fontSize(12).lineHeight(20).width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.whole).onChange((v: boolean): void => { this.whole = v; }).accessibilityText('同意发送完整原文件'); Text('发送完整原文件').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.images).onChange((v: boolean): void => { this.images = v; }).accessibilityText('确认包含全部内嵌图'); Text('包含文件中的全部内嵌图').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.nonSensitive).onChange((v: boolean): void => { this.nonSensitive = v; }).accessibilityText('确认文件为非敏感测试文件'); Text('这是一份有权使用、且不含敏感信息的测试文件').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.unknownPrivacy).onChange((v: boolean): void => { this.unknownPrivacy = v; }).accessibilityText('知悉服务留存条件未知'); Text('我知悉服务的留存与使用条件尚不明确，仍同意本次解析').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Row() { Checkbox().selectedColor(Theme.accent).select(this.free).onChange((v: boolean): void => { this.free = v; }).accessibilityText('确认本次免费资格'); Text('本次有免费解析资格，不授权收费').fontColor(Theme.ink).fontSize(13).layoutWeight(1) }.width('100%')
-        Text('固定使用 vlm 模式，开启表格与行内公式识别；扫描质量仍需以结果为准。').fontColor(Theme.muted).fontSize(11).lineHeight(18).width('100%')
-        Button('确认本件用途').fontSize(13).fontColor(Theme.accent).backgroundColor(Theme.soft).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(this.whole && this.images && this.nonSensitive && this.unknownPrivacy && this.free)
-          .onClick((): void => { this.confirmFile(); })
-        Text(this.submitBlockReason).fontColor(Theme.muted).fontSize(11).width('100%')
-        Button('开始云端解析').fontSize(13).fontColor(Color.White).backgroundColor(Theme.accent).borderRadius(12).constraintSize({ minHeight: 44 }).width('100%').enabled(this.submitBlockReason === '')
-          .onClick((): void => { this.service?.submit(this.original.id); })
-      }
-    }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 14, bottom: 14 })
       .border({ width: { bottom: 1 }, color: Theme.line })
   }
 }

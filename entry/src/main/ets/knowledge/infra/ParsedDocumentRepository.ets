@@ -364,6 +364,8 @@ export class ParsedDocumentRepository implements ParsedRepositoryPort, UnifiedPr
   async appendHistory(r: UnifiedHistoryRevision): Promise<void> {
     if (!parsedId(r.recordId) || !parsedId(r.eventId) || r.revision < 1 || r.wire !== UNIFIED_HISTORY_WIRE || !parsedHash(r.snapshotHash)) { throw new ParsedFailure('HistoryIdentity','upd-history'); }
     await this.write<void>(async (): Promise<void> => {
+      const cleared: relationalStore.ResultSet = await this.store().querySql('SELECT 1 FROM upd_settings WHERE purpose=?', ['internal:history-cleared:'+r.recordId]);
+      try { if (cleared.goToNextRow()) { return; } } finally { cleared.close(); }
       const rows: relationalStore.ResultSet = await this.store().querySql('SELECT revision,wire,asset,hash FROM upd_history WHERE record=? AND event=?',[r.recordId,r.eventId]);
       try { if (rows.goToNextRow()) { if (rows.getLong(0) !== r.revision || rows.getString(1) !== r.wire || rows.getString(2) !== r.snapshotAsset || rows.getString(3) !== r.snapshotHash) { throw new ParsedFailure('HistoryEventConflict','upd-history'); } return; } } finally { rows.close(); }
       await this.store().executeSql('INSERT INTO upd_history VALUES(?,?,?,?,?,?,?)',[r.recordId,r.eventId,r.revision,r.wire,r.snapshotAsset,r.snapshotHash,r.createdAt]);
@@ -519,12 +521,22 @@ export class ParsedDocumentRepository implements ParsedRepositoryPort, UnifiedPr
   async upgradeBatchIds(): Promise<string[]> {
     const rows: relationalStore.ResultSet=await this.store().querySql("SELECT id FROM upd_batch WHERE origin='ExplicitUpgrade' ORDER BY id"); const ids: string[]=[]; try { while (rows.goToNextRow()) { ids.push(rows.getString(0)); } } finally { rows.close(); } return ids;
   }
+  async clearUnifiedHistory(): Promise<void> {
+    await this.write<void>(async (): Promise<void> => {
+      await this.host.transaction(async (tx: relationalStore.Transaction): Promise<void> => {
+        // Keep a durable marker for each record so a pending file or late writer cannot restore a cleared search.
+        await tx.execute("INSERT OR IGNORE INTO upd_settings SELECT 'internal:history-cleared:'||record,0,'Cleared' FROM upd_history");
+        await tx.execute("INSERT OR IGNORE INTO upd_settings SELECT 'internal:history-cleared:'||generation,0,'Cleared' FROM upd_asset_write WHERE role='history'");
+        await tx.execute('DELETE FROM upd_history');
+      });
+    });
+  }
   async unifiedHistoryRows(offset: number, limit: number): Promise<UnifiedHistoryRevision[]> {
     if (!Number.isSafeInteger(offset) || offset<0 || limit<1 || limit>20) { throw new ParsedFailure('HistoryPageRange','history'); }
     const rows=await this.store().querySql('SELECT h.record,h.event,h.revision,h.wire,h.asset,h.hash,h.created FROM upd_history h WHERE h.revision=(SELECT MAX(x.revision) FROM upd_history x WHERE x.record=h.record) ORDER BY h.created DESC,h.record DESC LIMIT ? OFFSET ?',[limit,offset]); const result: UnifiedHistoryRevision[]=[];
     try { while (rows.goToNextRow()) { const r: UnifiedHistoryRevision=new UnifiedHistoryRevision(); r.recordId=rows.getString(0); r.eventId=rows.getString(1); r.revision=rows.getLong(2); r.wire=rows.getString(3); r.snapshotAsset=rows.getString(4); r.snapshotHash=rows.getString(5); r.createdAt=rows.getLong(6); result.push(r); } } finally { rows.close(); } return result;
   }
-  async pendingHistoryAssets(): Promise<string[]> { const rows=await this.store().querySql("SELECT w.id FROM upd_asset_write w WHERE w.role='history' AND w.phase='Ready' AND w.id LIKE w.generation||'-r%' AND NOT EXISTS(SELECT 1 FROM upd_history h WHERE h.asset=w.id) ORDER BY w.id LIMIT 100"); const ids: string[]=[]; try { while (rows.goToNextRow()) { ids.push(rows.getString(0)); } } finally { rows.close(); } return ids; }
+  async pendingHistoryAssets(): Promise<string[]> { const rows=await this.store().querySql("SELECT w.id FROM upd_asset_write w WHERE w.role='history' AND w.phase='Ready' AND w.id LIKE w.generation||'-r%' AND NOT EXISTS(SELECT 1 FROM upd_history h WHERE h.asset=w.id) AND NOT EXISTS(SELECT 1 FROM upd_settings s WHERE s.purpose='internal:history-cleared:'||w.generation) ORDER BY w.id LIMIT 100"); const ids: string[]=[]; try { while (rows.goToNextRow()) { ids.push(rows.getString(0)); } } finally { rows.close(); } return ids; }
   async reusableImage(hash: string): Promise<ParsedImageAsset | undefined> {
     const rows=await this.store().querySql("SELECT id FROM upd_asset WHERE hash=? AND state='Ready' AND path LIKE 'images/%' AND NOT EXISTS(SELECT 1 FROM upd_cleanup c WHERE c.asset=upd_asset.id) ORDER BY id",[hash]);
     try { return rows.goToNextRow()?await this.asset(rows.getString(0)):undefined; } finally { rows.close(); }
