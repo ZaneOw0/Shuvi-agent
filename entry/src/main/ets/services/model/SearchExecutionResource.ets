@@ -1,3 +1,4 @@
+import common from '@ohos.app.ability.common';
 import relationalStore from '@ohos.data.relationalStore';
 import { ContractValidator, ReconciliationReport, ToolInvocation, ToolOutcome } from '@harmony_agent/agent-contracts';
 import { OperationJournalState } from '@harmony_agent/agent-core';
@@ -14,6 +15,16 @@ function searchStoreConfig(): relationalStore.StoreConfig {
   const config = new EncryptedRdbConfigurationRequest();
   config.executionStoreName = 'shuvi_search_execution_v1.db'; config.memoryStoreName = 'shuvi_search_unused_memory.db';
   return createEncryptedRdbStoreConfigs(config).execution;
+}
+
+/** Deletes the whole search record database (file and journal), used only when it is full. */
+export interface SearchStoreEraserPort {
+  erase(config: relationalStore.StoreConfig): Promise<void>;
+}
+export class NativeSearchStoreEraser implements SearchStoreEraserPort {
+  private readonly context: common.Context;
+  constructor(context: common.Context) { this.context = context; }
+  async erase(config: relationalStore.StoreConfig): Promise<void> { await relationalStore.deleteRdbStore(this.context, config); }
 }
 
 /** Search tasks the durable store may hold; each send creates one, including denied or cancelled ones. */
@@ -59,10 +70,10 @@ class MeasuredSnapshotBackend implements DurableSnapshotBackendPort {
 }
 
 /** Durable execution record for phone-direct Tavily searches. Every authorized search is recorded before it is sent,
- * with its pending (unreconciled) usage; nothing is ever re-sent automatically. The earlier one-search trial cap is
- * gone: each search still needs its own explicit consent. The store keeps every task, so it accepts at most
- * SEARCH_HISTORY_LIMIT of them and stops new searches near the row-size limit; pruning or archiving old records is
- * separate future work.
+ * with its pending (unreconciled) usage; nothing is ever re-sent automatically. The store keeps every task, so it
+ * accepts at most SEARCH_HISTORY_LIMIT of them and stops new searches near the row-size limit. When it is opened full,
+ * the whole database is deleted and started empty (the user chose clearing over archiving); this happens only while
+ * opening, so no search of this process is in flight. Supplier-side usage stays visible in the Tavily console.
  */
 export class SearchExecutionResource extends OwnedAgentRdb implements ProductionRuntimePersistencePort, McpGrantVerifierPort {
   onOutcomeRejected: (taskId: string) => void = (_taskId: string): void => {};
@@ -72,8 +83,32 @@ export class SearchExecutionResource extends OwnedAgentRdb implements Production
   private readonly recoveryConfig: RuntimeExecutionRecoveryBridgeConfig;
   private readonly digest: AgentHostDigest;
   private consumed: string[] = [];
-  constructor(opener: AgentRdbOpenPort, config: RuntimeExecutionRecoveryBridgeConfig, digest: AgentHostDigest) {
+  private readonly eraser?: SearchStoreEraserPort;
+  private readonly storeConfig: relationalStore.StoreConfig = searchStoreConfig();
+  private readonly softLimitBytes: number;
+  private opened?: Promise<void>;
+  /** True once this resource deleted a full store while opening. */
+  cleared: boolean = false;
+  constructor(opener: AgentRdbOpenPort, config: RuntimeExecutionRecoveryBridgeConfig, digest: AgentHostDigest,
+    eraser?: SearchStoreEraserPort, softLimitBytes: number = SEARCH_STORE_SOFT_LIMIT_BYTES) {
     super(opener, searchStoreConfig(), 'SEARCH_EXECUTION'); this.recoveryConfig = config; this.digest = digest;
+    this.eraser = eraser; this.softLimitBytes = softLimitBytes;
+  }
+  /** Opens the store; a full one is deleted and reopened empty when an eraser is configured. */
+  open(): Promise<void> {
+    if (this.opened === undefined) {
+      const work: Promise<void> = this.openClearingWhenFull();
+      this.opened = work.finally((): void => { this.opened = undefined; });
+    }
+    return this.opened;
+  }
+  private async openClearingWhenFull(): Promise<void> {
+    await super.open();
+    if (this.eraser === undefined || this.available()) return;
+    await super.close();
+    await this.eraser.erase(this.storeConfig);
+    this.cleared = true;
+    await super.open();
   }
   protected async initialize(store: relationalStore.RdbStore): Promise<void> {
     const measured = new MeasuredSnapshotBackend(new RdbSnapshotBackend(store));
@@ -93,7 +128,7 @@ export class SearchExecutionResource extends OwnedAgentRdb implements Production
   private storedBytes(): number { return this.measured === undefined ? SEARCH_STORE_HARD_LIMIT_BYTES : this.measured.bytes; }
   /** Room for one more search task. Earlier searches, including ambiguous or failed ones, no longer block a new one. */
   available(): boolean {
-    return this.taskCount() < SEARCH_HISTORY_LIMIT && this.storedBytes() < SEARCH_STORE_SOFT_LIMIT_BYTES;
+    return this.taskCount() < SEARCH_HISTORY_LIMIT && this.storedBytes() < this.softLimitBytes;
   }
   saveCheckpoint(checkpoint: RuntimeTaskRecoveryCheckpoint, previous: number, authority: RuntimeDurableAuthorityPayload,
     now: number): Promise<RuntimePersistenceResult> {

@@ -142,7 +142,7 @@ function source(value: Object): SearchSource | undefined {
   const trimmed: string = title.trim();
   if (trimmed.length === 0 || !safeSearchUrl(url) || authorityHasAt(url)) return undefined;
   const result: SearchSource = new SearchSource();
-  result.title = bounded(trimmed, MAX_TITLE).trim(); result.url = url; result.snippet = bounded(content, MAX_SNIPPET);
+  result.title = bounded(trimmed.replace(/\s+/g, ' '), MAX_TITLE).trim(); result.url = url; result.snippet = bounded(content, MAX_SNIPPET);
   return result;
 }
 /**

@@ -6,8 +6,8 @@ import { LiveSearchSource } from '../services/model/SearchTaskSupport';
 import { SourceLinkService } from '../services/SourceLinkService';
 
 /**
- * Web search inside the assistant. The phone calls Tavily directly with the Tavily key saved in 我的 → API Key 管理, and
- * DeepSeek (its own saved key) writes the answer; every search still asks for consent with the exact keywords first.
+ * Status of the assistant's web_search tool. 搜索 authorizes it for the conversation; the phone calls Tavily directly with
+ * the Tavily key saved in 我的 → API Key 管理. The answer itself, with its source list, appears in the chat.
  */
 @Component
 export struct RuntimeSearchPanel {
@@ -50,7 +50,7 @@ export struct RuntimeSearchPanel {
             .id('runtime-search-connect').onClick((): void => { this.onConnect(); })
         }
       } else if (this.view.preview === undefined && this.view.query.length === 0) {
-        Text('输入想查的内容并发送。关键词发给 Tavily 搜索，摘录交给 DeepSeek 整理成回答；每次搜索前都会先请你确认关键词。')
+        Text('直接提问即可：需要时助手会自己决定关键词，发给 Tavily 搜索，再把网页摘录交给 DeepSeek 整理回答，并在回答末尾列出来源。')
           .fontSize(13).fontColor(Theme.muted).width('100%').lineHeight(20).id('runtime-search-status')
       }
       if (this.disconnected() || this.view.preview === undefined) {
@@ -59,30 +59,17 @@ export struct RuntimeSearchPanel {
           .id('runtime-search-details').onClick((): void => { this.details = !this.details; })
         if (this.details) {
           Column({ space: 6 }) {
-            Text('只发送你确认过的关键词，不读取聊天历史、知识库或日历。')
+            Text('关键词由助手根据当前对话生成，可能包含对话中的信息；网页内容只当参考资料，其中的指令会被忽略。关闭开关或开始新对话即撤销。')
               .fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
             Text('关键词由手机直接发送到 Tavily（api.tavily.com），使用你在「我的 → API Key 管理」保存的 Tavily Key。每次搜索都可能消耗 Tavily 额度，失败或取消也可能计费；费用以 Tavily 和 DeepSeek 账单为准。')
               .fontSize(Theme.noteSize).fontColor(Theme.muted).width('100%')
           }.width('100%').padding(10).backgroundColor(Theme.inputSurface).borderRadius(Theme.radius)
         }
       }
-      if (this.view.preview !== undefined) {
-        Text(this.hideQuery ? '允许用这条语音的后台转写搜索？' : '允许发送以下关键词？').fontSize(15).fontWeight(FontWeight.Medium).fontColor(Theme.ink)
-        Text(this.hideQuery ? '语音消息（转写内容不显示）' : (this.view.preview?.query ?? '')).fontSize(15).fontColor(Theme.ink).width('100%')
-        Text('最多取 3 条结果，摘录会交给 DeepSeek 生成回答。60 秒内有效，可能产生费用。')
-          .fontSize(12).fontColor(Theme.muted).width('100%')
-        Flex({ wrap: FlexWrap.Wrap }) {
-          Button('拒绝').constraintSize({ minHeight: 44 }).backgroundColor(Theme.soft).fontColor(Theme.accent)
-            .margin({ right: 10 })
-            .onClick((): void => { void RuntimeSearchService.session.decide(false); }).id('runtime-search-deny')
-          Button('允许这一次搜索').constraintSize({ minHeight: 44 }).backgroundColor(Theme.accent).fontColor(Color.White)
-            .onClick((): void => { void RuntimeSearchService.session.decide(true); }).id('runtime-search-allow')
-        }
-      }
       if (this.view.busy) {
         Text(this.view.message).fontSize(13).fontColor(Theme.muted).width('100%')
         Button('取消').constraintSize({ minHeight: 44 }).backgroundColor(Theme.soft).fontColor(Theme.accent)
-          .id('runtime-search-cancel').onClick((): void => { void RuntimeSearchService.session.stop(); })
+          .id('runtime-search-cancel').onClick((): void => { void RuntimeSearchService.session.cancelCurrent(); })
       }
       if (this.view.query.length > 0) {
         Text(this.hideQuery ? '本次输入：语音消息' : ('关键词：' + this.view.query)).fontSize(13).fontColor(Theme.ink).width('100%')
@@ -105,10 +92,6 @@ export struct RuntimeSearchPanel {
       if (!this.view.busy && this.view.query.length > 0 && this.view.answer.length === 0 &&
         this.view.lifecycle === ShuviRuntimeState.READY && this.view.preview === undefined) {
         Text(this.view.message).fontSize(13).fontColor(Theme.muted).width('100%')
-      }
-      if (this.view.stage === 'answerFailed' && this.view.lifecycle === ShuviRuntimeState.READY) {
-        Button('仅重试回答').constraintSize({ minHeight: 44 }).backgroundColor(Theme.soft).fontColor(Theme.accent)
-          .onClick((): void => { void RuntimeSearchService.session.retryAnswer(); })
       }
     }.width('100%').padding(16).alignItems(HorizontalAlign.Start).backgroundColor(Theme.surface)
       .borderRadius(16).border({ width: 1, color: Theme.line })

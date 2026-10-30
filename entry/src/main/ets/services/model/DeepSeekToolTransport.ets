@@ -5,7 +5,7 @@ import {
   ProviderErrorCode, ProviderFinishReason, ProviderOperationHandle, ProviderTransportError
 } from '@harmony_agent/agent-connectors';
 import { SingleAgentHostResourcePort } from '@harmony_agent/agent-runtime';
-import { ModelLoopToolsPort } from './ModelLoopTools';
+import { KNOWLEDGE_SEARCH_TOOL, ModelLoopToolsPort } from './ModelLoopTools';
 import { DOCUMENT_MODEL_TOOL_NAMES, ModelDocumentToolsPort, documentModelToolDefinitions } from '../documents/DocumentToolContracts';
 import { DeepSeekHttpClientPort, DeepSeekHttpRequest, DeepSeekHttpResponse, DeepSeekProfile,
   createDeepSeekModelProfile, parseDeepSeekResponse } from './DeepSeekProtocol';
@@ -355,7 +355,8 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
       this.knowledgeHistory = []; this.knowledgeLineage = false; this.extraRevision = extraRevision;
     }
     const extraNames: string[] = extra?.names() ?? [];
-    const knowledgeEnabled: boolean = extra !== undefined && (extraNames.length > 0 || this.knowledgeLineage);
+    // Knowledge limits and session-only history apply to the personal knowledge tool only, not to every loop tool.
+    const knowledgeEnabled: boolean = extra !== undefined && (extraNames.includes(KNOWLEDGE_SEARCH_TOOL) || this.knowledgeLineage);
     const allowed: string[] = DOCUMENT_MODEL_TOOL_NAMES.concat(proposals, extraNames);
     const deadline: number = Date.now() + Math.min(request.context.timeoutMs, knowledgeEnabled ? 90000 : request.context.timeoutMs);
     const maxInput: number = knowledgeEnabled ? Math.min(this.limits.maxInputTokens, 32768) : this.limits.maxInputTokens;
@@ -447,7 +448,7 @@ export class DeepSeekToolTransport implements ModelTransportPort, SingleAgentHos
             if (blockTools || cancelled() || this.stopped || extra.revision() !== extraRevision || toolCount >= TOOL_TURN_MAX_TOOL_CALLS) {
               reply.content = '{"status":"denied","hits":[]}';
             } else {
-              toolCount++; this.knowledgeLineage = true;
+              toolCount++; if (call.function.name === KNOWLEDGE_SEARCH_TOOL) this.knowledgeLineage = true;
               try { reply.content = await extra.invoke(call.function.name, call.function.arguments, call.id); }
               catch { reply.content = '{"status":"failed","hits":[]}'; }
             }

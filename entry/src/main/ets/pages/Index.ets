@@ -91,8 +91,6 @@ import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { RuntimeSearchView } from '../services/model/RuntimeSearchSession';
 import { RuntimeSearchPanel } from '../components/RuntimeSearchPanel';
 import { RuntimeKnowledgePanel } from '../components/RuntimeKnowledgePanel';
-import { searchRuntimeFactory } from '../services/model/SearchRuntimeAssembly';
-import { ChatRuntimeFactory } from '../services/model/ChatRuntimeAssembly';
 import { NativeAgentRdbOpen } from '../services/model/AgentRdbResources';
 import { AssistantView } from '../services/calendar/AssistantRuntimeSession';
 import { RuntimeCalendarCard } from '../components/RuntimeCalendarCard';
@@ -252,6 +250,8 @@ struct Index {
         if (view.preview !== undefined) this.hiddenVoiceQueries.add(view.preview.query);
       }
       this.runtimeSearch = view;
+      // In real mode 搜索 is the per-conversation authorization for the assistant's web_search tool.
+      if (this.realChatMode) { this.searchEnabled = view.consent; }
     });
     RuntimeKnowledgeService.session.attach((view: RuntimeKnowledgeView): void => {
       if (this.knowledgeVoiceQuery && view.query.length > 0) this.hiddenVoiceQueries.add(view.query);
@@ -417,7 +417,7 @@ struct Index {
     } finally { this.apiKeysReady = true; }
   }
   private sessionState(): ShuviRuntimeState {
-    return this.searchEnabled ? this.runtimeSearch.lifecycle : this.runtimeChat.lifecycle;
+    return this.runtimeChat.lifecycle;
   }
   private async refreshDeepSeekStatus(): Promise<void> {
     try { this.deepSeekStatus = await DeepSeekKeyService.store.status(); }
@@ -425,7 +425,7 @@ struct Index {
   }
 
   /**
-   * Connects the assistant — or the search session while 搜索 is on — with the DeepSeek key saved in 我的 → API Key 管理.
+   * Connects the assistant with the DeepSeek key saved in 我的 → API Key 管理 (web search is one of its tools).
    * Connecting sends no model request. A failed start is retried only when the user asks (retry), never in a loop.
    */
   private async ensureAssistant(retry: boolean = false): Promise<void> {
@@ -446,7 +446,7 @@ struct Index {
       if (this.deepSeekStatus !== DeepSeekKeyStatus.Saved || !this.alive || this.tab !== 0) { return; }
       const key: Uint8Array | undefined = await DeepSeekKeyService.store.load();
       if (key === undefined) { await this.refreshDeepSeekStatus(); return; }
-      if (this.searchEnabled) { await this.startRuntimeSearch(key); } else { await this.startRuntimeChat(key); }
+      await this.startRuntimeChat(key);
     } catch {
       // The session view carries the failure message; the key stays only in the device store.
     } finally { this.connecting = false; }
@@ -653,7 +653,7 @@ struct Index {
   private async startRuntimeChat(key: Uint8Array): Promise<void> {
     try {
       const context = this.getUIContext().getHostContext();
-      if (context === undefined || !DEBUG || !this.realChatMode || this.searchEnabled || this.knowledgeEnabled || this.tab !== 0) return;
+      if (context === undefined || !DEBUG || !this.realChatMode || this.knowledgeEnabled || this.tab !== 0) return;
       // The coordinator composes the calendar-capable assistant session and the PERSONAL RAG answer session.
       await RuntimeAssistantCoordinator.start(context, DEBUG, key);
     } finally { key.fill(0); }
@@ -671,28 +671,40 @@ struct Index {
     finally { this.runtimeSwitching = false; }
   }
 
-  private async startRuntimeSearch(key: Uint8Array): Promise<void> {
-    try {
-      const context = this.getUIContext().getHostContext();
-      if (context === undefined || !DEBUG || !this.realChatMode || !this.searchEnabled || this.tab !== 0) return;
-      await RuntimeAssistantCoordinator.stop();
-      if (!this.alive || this.tab !== 0 || !this.searchEnabled || !this.realChatMode) return;
-      await RuntimeSearchService.session.start(searchRuntimeFactory(context, DEBUG),
-        new ChatRuntimeFactory(new NativeAgentRdbOpen(context), DEBUG, RuntimeSearchService.session.context), key);
-    } finally { key.fill(0); }
-  }
-
+  /**
+   * Real mode: 搜索 lets the assistant call web_search on its own for this conversation (off, or a new conversation,
+   * withdraws it). Demo mode keeps the fixed local sample.
+   */
   private async toggleSearch(): Promise<void> {
-    if (this.blocked()) return;
+    if (this.blocked() && !this.searchEnabled) return;
     if (!this.realChatMode) { this.searchEnabled = !this.searchEnabled; return; }
     this.runtimeSwitching = true;
     try {
-      await RuntimeSearchService.session.stop(); await RuntimeAssistantCoordinator.stop();
-      if (this.alive && this.tab === 0) { this.searchEnabled = !this.searchEnabled; this.knowledgeEnabled = false; }
-    } catch { this.notice('切换没有完成', '请稍后重试；如果一直这样，请重启应用。'); return; }
+      if (this.searchEnabled) {
+        await RuntimeAssistantCoordinator.disableSearch();
+        if (this.alive && this.tab === 0) { this.searchEnabled = false; }
+        return;
+      }
+      if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
+        this.notice('助手还没有连接', this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再试。' :
+          '请先在「我的 → API Key 管理」保存 DeepSeek Key。'); return;
+      }
+      const allowed: boolean = await new Promise<boolean>((resolve: (value: boolean) => void): void => {
+        AlertDialog.show({ title: '允许助手联网搜索',
+          message: '本对话里，助手会在需要时自己决定搜索并生成关键词，从本机发送到 Tavily（api.tavily.com），不再逐次确认；关键词可能包含对话中的信息。每次搜索都可能消耗 Tavily 额度、产生费用，网页摘录会发给 DeepSeek 整理回答。关闭开关或开始新对话即撤销。',
+          primaryButton: { value: '取消', action: (): void => { resolve(false); } },
+          secondaryButton: { value: '允许', action: (): void => { resolve(true); } },
+          cancel: (): void => { resolve(false); } });
+      });
+      if (!allowed || !this.alive || this.tab !== 0) { return; }
+      const context = this.getUIContext().getHostContext();
+      const key: Uint8Array | undefined = context === undefined ? undefined : await DeepSeekKeyService.store.load();
+      if (context === undefined || key === undefined) { this.notice('联网搜索暂不可用', '没有读到 DeepSeek Key，请到「我的 → API Key 管理」检查。'); return; }
+      const ready: boolean = await RuntimeAssistantCoordinator.enableSearch(context, DEBUG, key);
+      if (!ready) { this.notice('联网搜索暂不可用', this.runtimeSearch.message); return; }
+      if (this.alive && this.tab === 0) { this.searchEnabled = true; }
+    } catch { this.notice('切换没有完成', '请稍后重试；如果一直这样，请重启应用。'); }
     finally { this.runtimeSwitching = false; }
-    // 搜索 on connects the search session, off reconnects the assistant; both use the saved DeepSeek key.
-    await this.ensureAssistant();
   }
 
   private async toggleKnowledge(): Promise<void> {
@@ -705,7 +717,6 @@ struct Index {
         if (this.alive && this.tab === 0) { this.knowledgeEnabled = false; }
         return;
       }
-      if (this.searchEnabled) { this.notice('请先关闭搜索', '联网搜索和知识库问答不能同时开启。'); return; }
       if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
         this.notice('助手还没有连接', this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再试。' :
           '请先在「我的 → API Key 管理」保存 DeepSeek Key。'); return;
@@ -721,7 +732,7 @@ struct Index {
       this.ragPreparing = true;
       const readiness: KnowledgeRagReadiness = await RuntimeAssistantCoordinator.enableKnowledge(choice === 1);
       if (!readiness.ready) { this.notice('个人知识库尚不可用', readiness.message); return; }
-      if (this.alive && this.tab === 0) { this.knowledgeEnabled = true; this.searchEnabled = false; }
+      if (this.alive && this.tab === 0) { this.knowledgeEnabled = true; }
     } catch { this.notice('切换没有完成', '请稍后重试；如果一直这样，请重启应用。'); }
     finally { this.runtimeSwitching = false; this.ragPreparing = false; }
   }
@@ -732,12 +743,13 @@ struct Index {
       if (this.knowledgeEnabled) {
         RuntimeKnowledgePanel({ view: this.runtimeKnowledge, hideQuery: this.knowledgeVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeKnowledge.query), onDisable: (): void => { void this.toggleKnowledge(); } })
       }
-      if (this.searchEnabled) {
+      if (this.realChatMode && this.searchEnabled) {
         RuntimeSearchPanel({ view: this.runtimeSearch, hideQuery: this.searchVoiceQuery || this.hiddenVoiceQueries.has(this.runtimeSearch.query) ||
           this.hiddenVoiceQueries.has(this.runtimeSearch.preview?.query ?? ''), keySaved: this.deepSeekStatus === DeepSeekKeyStatus.Saved,
-          connecting: this.connecting, onConnect: (): void => { void this.ensureAssistant(true); },
+          connecting: this.connecting, onConnect: (): void => { void this.toggleSearch(); },
           onKeys: (): void => { this.openApiKeys(); } })
-      } else if (this.deepSeekStatus === DeepSeekKeyStatus.Missing || this.deepSeekStatus === DeepSeekKeyStatus.Unavailable) {
+      }
+      if (this.deepSeekStatus === DeepSeekKeyStatus.Missing || this.deepSeekStatus === DeepSeekKeyStatus.Unavailable) {
         // No key yet: the only setup step left in the assistant. Keys are managed in 我的 → API Key 管理.
         Column({ space: 10 }) {
           Text('设置 DeepSeek Key 后即可开始对话').fontSize(Theme.titleSize).fontColor(Theme.ink).fontWeight(FontWeight.Medium)
@@ -787,7 +799,7 @@ struct Index {
   }
   private sampleText(): string {
     return this.realChatMode ? (this.knowledgeEnabled ? '知识库中的 Agent Runtime 是如何设计的？' :
-      (this.searchEnabled ? 'HarmonyOS ArkUI 官方开发文档' : '明天下午 3 点到 4 点开项目评审会，提前 10 分钟提醒')) :
+      (this.searchEnabled ? '帮我查一下 HarmonyOS ArkUI 官方开发文档从哪里开始看' : '明天下午 3 点到 4 点开项目评审会，提前 10 分钟提醒')) :
       (this.searchEnabled ? SEARCH_SAMPLE : this.service.sampleText);
   }
   private headerConnected(): boolean {
@@ -801,7 +813,7 @@ struct Index {
   }
   private composerHint(): string {
     return this.realChatMode ? (this.knowledgeEnabled ? '已授权个人知识库 · 按需查询并展示来源' :
-      (this.searchEnabled ? '联网搜索 · 每次搜索前会征求你的同意' : '可提问、安排日程、写文档，也能发图片；日程创建前会让你确认')) :
+      (this.searchEnabled ? '已允许联网搜索 · 助手按需搜索并列出来源' : '可提问、安排日程、写文档，也能发图片；日程创建前会让你确认')) :
       (this.searchEnabled ? '演示模式 · 固定样例，未联网' : '演示模式 · 数据仅本次有效');
   }
 
@@ -813,12 +825,6 @@ struct Index {
     }
     this.searchVoiceQuery = false; this.knowledgeVoiceQuery = false;
     if (this.realChatMode) {
-      if (this.searchEnabled) {
-        if (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance) {
-          this.notice('联网搜索暂不可用', this.runtimeSearch.message); return;
-        }
-        const query = this.input.trim(); this.input = ''; void RuntimeSearchService.session.send(query); return;
-      }
       if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY) {
         this.notice('助手还没有连接', (this.deepSeekStatus === DeepSeekKeyStatus.Saved ? '请稍候片刻再发送。' :
           '请先在「我的 → API Key 管理」保存 DeepSeek Key。') + '本次没有发送，内容保留在输入框。'); return;
@@ -944,6 +950,7 @@ struct Index {
     SpeechService.session.cancel();
     this.inputController.stopEditing();
     this.discardImage(); this.voiceDraft = undefined; this.voiceText = '';
+    RuntimeSearchService.session.clearConversation();
     RuntimeKnowledgeService.session.clearConversation();
     RuntimeChatService.session.context.clear();
     const restored: ChatMessage[] | undefined = await RuntimeChatService.conversations.switchTo(id);
@@ -967,7 +974,10 @@ struct Index {
   private async removeConversation(id: string): Promise<void> {
     const current: boolean = id === this.conversations.currentId;
     if (current && this.blocked()) { this.notice('请稍候', '等这次回答完成后再删除当前对话。'); return; }
-    if (current) { RuntimeKnowledgeService.session.clearConversation(); RuntimeChatService.session.context.clear(); }
+    if (current) {
+      RuntimeSearchService.session.clearConversation(); RuntimeKnowledgeService.session.clearConversation();
+      RuntimeChatService.session.context.clear();
+    }
     const wasCurrent: boolean = await RuntimeChatService.conversations.remove(id);
     if (wasCurrent && this.alive) {
       this.showMessages([]); this.discardImage(); this.voiceDraft = undefined; this.voiceText = '';
@@ -1455,11 +1465,8 @@ struct Index {
     const text = composeVoiceMessage(transcript, supplement);
     if (clip === undefined || this.blocked() || text.length === 0 || text.length > 500) return;
     if (!this.realChatMode) { this.notice('请先启用真实对话', '录音已保存在本机。启用助手后可发送语音消息，转写不会显示。'); return; }
-    if (this.searchEnabled && (this.runtimeSearch.lifecycle !== ShuviRuntimeState.READY || !this.runtimeSearch.allowance)) {
-      this.notice('真实搜索尚不可用', '录音已保存，请先准备搜索会话。'); return;
-    }
-    if (!this.searchEnabled && (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY ||
-      this.runtimeChat.requestCount >= this.runtimeChat.maxRequests)) {
+    if (this.runtimeChat.lifecycle !== ShuviRuntimeState.READY ||
+      this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
       if (this.runtimeChat.requestCount >= this.runtimeChat.maxRequests) {
         this.notice('这段对话已经很长了', '录音已保存，点右上角「开始新对话」后再发送。'); return;
       }
@@ -1468,10 +1475,10 @@ struct Index {
     const message: ChatMessage = { id: this.service.nextId('message'), isUser: true, text: supplement.trim(), voice: clip };
     this.messages = this.messages.concat([message]); this.voiceDraft = undefined; this.voiceText = ''; this.input = '';
     this.hiddenVoiceQueries.add(text);
-    this.searchVoiceQuery = this.searchEnabled; this.knowledgeVoiceQuery = this.knowledgeEnabled && !this.searchEnabled;
+    // The transcript stays hidden; search keywords chosen from it are hidden in the 搜索 panel too.
+    this.searchVoiceQuery = this.searchEnabled; this.knowledgeVoiceQuery = this.knowledgeEnabled;
     try {
-      if (this.searchEnabled) { await RuntimeSearchService.session.send(text); }
-      else { await RuntimeChatService.session.send(text); }
+      await RuntimeChatService.session.send(text);
     } catch {
       if (this.alive) {
         this.messages = this.messages.filter((item: ChatMessage): boolean => item.id !== message.id);

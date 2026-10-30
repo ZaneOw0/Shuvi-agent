@@ -490,9 +490,9 @@ test('voice without a supplement preserves the existing voice-only payload', asy
   assert.equal(calls[0].text, '语音里的要求'); assert.equal(fixture.messages[0].text, '');
 });
 
-test('search receives one combined request and registers the combined query as hidden', async () => {
+test('with web search allowed the voice turn still goes to the assistant and search keywords stay hidden', async () => {
   const { fixture, calls } = voiceSendFixture('search'); await fixture.sendVoice();
-  assert.deepEqual(calls, [{ name: 'search', text: '语音里的要求\n\n另外请列成三点' }]);
+  assert.deepEqual(calls, [{ name: 'chat', text: '语音里的要求\n\n另外请列成三点' }]);
   assert.ok(fixture.hiddenVoiceQueries.has(calls[0].text)); assert.equal(fixture.searchVoiceQuery, true);
 });
 

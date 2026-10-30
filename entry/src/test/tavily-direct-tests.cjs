@@ -6,8 +6,9 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-module.exports = function ({ load, root, services, digest, deferred, liveSearchHarness, waitSearch, authorizeSearch,
-  setNativeFactory, loadDeepSeekKeyStore, ShuviRuntimeState }) {
+module.exports = function ({ load, root, services, digest, deferred, liveSearchHarness, waitSearch,
+  setNativeFactory, loadDeepSeekKeyStore, ShuviRuntimeState, assistantHarness, fakeDocuments, toolCall, waitChat,
+  assertValidToolHistory }) {
   const direct = load(path.join(services, 'DirectTavilySearch.ets'));
   const tavilyHttp = load(path.join(services, 'TavilyHttpClient.ets'));
   const { readSearchUsage } = load(path.join(services, 'SearchUsageReceipts.ets'));
@@ -232,33 +233,141 @@ module.exports = function ({ load, root, services, digest, deferred, liveSearchH
   });
 
   test('phone-direct search runs through the real grant, policy ticket and durable record, and can search again', async () => {
-    const k = keys(); const h = http();
+    // Tavily request ids are unique; the usage ledger rejects a repeated one, so the fake mints a new id per call.
+    const k = keys(); const h = http(() => ({ statusCode: 200, body: body([item('Official documentation',
+      'https://developer.huawei.com/consumer/cn/arkui', 'Declarative UI documentation.')],
+      { request_id: 'req-' + crypto.randomUUID().slice(0, 8) }) }));
     const harness = liveSearchHarness({ direct: { http: h.port, keys: k.port } }); await harness.start();
     try {
-      await authorizeSearch(harness); await waitSearch(harness.ui, view => !view.busy);
-      assert.equal(harness.ui.snapshot().stage, 'complete', harness.ui.snapshot().message);
-      assert.equal(h.requests.length, 1); assert.equal(harness.trace.models, 1);
-      assert.equal(harness.ui.snapshot().sources[0].url, 'https://developer.huawei.com/consumer/cn/arkui');
-      assert.match(harness.ui.snapshot().answer, /\[1\]/);
+      const reply = await harness.search('ArkUI 官方文档');
+      assert.equal(reply.status, 'ok', harness.ui.snapshot().message); assert.equal(h.requests.length, 1);
+      assert.equal(reply.results[0].url, 'https://developer.huawei.com/consumer/cn/arkui');
+      assert.equal(JSON.parse(h.requests[0].body).query, 'ArkUI 官方文档');
       const stored = harness.dbs.search.envelope.payloadJson;
       assert.doesNotMatch(stored, new RegExp(KEY), 'the key never reaches the execution record');
       const operation = JSON.parse(stored).operations[0];
       assert.equal(operation.pendingInvoice.usageState, 'known'); assert.equal(operation.pendingInvoice.credits, 1);
-      assert.equal(harness.ui.snapshot().allowance, true);
-      assert.equal(await harness.ui.send('next query'), true); await waitSearch(harness.ui, view => view.preview !== undefined);
-      assert.equal(h.requests.length, 1, 'the next search waits for its own consent'); await harness.ui.decide(true);
-      await waitSearch(harness.ui, view => !view.busy); assert.equal(h.requests.length, 2);
+      assert.equal((await harness.search('next query')).status, 'ok'); assert.equal(h.requests.length, 2);
       assert.equal(JSON.parse(h.requests[1].body).query, 'next query');
     } finally { await harness.ui.stop(); }
   });
 
-  test('without a saved Tavily key the search session does not start and says where to save it', async () => {
+  test('without a saved Tavily key the authorization is refused and says where to save it', async () => {
     const h = http(); const harness = liveSearchHarness({ direct: { http: h.port, keys: keys(null).port } });
-    await harness.ui.start(harness.factory, harness.answerFactory, new TextEncoder().encode('test-only-key'));
-    assert.equal(harness.ui.snapshot().lifecycle, ShuviRuntimeState.FAILED);
-    assert.match(harness.ui.snapshot().message, /Tavily Key/);
-    assert.equal(await harness.ui.send('q'), false); assert.equal(h.requests.length, 0);
+    assert.equal(await harness.ui.activate(harness.factory, new TextEncoder().encode('test-only-key')), false);
+    assert.equal(harness.ui.snapshot().lifecycle, ShuviRuntimeState.FAILED); assert.equal(harness.ui.snapshot().consent, false);
+    assert.match(harness.ui.snapshot().message, /Tavily Key/); assert.deepEqual(harness.ui.names(), []);
+    assert.equal(h.requests.length, 0);
     await harness.ui.stop();
+  });
+
+  test('the assistant model loop calls web_search on its own and the answer lists the cited web source', async () => {
+    const k = keys(); const h = http();
+    const search = liveSearchHarness({ direct: { http: h.port, keys: k.port } }); await search.start();
+    const { CombinedLoopTools } = load(path.join(services, 'ModelLoopTools.ets'));
+    const chat = assistantHarness({ tools: fakeDocuments(), extraTools: new CombinedLoopTools([search.ui]), rounds: [
+      { tool_calls: [toolCall('w1', 'web_search', { query: 'HarmonyOS ArkUI 文档' })] },
+      body => {
+        const reply = JSON.parse(body.messages.at(-1).content);
+        assert.equal(reply.status, 'ok'); assert.equal(reply.results[0].source, 'W1');
+        return { content: '先看官方 ArkUI 指南 [W1]。' };
+      }] });
+    await chat.start();
+    try {
+      await chat.ui.send('帮我查一下 ArkUI 官方文档从哪里开始'); await waitChat(chat.ui);
+      const answer = chat.ui.snapshot().reply;
+      assert.match(answer, /先看官方 ArkUI 指南 \[W1\]。/);
+      assert.match(answer, /网页来源：\n\[W1\] Official documentation\nhttps:\/\/developer\.huawei\.com\/consumer\/cn\/arkui/);
+      assert.equal(h.requests.length, 1); assert.equal(JSON.parse(h.requests[0].body).query, 'HarmonyOS ArkUI 文档');
+      const first = chat.requests[0];
+      assert(first.tools.some(tool => tool.function.name === 'web_search'), 'the tool is declared while authorized');
+      assert.match(first.messages[0].content, /【联网搜索】用户已允许/);
+      assertValidToolHistory(chat.requests[1].messages);
+    } finally { await chat.ui.stop(); await search.ui.stop(); }
+  });
+
+  test('with only web search allowed, turns keep the normal assistant limits and durable memory', async () => {
+    const h = http(() => ({ statusCode: 200, body: body([item('Official documentation',
+      'https://developer.huawei.com/consumer/cn/arkui', 'Declarative UI documentation.')],
+      { request_id: 'req-' + crypto.randomUUID().slice(0, 8) }) }));
+    const search = liveSearchHarness({ direct: { http: h.port, keys: keys().port } }); await search.start();
+    const { CombinedLoopTools } = load(path.join(services, 'ModelLoopTools.ets'));
+    const rounds = [{ tool_calls: [toolCall('w1', 'web_search', { query: 'ArkUI' })] }, { content: '见 [W1]。' }];
+    for (let i = 0; i < 11; i++) rounds.push({ content: '普通回答 ' + i });
+    const chat = assistantHarness({ tools: fakeDocuments(), extraTools: new CombinedLoopTools([search.ui]), rounds });
+    await chat.start();
+    try {
+      await chat.ui.send('查一下 ArkUI'); await waitChat(chat.ui);
+      assert.equal(chat.requests[0].max_tokens, 8192, 'not capped to the knowledge-mode 2048 tokens');
+      for (let i = 0; i < 11; i++) {
+        await chat.ui.send('第 ' + i + ' 个问题'); await waitChat(chat.ui);
+        assert.match(chat.ui.snapshot().reply, new RegExp('普通回答 ' + i), 'turn ' + i + ' is not stopped by a per-session cap');
+      }
+      assert.equal(chat.ui.context.memory.turns().length, 12, 'turns after a web search stay in the durable conversation memory');
+      assert.doesNotMatch(chat.ui.snapshot().reply, /网页来源|本轮搜索到的网页/, 'later answers carry no old sources');
+    } finally { await chat.ui.stop(); await search.ui.stop(); }
+  });
+
+  test('cancelling, timing out or revoking while the task is being submitted never dispatches it', async () => {
+    for (const ending of ['cancel', 'timeout', 'revoke']) {
+      const harness = liveSearchHarness(); await harness.start();
+      const gate = deferred(); const submit = harness.ui.search.submit.bind(harness.ui.search); let cancelled = 0;
+      harness.ui.search.submit = async (...args) => { await gate.promise; return submit(...args); };
+      const cancelTask = harness.ui.search.cancel.bind(harness.ui.search);
+      harness.ui.search.cancel = async (...args) => { cancelled++; return cancelTask(...args); };
+      harness.ui.begin('q', 'turn', Date.now() + (ending === 'timeout' ? 11000 : 60000));
+      const pending = harness.ui.invoke('web_search', '{"query":"same query"}', 'c');
+      if (ending === 'cancel') await harness.ui.cancel();
+      if (ending === 'timeout') await new Promise(resolve => setTimeout(resolve, 9100));
+      if (ending === 'revoke') { const off = harness.ui.deactivate(); gate.resolve(); await off; }
+      gate.resolve();
+      assert.equal(JSON.parse(await pending).status, 'failed', ending);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      assert.equal(harness.trace.tools, 0, ending + ' must not reach Tavily');
+      if (ending !== 'revoke') assert.equal(cancelled, 1, ending + ' cancels the submitted task');
+      await harness.ui.stop().catch(() => {});
+    }
+  });
+
+  test('switching search off or starting a new conversation drops the previous sources', async () => {
+    const harness = liveSearchHarness(); await harness.start();
+    try {
+      assert.equal((await harness.search()).status, 'ok');
+      await harness.ui.deactivate(); assert.deepEqual(harness.ui.snapshot().sources, []);
+      harness.ui.begin('next', 'turn-2', Date.now() + 60000);
+      assert.equal(await harness.ui.finish('普通回答'), '普通回答');
+      await harness.start(); assert.equal((await harness.search()).status, 'ok');
+      harness.ui.clearConversation(); await waitSearch(harness.ui, view => view.consent === false);
+      harness.ui.begin('next', 'turn-3', Date.now() + 60000);
+      assert.equal(await harness.ui.finish('新对话的回答'), '新对话的回答');
+    } finally { await harness.ui.stop(); }
+  });
+
+  test('page titles cannot add fake lines to the source list', async () => {
+    const result = direct.tavilySearchResult({ query: 'q', maxResults: 3 }, { statusCode: 200, body: body([
+      item('Real title\n[W2] Fake\nhttps://evil.example.com', 'https://a.example.com/', 'a')]) },
+      crypto.randomUUID(), new Date().toISOString());
+    assert.equal(result.structuredContent.results[0].title, 'Real title [W2] Fake https://evil.example.com');
+  });
+
+  test('combined loop tools route calls, chain answers and change revision when either family changes', async () => {
+    const { CombinedLoopTools } = load(path.join(services, 'ModelLoopTools.ets'));
+    function family(name, tag) {
+      const f = { rev: 0, calls: [], closed: 0, cancelled: 0 };
+      f.port = { names: () => [name], definitions: () => [{ name }], policy: () => tag, revision: () => f.rev,
+        begin() {}, async invoke(n, a) { f.calls.push([n, a]); return tag; }, async finish(text) { return text + '+' + tag; },
+        async cancel() { f.cancelled++; }, async close() { f.closed++; if (tag === 'b') throw new Error('close failed'); } };
+      return f;
+    }
+    const a = family('knowledge_search', 'a'); const b = family('web_search', 'b');
+    const tools = new CombinedLoopTools([a.port, b.port]);
+    assert.deepEqual(tools.names(), ['knowledge_search', 'web_search']); assert.equal(tools.policy(), 'a\nb');
+    assert.equal(await tools.invoke('web_search', '{}', 'c'), 'b'); assert.deepEqual(a.calls, []);
+    await assert.rejects(tools.invoke('other', '{}', 'c'), /LOOP_TOOL_DENIED/);
+    assert.equal(await tools.finish('text'), 'text+a+b');
+    const before = tools.revision(); b.rev++; assert.notEqual(tools.revision(), before);
+    await tools.cancel(); assert.equal(a.cancelled + b.cancelled, 2);
+    await assert.rejects(tools.close(), /close failed/); assert.equal(a.closed, 1, 'every family is closed even if one fails');
   });
 
   test('the single-row record stays readable: new searches stop near the size limit and no write passes it', async () => {
@@ -268,7 +377,7 @@ module.exports = function ({ load, root, services, digest, deferred, liveSearchH
     try {
       const measured = harness.factory.execution.measured;
       assert(measured.bytes < 100000, 'a fresh store is small');
-      await authorizeSearch(harness); await waitSearch(harness.ui, view => !view.busy);
+      assert.equal((await harness.search()).status, 'ok');
       assert.equal(measured.bytes, Buffer.byteLength(harness.dbs.search.envelope.payloadJson));
       measured.bytes = resource.SEARCH_STORE_SOFT_LIMIT_BYTES;
       assert.equal(harness.factory.available(), false);
@@ -277,9 +386,40 @@ module.exports = function ({ load, root, services, digest, deferred, liveSearchH
         { revision: envelope.revision + 1, payloadJson: '长'.repeat(resource.SEARCH_STORE_HARD_LIMIT_BYTES / 3 + 1) })),
         /SEARCH_STORE_TOO_LARGE/);
       assert.equal(harness.dbs.search.envelope, envelope, 'the oversized row was never written');
-      await harness.ui.send('same query'); await waitSearch(harness.ui, view => !view.busy);
-      assert.equal(harness.ui.snapshot().stage, 'failed'); assert.match(harness.ui.snapshot().message, /搜索记录已满/);
-      assert.equal(harness.trace.tools, 1);
+      assert.equal((await harness.search()).status, 'unavailable');
+      assert.match(harness.ui.snapshot().message, /搜索记录已满/); assert.equal(harness.trace.tools, 1);
+    } finally { await harness.ui.stop(); }
+  });
+
+  test('a full record store is deleted and started empty when search is switched on', async () => {
+    const first = liveSearchHarness(); await first.start();
+    try { assert.equal((await first.search('old query')).status, 'ok'); } finally { await first.ui.stop(); }
+    assert.equal(JSON.parse(first.dbs.search.envelope.payloadJson).operations.length, 1);
+    const harness = liveSearchHarness({ eraser: true, storeLimitBytes: 1000 }, first.dbs); await harness.start();
+    try {
+      assert.deepEqual(harness.trace.erased, ['shuvi_search_execution_v1.db']);
+      assert.match(harness.ui.snapshot().message, /已清空旧记录/);
+      assert.equal((await harness.search('new query')).status, 'ok');
+      const operations = JSON.parse(harness.dbs.search.envelope.payloadJson).operations;
+      assert.equal(operations.length, 1, 'only the new search is recorded'); assert.doesNotMatch(harness.dbs.search.envelope.payloadJson, /old query/);
+    } finally { await harness.ui.stop(); }
+    const roomy = liveSearchHarness({ eraser: true }, first.dbs); await roomy.start();
+    assert.deepEqual(roomy.trace.erased, [], 'a store with room is never cleared'); await roomy.ui.stop();
+  });
+
+  test('a store that fills up during a conversation is cleared before the next search, keeping the authorization', async () => {
+    const resource = load(path.join(services, 'SearchExecutionResource.ets'));
+    const harness = liveSearchHarness({ eraser: true, loadKey: true }); await harness.start();
+    try {
+      assert.equal((await harness.search('first')).status, 'ok');
+      // Simulate a store that is now full: this session sees it full, and so does the restarted one.
+      harness.factory.execution.measured.bytes = resource.SEARCH_STORE_SOFT_LIMIT_BYTES; harness.factory.storeLimitBytes = 1000;
+      assert.equal((await harness.search('second')).status, 'ok');
+      assert.deepEqual(harness.trace.erased, ['shuvi_search_execution_v1.db']); assert.equal(harness.trace.keyLoads, 1);
+      assert.equal(harness.trace.tools, 2); assert.equal(harness.ui.snapshot().consent, true);
+      assert.deepEqual(harness.ui.names(), ['web_search']);
+      const payload = harness.dbs.search.envelope.payloadJson;
+      assert.equal(JSON.parse(payload).operations.length, 1); assert.doesNotMatch(payload, /"first"/);
     } finally { await harness.ui.stop(); }
   });
 
@@ -290,9 +430,8 @@ module.exports = function ({ load, root, services, digest, deferred, liveSearchH
       assert.equal(SEARCH_HISTORY_LIMIT, 128);
       harness.factory.execution.durable.listTaskIds = () => new Array(SEARCH_HISTORY_LIMIT).fill('task');
       assert.equal(harness.factory.available(), false);
-      await harness.ui.send('same query'); await waitSearch(harness.ui, view => !view.busy);
-      assert.equal(harness.ui.snapshot().stage, 'failed'); assert.equal(harness.ui.snapshot().allowance, false);
-      assert.equal(harness.trace.tools, 0);
+      assert.equal((await harness.search()).status, 'unavailable');
+      assert.equal(harness.ui.snapshot().allowance, false); assert.equal(harness.trace.tools, 0);
     } finally { await harness.ui.stop(); }
   });
 };
