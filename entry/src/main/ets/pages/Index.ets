@@ -91,6 +91,9 @@ import { RuntimeSearchService } from '../services/model/RuntimeSearchService';
 import { RuntimeSearchView } from '../services/model/RuntimeSearchSession';
 import { RuntimeSearchPanel } from '../components/RuntimeSearchPanel';
 import { RuntimeKnowledgePanel } from '../components/RuntimeKnowledgePanel';
+import { AssistantReplyBubble } from '../components/AssistantReplyBubble';
+import { ChatKnowledgeReply, chatKnowledgeReply, chatKnowledgeStoredReply } from '../components/ChatKnowledgeSources';
+import { ChatKnowledgeSource, ChatKnowledgeSnapshot } from '../model/ChatKnowledgeModels';
 import { searchRuntimeFactory } from '../services/model/SearchRuntimeAssembly';
 import { ChatRuntimeFactory } from '../services/model/ChatRuntimeAssembly';
 import { NativeAgentRdbOpen } from '../services/model/AgentRdbResources';
@@ -643,7 +646,34 @@ struct Index {
 
   private addMessage(text: string, isUser: boolean = false, calendar?: CalendarCreatedSummary): void {
     const message: ChatMessage = { id: this.service.nextId('message'), isUser: isUser, text: text, calendar: calendar };
+    if (!isUser) {
+      const reply: ChatKnowledgeReply = chatKnowledgeReply(text, RuntimeKnowledgeService.session.snapshot().citations);
+      if (reply.sources.length > 0) {
+        const snapshot: ChatKnowledgeSnapshot = new ChatKnowledgeSnapshot(); snapshot.sources = reply.sources;
+        message.knowledgeSources = snapshot;
+      }
+    }
     this.messages = this.messages.concat([message]);
+  }
+
+  private assistantReply(message: ChatMessage): ChatKnowledgeReply {
+    return chatKnowledgeStoredReply(message.text, message.knowledgeSources);
+  }
+
+  private async openChatKnowledgeSource(source: ChatKnowledgeSource): Promise<void> {
+    try {
+      await this.openKnowledge();
+      const shared = this.sharedKnowledge;
+      if (shared === undefined) { throw new Error('KnowledgeUnavailable'); }
+      const document = await shared.unified.get(source.documentId);
+      if (document === undefined || document.tombstone || document.archived || document.activeGeneration !== source.generation) {
+        this.notice('来源已变化', '这份来源已换版、归档或删除，无法打开当时的版本。回答中的来源编号仍保留供核对。'); return;
+      }
+      this.parsedDocumentId = source.documentId;
+      await this.openParsed();
+    } catch {
+      this.notice('暂时无法打开来源', '文件详情读取失败，请稍后重试。回答与来源仍保留。');
+    }
   }
   private openCalendarRecords(): void {
     // Leaving the assistant tab ends the chat session as before; the 日程 tab lists the verified native records.
@@ -1243,10 +1273,8 @@ struct Index {
           Row({ space: 8 }) {
             BrandAvatar({ size: 28 })
             Column() {
-              Text(message.text).fontSize(Theme.bodySize).fontColor(Theme.ink).lineHeight(22)
-                .padding({ left: 14, right: 14, top: 10, bottom: 10 }).backgroundColor(Theme.surface)
-                .borderRadius({ topLeft: 6, topRight: 20, bottomLeft: 20, bottomRight: 20 })
-                .border({ width: 1, color: Theme.line }).accessibilityText(`休比：${message.text}`)
+              AssistantReplyBubble({ reply: this.assistantReply(message),
+                onOpenSource: (source: ChatKnowledgeSource): void => { void this.openChatKnowledgeSource(source); } })
             }.layoutWeight(1).alignItems(HorizontalAlign.Start).padding({ right: '8%' })
           }.width('100%').alignItems(VerticalAlign.Top)
         }
